@@ -2,7 +2,7 @@
   "name": "markdown-preview-wysiwyg",
   "displayName": "Markdown-preview-wysiwyg",
   "description": "Markdown-preview-wysiwyg supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.20",
+  "version": "1.0.49",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "icon.png",
@@ -56,7 +56,8 @@
       {
         "command": "inlineMd.openEditor",
         "title": "Open with Markdown-preview-wysiwyg (Rich Editor)",
-        "category": "Markdown-preview-wysiwyg"
+        "category": "Markdown-preview-wysiwyg",
+        "icon": "$(preview)"
       },
       {
         "command": "inlineMd.openNativeEditor",
@@ -85,6 +86,13 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "inlineMd.openEditor",
+          "when": "resourceLangId == markdown || resourceLangId == mdx || resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
+          "group": "navigation@1"
+        }
+      ],
       "explorer/context": [
         {
           "command": "inlineMd.openEditor",
@@ -115,6 +123,14 @@
         "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
       }
     ],
+    "configurationDefaults": {
+      "[markdown]": {
+        "editor.fontFamily": "\"Sarasa Mono SC\", \"Sarasa Fixed SC\", \"SF Mono\", Menlo, Monaco, \"Courier New\", monospace"
+      },
+      "[mdx]": {
+        "editor.fontFamily": "\"Sarasa Mono SC\", \"Sarasa Fixed SC\", \"SF Mono\", Menlo, Monaco, \"Courier New\", monospace"
+      }
+    },
     "configuration": {
       "title": "Markdown-preview-wysiwyg",
       "properties": {
@@ -137,6 +153,21 @@
           "type": "boolean",
           "default": true,
           "description": "Enable lightweight inline markdown decorations in the native VS Code editor."
+        },
+        "inlineMd.nativeDecorations.mermaid.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable experimental Mermaid flowchart previews in the native VS Code editor. Disabled by default because VS Code requires a visible contributed view for the webview renderer."
+        },
+        "inlineMd.nativeDecorations.tables.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable conservative Markdown table styling in the native VS Code editor without replacing table source text."
+        },
+        "inlineMd.nativeEditor.forceMonospaceFont": {
+          "type": "boolean",
+          "default": true,
+          "description": "Force Markdown native source editors to use a CJK-aware monospace font family when opened from Markdown-preview-wysiwyg."
         }
       }
     }
@@ -164,7 +195,6 @@
     "@vscode/vsce": "^3.0.0",
     "buffer": "^6.0.3",
     "esbuild": "^0.24.0",
-    "jsdom": "^28.0.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   },

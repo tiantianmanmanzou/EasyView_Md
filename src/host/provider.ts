@@ -149,6 +149,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         fullWidth: stored?.fullWidth ?? legacySettings.fullWidth,
         tocVisible: stored?.tocVisible ?? legacySettings.tocVisible,
         tableWrap: stored?.tableWrap ?? legacySettings.tableWrap,
+        lineNumbersVisible: stored?.lineNumbersVisible ?? legacySettings.lineNumbersVisible,
       };
     };
 
@@ -231,6 +232,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       filename: getFilename(),
       fullWidth: settings.fullWidth,
       tocVisible: settings.tocVisible,
+      tableWrap: settings.tableWrap,
+      lineNumbersVisible: settings.lineNumbersVisible,
       imagePathMap,
       gitLineRanges: initialGitLineRanges,
     };

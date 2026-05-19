@@ -41,6 +41,28 @@ class Cache {
 
 let mermaid: typeof MermaidUnsafe;
 
+const LIGHT_THEME_VARIABLES = {
+  background: "#ffffff",
+  mainBkg: "#f8fafc",
+  secondBkg: "#eef6ff",
+  tertiaryColor: "#f8fafc",
+  primaryColor: "#f8fafc",
+  primaryTextColor: "#1f2328",
+  primaryBorderColor: "#8c959f",
+  secondaryColor: "#eef6ff",
+  secondaryTextColor: "#1f2328",
+  secondaryBorderColor: "#8c959f",
+  tertiaryTextColor: "#1f2328",
+  tertiaryBorderColor: "#8c959f",
+  nodeBorder: "#8c959f",
+  clusterBkg: "#f6f8fa",
+  clusterBorder: "#d0d7de",
+  lineColor: "#8c959f",
+  textColor: "#1f2328",
+  edgeLabelBackground: "#ffffff",
+  labelBackground: "#ffffff",
+};
+
 class MermaidRenderer {
   readonly diagramId: string;
   readonly element: HTMLElement;
@@ -240,8 +262,9 @@ class MermaidRenderer {
         gantt: { useWidth: 700 },
         pie: { useWidth: 700 },
         fontSize: 12,
-        theme: isDark ? "dark" : "default",
+        theme: isDark ? "dark" : "base",
         darkMode: isDark,
+        themeVariables: isDark ? undefined : LIGHT_THEME_VARIABLES,
       });
 
       const { svg, bindFunctions } = await mermaid.render(tempId, text);
@@ -467,7 +490,29 @@ export default function Mermaid({ isDark }: { isDark: boolean }) {
       } catch (e) {
         // View might be destroyed
       }
-      return {};
+      return {
+        update(view, prevState) {
+          const prevPluginState = pluginKey.getState(prevState);
+          const pluginState = pluginKey.getState(view.state);
+          if (!prevPluginState || !pluginState || prevPluginState.isDark === pluginState.isDark) {
+            return;
+          }
+
+          const allBlocks = findBlockNodes(view.state.doc, true);
+          const mermaidBlocks = allBlocks.filter((item) => isCode(item.node) && isMermaid(item.node));
+          for (const block of mermaidBlocks) {
+            const decorations = pluginState.decorationSet.find(
+              block.pos,
+              block.pos + block.node.nodeSize,
+              (spec) => !!spec.renderer
+            );
+            const renderer = decorations.find((decoration) => decoration.spec.renderer)?.spec.renderer as MermaidRenderer | undefined;
+            if (renderer) {
+              void renderer.render(block, pluginState.isDark);
+            }
+          }
+        },
+      };
     },
     props: {
       decorations(state) {

@@ -82,6 +82,7 @@ let currentContent = '';
 let isFullWidth = false;
 let isTocVisible = false;
 let isTableWrap = true; // default: enabled
+let isLineNumbersVisible = false;
 let isSourceMode = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
 const dualHistory = new DualModeHistory();
@@ -106,7 +107,7 @@ function showToast(message: string) {
 }
 
 /** Same regex as provider — matches settings comment at file start */
-const SETTINGS_COMMENT_RE = /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?\s*-->[\r\n]*/;
+const SETTINGS_COMMENT_RE = /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?(?:\s+lineNumbersVisible:\s*(true|false))?\s*-->[\r\n]*/;
 
 function stripSettingsComment(content: string): string {
   return content.replace(SETTINGS_COMMENT_RE, '');
@@ -191,8 +192,26 @@ function updateSourceSettingsComment(): void {
   return;
 }
 
+function postEdit(content: string): void {
+  vscode.postMessage({
+    type: 'edit',
+    content,
+    fullWidth: isFullWidth,
+    tocVisible: isTocVisible,
+    tableWrap: isTableWrap,
+    lineNumbersVisible: isLineNumbersVisible,
+  });
+}
+
 /** Detect if VS Code is using a dark theme */
 function isDarkTheme(): boolean {
+  try {
+    const stored = localStorage.getItem('mdpre-zalman-theme');
+    if (stored === 'light') return false;
+    if (stored === 'dark') return true;
+  } catch {
+    // Webview storage can be unavailable in restricted contexts.
+  }
   try {
     let bgColor = getComputedStyle(document.body).getPropertyValue('--vscode-editor-background').trim();
     if (bgColor) {
@@ -272,6 +291,7 @@ function initEditor() {
 
   // Apply default table-wrap class (enabled by default)
   editorElement.classList.add('table-wrap');
+  editorElement.classList.toggle('show-line-numbers', isLineNumbersVisible);
 
   const isDark = isDarkTheme();
 
@@ -322,11 +342,12 @@ function initEditor() {
   const tUI = performance.now();
   const fileHeader = createFileHeader({
     postMessage: (msg) => vscode.postMessage(msg),
-    getState: () => ({ isFullWidth, isTocVisible, isTableWrap, currentContent }),
+    getState: () => ({ isFullWidth, isTocVisible, isTableWrap, isLineNumbersVisible, currentContent }),
     setState: (patch) => {
       if (patch.isFullWidth !== undefined) isFullWidth = patch.isFullWidth;
       if (patch.isTocVisible !== undefined) isTocVisible = patch.isTocVisible;
       if (patch.isTableWrap !== undefined) isTableWrap = patch.isTableWrap;
+      if (patch.isLineNumbersVisible !== undefined) isLineNumbersVisible = patch.isLineNumbersVisible;
     },
     onSettingsChange: () => updateSourceSettingsComment(),
   });
@@ -371,7 +392,7 @@ function initEditor() {
     onContentChange(markdown) {
       _hasEditedInCurrentMode = true;
       currentContent = markdown;
-      vscode.postMessage({ type: 'edit', content: markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+      postEdit(markdown);
     },
     onImageClick(view, pos, node, dom) {
       imageToolbar.show(view, pos, node, dom);
@@ -396,14 +417,14 @@ function initEditor() {
         // Restore exact saved PM state (with full undo history)
         editor.view!.updateState(snapshot.editorState);
         currentContent = snapshot.markdown;
-        vscode.postMessage({ type: 'edit', content: snapshot.markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+        postEdit(snapshot.markdown);
       } else {
         // Fallback: restore content via setContent
         editor.isUpdatingFromExtension = true;
         editor.setContent(snapshot.markdown);
         editor.isUpdatingFromExtension = false;
         currentContent = snapshot.markdown;
-        vscode.postMessage({ type: 'edit', content: snapshot.markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+        postEdit(snapshot.markdown);
       }
       return true;
     },
@@ -418,7 +439,7 @@ function initEditor() {
       } else if (snapshot.editorState) {
         editor.view!.updateState(snapshot.editorState);
         currentContent = snapshot.markdown;
-        vscode.postMessage({ type: 'edit', content: snapshot.markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+        postEdit(snapshot.markdown);
       }
       return true;
     },
@@ -502,7 +523,7 @@ function initEditor() {
         tocBtnEl.classList.toggle('active', isTocVisible);
         (tocBtnEl as HTMLElement).title = isTocVisible ? 'Hide Table of Contents' : 'Toggle Table of Contents';
       }
-      vscode.postMessage({ type: 'edit', content: currentContent, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+      postEdit(currentContent);
       updateSourceSettingsComment();
     }
   });
@@ -768,6 +789,48 @@ function initEditor() {
   };
 
   // 6. Source mode toggle
+  function getNativeSourcePosition(): { line: number; character: number } {
+    if (isSourceMode && sourceEditor) {
+      const state = sourceEditor.view.state;
+      const head = state.selection.main.head;
+      const line = state.doc.lineAt(head);
+      return {
+        line: Math.max(0, line.number - 1),
+        character: Math.max(0, head - line.from),
+      };
+    }
+
+    if (editor.view) {
+      const context = getWysiwygTabContext(editor.view);
+      if (context) return context.approx;
+    }
+
+    return { line: 0, character: 0 };
+  }
+
+  function openNativeSourceMode() {
+    const sourcePosition = getNativeSourcePosition();
+    const content = isSourceMode && sourceEditor
+      ? stripSettingsComment(sourceEditor.getContent())
+      : editor.getMarkdown();
+
+    wysiwygGhostRequestToken++;
+    hideWysiwygGhost();
+    editor.flushSync();
+    currentContent = content;
+
+    vscode.postMessage({
+      type: 'openNativeSourceMode',
+      content,
+      fullWidth: isFullWidth,
+      tocVisible: isTocVisible,
+      tableWrap: isTableWrap,
+      lineNumbersVisible: isLineNumbersVisible,
+      line: sourcePosition.line,
+      character: sourcePosition.character,
+    });
+  }
+
   function toggleSourceMode() {
     const scrollArea = document.getElementById('editor-scroll-area')!;
     const editorEl = document.getElementById('editor')!;
@@ -796,6 +859,7 @@ function initEditor() {
         scrollArea.appendChild(sourceContainer);
       }
       sourceContainer.style.display = 'block';
+      sourceContainer.classList.toggle('hide-line-numbers', !isLineNumbersVisible);
 
       if (!sourceEditor) {
         sourceEditor = createSourceEditor({
@@ -805,7 +869,7 @@ function initEditor() {
             const content = stripSettingsComment(rawContent);
             if (content !== currentContent) {
               currentContent = content;
-              vscode.postMessage({ type: 'edit', content, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+              postEdit(content);
             }
           },
           requestTabCompletion({ line, character, wordPrefix }) {
@@ -825,12 +889,12 @@ function initEditor() {
               // Restore exact saved CM6 state (with full undo history)
               sourceEditor!.view.setState(snapshot.editorState);
               currentContent = snapshot.markdown;
-              vscode.postMessage({ type: 'edit', content: snapshot.markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+              postEdit(snapshot.markdown);
             } else {
               // Fallback: restore content via setContent
               sourceEditor!.setContent(snapshot.markdown);
               currentContent = snapshot.markdown;
-              vscode.postMessage({ type: 'edit', content: snapshot.markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+              postEdit(snapshot.markdown);
             }
             return true;
           },
@@ -846,7 +910,7 @@ function initEditor() {
             } else if (snapshot.editorState) {
               sourceEditor!.view.setState(snapshot.editorState);
               currentContent = snapshot.markdown;
-              vscode.postMessage({ type: 'edit', content: snapshot.markdown, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
+              postEdit(snapshot.markdown);
             }
             return true;
           },
@@ -929,6 +993,7 @@ function initEditor() {
 
       document.getElementById('editor')?.classList.toggle('full-width', isFullWidth);
       document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
+      document.getElementById('editor')?.classList.toggle('show-line-numbers', isLineNumbersVisible);
       if (isTocVisible && !toc.visible) toc.open();
       if (!isTocVisible && toc.visible) toc.close();
 
@@ -961,14 +1026,14 @@ function initEditor() {
     }
   }
 
-  fileHeader.setSourceHandler(() => toggleSourceMode());
+  fileHeader.setSourceHandler(() => openNativeSourceMode());
 
   // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     const isModKey = e.ctrlKey || e.metaKey;
     if (isModKey && e.key === '/') {
       e.preventDefault();
-      toggleSourceMode();
+      openNativeSourceMode();
     }
     if (isModKey && e.key === 's' && isSourceMode) {
       e.preventDefault();
@@ -998,14 +1063,21 @@ function initEditor() {
 
   // 8. Theme change observer
   let currentThemeIsDark = isDark;
+  const applyThemeChange = (isDarkNow = isDarkTheme()) => {
+    if (isDarkNow !== currentThemeIsDark) {
+      currentThemeIsDark = isDarkNow;
+      view.dispatch(view.state.tr.setMeta('theme', { isDark: isDarkNow }));
+    }
+  };
+  window.addEventListener('inlinemd:themeChanged', ((event: CustomEvent) => {
+    applyThemeChange(!!event.detail?.isDark);
+  }) as EventListener);
   const themeObserver = new MutationObserver(() => {
     const newIsDark = isDarkTheme();
-    if (newIsDark !== currentThemeIsDark) {
-      currentThemeIsDark = newIsDark;
-      view.dispatch(view.state.tr.setMeta('theme', { isDark: newIsDark }));
-    }
+    applyThemeChange(newIsDark);
   });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
 
   // 9. Message handling
   let initReceived = false;
@@ -1054,16 +1126,26 @@ function initEditor() {
               tocBtnEl.title = 'Hide Table of Contents';
             }
           }
-          if (typeof message.tableWrap === 'boolean') {
-            isTableWrap = message.tableWrap;
-            document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
+	          if (typeof message.tableWrap === 'boolean') {
+	            isTableWrap = message.tableWrap;
+	            document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
             const wrapBtn = document.querySelector('.file-header-btn[title*="table word wrap"]') as HTMLElement;
             if (wrapBtn) {
               wrapBtn.classList.toggle('active', isTableWrap);
-              wrapBtn.title = isTableWrap ? 'Disable table word wrap' : 'Enable table word wrap';
-            }
-          }
-        }
+	              wrapBtn.title = isTableWrap ? 'Disable table word wrap' : 'Enable table word wrap';
+	            }
+	          }
+	          if (typeof message.lineNumbersVisible === 'boolean') {
+	            isLineNumbersVisible = message.lineNumbersVisible;
+	            document.getElementById('editor')?.classList.toggle('show-line-numbers', isLineNumbersVisible);
+	            document.getElementById('source-editor')?.classList.toggle('hide-line-numbers', !isLineNumbersVisible);
+	            const lineNumbersBtn = document.querySelector('.file-header-btn[title*="line numbers"]') as HTMLElement;
+	            if (lineNumbersBtn) {
+	              lineNumbersBtn.classList.toggle('active', isLineNumbersVisible);
+	              lineNumbersBtn.title = isLineNumbersVisible ? 'Hide line numbers' : 'Show line numbers';
+	            }
+	          }
+	        }
 
         if (content === currentContent && message.type !== 'init') return;
         currentContent = content;

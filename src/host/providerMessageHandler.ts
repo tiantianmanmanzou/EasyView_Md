@@ -7,6 +7,8 @@ import { SETTINGS_COMMENT_RE, type EditorSettings, computeMinimalDiff } from './
 import { buildImagePathMap } from './providerImageManager';
 import { downloadFile, ExportImage } from './providerExportHandler';
 import { roundPdfCorners } from './pdfRoundCorners';
+import { ensureNativeMarkdownEditorFont } from './nativeEditorFont';
+import { suppressConflictingMarkdownInlineDecorations } from './conflictingExtensions';
 
 const inlineSuggestOutput = vscode.window.createOutputChannel('MdPre Inline Suggest');
 
@@ -601,6 +603,42 @@ export interface MessageHandlerContext {
   updateEditorSettings: (settings: EditorSettings) => Promise<void>;
 }
 
+async function syncWebviewContentToDocument(
+  ctx: MessageHandlerContext,
+  editContent: string,
+  settings: EditorSettings
+): Promise<void> {
+  const document = ctx.document;
+
+  await ctx.updateEditorSettings(settings);
+  let newContent = editContent.replace(SETTINGS_COMMENT_RE, '');
+
+  const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+  if (eol === '\r\n') {
+    newContent = newContent.replace(/\r?\n/g, '\r\n');
+  }
+
+  if (newContent === ctx.getLastKnownContent()) return;
+
+  ctx.setIsUpdatingDocument(true);
+  try {
+    const edit = new vscode.WorkspaceEdit();
+    const oldContent = document.getText();
+    const { start, oldEnd, newEnd } = computeMinimalDiff(oldContent, newContent);
+    const startPos = document.positionAt(start);
+    const endPos = document.positionAt(oldEnd);
+    const replaceText = newContent.slice(start, newEnd);
+    edit.replace(document.uri, new vscode.Range(startPos, endPos), replaceText);
+    const success = await vscode.workspace.applyEdit(edit);
+    if (success) {
+      ctx.setLastKnownContent(newContent);
+      await ctx.refreshGitChanges?.();
+    }
+  } finally {
+    ctx.setIsUpdatingDocument(false);
+  }
+}
+
 /**
  * Handle a single webview message. Extracted from resolveCustomTextEditor
  * to keep the main provider file focused on lifecycle management.
@@ -619,36 +657,50 @@ export async function handleWebviewMessage(
       const fullWidth = message.fullWidth ?? false;
       const tocVisible = message.tocVisible ?? false;
       const tableWrap = message.tableWrap ?? true;
+      const lineNumbersVisible = message.lineNumbersVisible ?? false;
 
       const newQueue = ctx.getOperationQueue().then(async () => {
-        await ctx.updateEditorSettings({ fullWidth, tocVisible, tableWrap });
-        let newContent = editContent.replace(SETTINGS_COMMENT_RE, '');
+        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap, lineNumbersVisible });
+      });
+      ctx.setOperationQueue(newQueue);
+      break;
+    }
 
-        // Convert LF (from serializer) to document's EOL to prevent
-        // save-time normalization from creating a false diff
-        const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
-        if (eol === '\r\n') {
-          newContent = newContent.replace(/\r?\n/g, '\r\n');
-        }
+    case 'openNativeSourceMode': {
+      const editContent = typeof message.content === 'string'
+        ? message.content
+        : ctx.getLastKnownContent();
+      const fullWidth = message.fullWidth ?? false;
+      const tocVisible = message.tocVisible ?? false;
+      const tableWrap = message.tableWrap ?? true;
+      const lineNumbersVisible = message.lineNumbersVisible ?? false;
+      const requestedLine = typeof message.line === 'number' ? message.line : 0;
+      const requestedCharacter = typeof message.character === 'number' ? message.character : 0;
 
-        if (newContent === ctx.getLastKnownContent()) return;
+      const newQueue = ctx.getOperationQueue().then(async () => {
+        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap, lineNumbersVisible });
+        await ensureNativeMarkdownEditorFont(document);
 
-        ctx.setIsUpdatingDocument(true);
+        const targetLine = Math.min(Math.max(0, requestedLine), Math.max(0, document.lineCount - 1));
+        const targetCharacter = Math.min(
+          Math.max(0, requestedCharacter),
+          document.lineAt(targetLine).text.length
+        );
+        const position = new vscode.Position(targetLine, targetCharacter);
+        const editor = await vscode.window.showTextDocument(document, {
+          viewColumn: webviewPanel.viewColumn,
+          preserveFocus: false,
+          preview: false,
+        });
+        await suppressConflictingMarkdownInlineDecorations(editor);
+
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+
         try {
-          const edit = new vscode.WorkspaceEdit();
-          const oldContent = document.getText();
-          const { start, oldEnd, newEnd } = computeMinimalDiff(oldContent, newContent);
-          const startPos = document.positionAt(start);
-          const endPos = document.positionAt(oldEnd);
-          const replaceText = newContent.slice(start, newEnd);
-          edit.replace(document.uri, new vscode.Range(startPos, endPos), replaceText);
-          const success = await vscode.workspace.applyEdit(edit);
-          if (success) {
-            ctx.setLastKnownContent(newContent);
-            await ctx.refreshGitChanges?.();
-          }
-        } finally {
-          ctx.setIsUpdatingDocument(false);
+          await vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
+        } catch {
+          // Native inline suggestions remain available even if explicit triggering is unavailable.
         }
       });
       ctx.setOperationQueue(newQueue);
@@ -691,6 +743,7 @@ export async function handleWebviewMessage(
         fullWidth: settings.fullWidth,
         tocVisible: settings.tocVisible,
         tableWrap: settings.tableWrap,
+        lineNumbersVisible: settings.lineNumbersVisible,
         imagePathMap: imagePathMap,
       });
       break;

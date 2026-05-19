@@ -3,12 +3,13 @@
  */
 
 /** Regex matching the settings comment at the start of the file */
-export const SETTINGS_COMMENT_RE = /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?\s*-->[\r\n]*/;
+export const SETTINGS_COMMENT_RE = /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?(?:\s+lineNumbersVisible:\s*(true|false))?\s*-->[\r\n]*/;
 
 export interface EditorSettings {
   fullWidth: boolean;
   tocVisible: boolean;
   tableWrap: boolean;
+  lineNumbersVisible: boolean;
 }
 
 /**
@@ -21,6 +22,7 @@ export function extractSettings(content: string): EditorSettings {
     fullWidth: match ? match[1] === 'true' : false,
     tocVisible: match && match[2] ? match[2] === 'true' : false,
     tableWrap: match && match[3] ? match[3] === 'true' : true, // default: true
+    lineNumbersVisible: match && match[4] ? match[4] === 'true' : false,
   };
 }
 

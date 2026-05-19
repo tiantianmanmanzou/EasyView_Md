@@ -202,9 +202,30 @@ const EXPORT_JS = /* js */ `
     mermaid.initialize({
       startOnLoad: false,
       suppressErrorRendering: true,
-      theme: isDark ? 'dark' : 'default',
+      theme: isDark ? 'dark' : 'base',
       darkMode: isDark,
       fontFamily: getComputedStyle(document.body).fontFamily || 'inherit',
+      themeVariables: isDark ? undefined : {
+        background: '#ffffff',
+        mainBkg: '#f8fafc',
+        secondBkg: '#eef6ff',
+        tertiaryColor: '#f8fafc',
+        primaryColor: '#f8fafc',
+        primaryTextColor: '#1f2328',
+        primaryBorderColor: '#8c959f',
+        secondaryColor: '#eef6ff',
+        secondaryTextColor: '#1f2328',
+        secondaryBorderColor: '#8c959f',
+        tertiaryTextColor: '#1f2328',
+        tertiaryBorderColor: '#8c959f',
+        nodeBorder: '#8c959f',
+        clusterBkg: '#f6f8fa',
+        clusterBorder: '#d0d7de',
+        lineColor: '#8c959f',
+        textColor: '#1f2328',
+        edgeLabelBackground: '#ffffff',
+        labelBackground: '#ffffff',
+      },
     });
 
     mermaidBlocks.forEach(function(el, idx) {

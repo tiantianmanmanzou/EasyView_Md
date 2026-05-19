@@ -218,6 +218,9 @@ Render Mermaid diagrams directly in the editor:
 |---------|-------------|---------|
 | `inlineMd.csvDelimiter` | CSV delimiter: `,`, `;`, or `auto` | `auto` |
 | `inlineMd.nativeDecorations.enabled` | Enable lightweight inline markdown decorations in the native VS Code editor | `true` |
+| `inlineMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `true` |
+| `inlineMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor | `true` |
+| `inlineMd.nativeEditor.forceMonospaceFont` | Force Markdown native source editors to use a CJK-aware monospace font family | `true` |
 
 ### Per-File Settings
 

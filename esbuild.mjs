@@ -61,4 +61,3 @@ if (watch) {
     esbuild.build(webviewConfig),
   ]);
 }
-

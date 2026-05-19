@@ -40,6 +40,7 @@ export async function collectMermaidSvgs(doc: ProsemirrorNode, palette: PdfPalet
       theme: palette.mermaidTheme as any,
       darkMode: palette.mermaidDarkMode,
       fontFamily: 'Arial, Helvetica, sans-serif',
+      themeVariables: palette.mermaidThemeVariables,
     });
 
     for (const source of sources) {

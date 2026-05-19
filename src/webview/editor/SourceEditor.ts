@@ -3,7 +3,7 @@
  * Provides a VS Code-themed editor with markdown syntax highlighting.
  */
 
-import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet, WidgetType, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
+import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet, WidgetType, keymap, highlightActiveLine } from '@codemirror/view';
 import { EditorState, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -646,9 +646,7 @@ export function createSourceEditor(options: SourceEditorOptions) {
     state: EditorState.create({
       doc: '',
       extensions: [
-        lineNumbers(),
         highlightActiveLine(),
-        highlightActiveLineGutter(),
         history(),
         bracketMatching(),
         closeBrackets(),

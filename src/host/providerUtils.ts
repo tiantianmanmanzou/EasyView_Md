@@ -9,7 +9,6 @@ export interface EditorSettings {
   fullWidth: boolean;
   tocVisible: boolean;
   tableWrap: boolean;
-  lineNumbersVisible: boolean;
 }
 
 /**
@@ -22,7 +21,6 @@ export function extractSettings(content: string): EditorSettings {
     fullWidth: match ? match[1] === 'true' : false,
     tocVisible: match && match[2] ? match[2] === 'true' : false,
     tableWrap: match && match[3] ? match[3] === 'true' : true, // default: true
-    lineNumbersVisible: match && match[4] ? match[4] === 'true' : false,
   };
 }
 

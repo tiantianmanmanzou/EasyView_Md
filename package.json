@@ -2,7 +2,7 @@
   "name": "markdown-preview-wysiwyg",
   "displayName": "Markdown-preview-wysiwyg",
   "description": "Markdown-preview-wysiwyg supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.49",
+  "version": "1.0.54",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "icon.png",

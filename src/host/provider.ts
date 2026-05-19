@@ -149,7 +149,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         fullWidth: stored?.fullWidth ?? legacySettings.fullWidth,
         tocVisible: stored?.tocVisible ?? legacySettings.tocVisible,
         tableWrap: stored?.tableWrap ?? legacySettings.tableWrap,
-        lineNumbersVisible: stored?.lineNumbersVisible ?? legacySettings.lineNumbersVisible,
       };
     };
 
@@ -233,7 +232,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       fullWidth: settings.fullWidth,
       tocVisible: settings.tocVisible,
       tableWrap: settings.tableWrap,
-      lineNumbersVisible: settings.lineNumbersVisible,
       imagePathMap,
       gitLineRanges: initialGitLineRanges,
     };
@@ -336,7 +334,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       ${initialData ? `window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};` : ''}
     </script>
 </head>
-<body>
+<body class="inlinemd-booting">
     <div id="title-bar"></div>
     <div id="editor-body">
       <div id="editor-scroll-area">

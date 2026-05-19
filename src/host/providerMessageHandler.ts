@@ -657,10 +657,9 @@ export async function handleWebviewMessage(
       const fullWidth = message.fullWidth ?? false;
       const tocVisible = message.tocVisible ?? false;
       const tableWrap = message.tableWrap ?? true;
-      const lineNumbersVisible = message.lineNumbersVisible ?? false;
 
       const newQueue = ctx.getOperationQueue().then(async () => {
-        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap, lineNumbersVisible });
+        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap });
       });
       ctx.setOperationQueue(newQueue);
       break;
@@ -673,12 +672,11 @@ export async function handleWebviewMessage(
       const fullWidth = message.fullWidth ?? false;
       const tocVisible = message.tocVisible ?? false;
       const tableWrap = message.tableWrap ?? true;
-      const lineNumbersVisible = message.lineNumbersVisible ?? false;
       const requestedLine = typeof message.line === 'number' ? message.line : 0;
       const requestedCharacter = typeof message.character === 'number' ? message.character : 0;
 
       const newQueue = ctx.getOperationQueue().then(async () => {
-        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap, lineNumbersVisible });
+        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap });
         await ensureNativeMarkdownEditorFont(document);
 
         const targetLine = Math.min(Math.max(0, requestedLine), Math.max(0, document.lineCount - 1));
@@ -743,7 +741,6 @@ export async function handleWebviewMessage(
         fullWidth: settings.fullWidth,
         tocVisible: settings.tocVisible,
         tableWrap: settings.tableWrap,
-        lineNumbersVisible: settings.lineNumbersVisible,
         imagePathMap: imagePathMap,
       });
       break;

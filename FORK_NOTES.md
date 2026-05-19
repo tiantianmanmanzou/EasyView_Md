@@ -1,4 +1,3 @@
-<!-- fullWidth: false tocVisible: false tableWrap: true -->
 # Markdown Preview WYSIWYG Fork Notes
 
 This repository was reconstructed from the installed `Dykamino.markdown-inline-md` VS Code extension package.

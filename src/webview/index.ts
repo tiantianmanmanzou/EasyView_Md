@@ -82,7 +82,6 @@ let currentContent = '';
 let isFullWidth = false;
 let isTocVisible = false;
 let isTableWrap = true; // default: enabled
-let isLineNumbersVisible = false;
 let isSourceMode = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
 const dualHistory = new DualModeHistory();
@@ -199,7 +198,6 @@ function postEdit(content: string): void {
     fullWidth: isFullWidth,
     tocVisible: isTocVisible,
     tableWrap: isTableWrap,
-    lineNumbersVisible: isLineNumbersVisible,
   });
 }
 
@@ -291,7 +289,6 @@ function initEditor() {
 
   // Apply default table-wrap class (enabled by default)
   editorElement.classList.add('table-wrap');
-  editorElement.classList.toggle('show-line-numbers', isLineNumbersVisible);
 
   const isDark = isDarkTheme();
 
@@ -342,12 +339,11 @@ function initEditor() {
   const tUI = performance.now();
   const fileHeader = createFileHeader({
     postMessage: (msg) => vscode.postMessage(msg),
-    getState: () => ({ isFullWidth, isTocVisible, isTableWrap, isLineNumbersVisible, currentContent }),
+    getState: () => ({ isFullWidth, isTocVisible, isTableWrap, currentContent }),
     setState: (patch) => {
       if (patch.isFullWidth !== undefined) isFullWidth = patch.isFullWidth;
       if (patch.isTocVisible !== undefined) isTocVisible = patch.isTocVisible;
       if (patch.isTableWrap !== undefined) isTableWrap = patch.isTableWrap;
-      if (patch.isLineNumbersVisible !== undefined) isLineNumbersVisible = patch.isLineNumbersVisible;
     },
     onSettingsChange: () => updateSourceSettingsComment(),
   });
@@ -825,7 +821,6 @@ function initEditor() {
       fullWidth: isFullWidth,
       tocVisible: isTocVisible,
       tableWrap: isTableWrap,
-      lineNumbersVisible: isLineNumbersVisible,
       line: sourcePosition.line,
       character: sourcePosition.character,
     });
@@ -859,7 +854,6 @@ function initEditor() {
         scrollArea.appendChild(sourceContainer);
       }
       sourceContainer.style.display = 'block';
-      sourceContainer.classList.toggle('hide-line-numbers', !isLineNumbersVisible);
 
       if (!sourceEditor) {
         sourceEditor = createSourceEditor({
@@ -993,7 +987,6 @@ function initEditor() {
 
       document.getElementById('editor')?.classList.toggle('full-width', isFullWidth);
       document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
-      document.getElementById('editor')?.classList.toggle('show-line-numbers', isLineNumbersVisible);
       if (isTocVisible && !toc.visible) toc.open();
       if (!isTocVisible && toc.visible) toc.close();
 
@@ -1135,16 +1128,6 @@ function initEditor() {
 	              wrapBtn.title = isTableWrap ? 'Disable table word wrap' : 'Enable table word wrap';
 	            }
 	          }
-	          if (typeof message.lineNumbersVisible === 'boolean') {
-	            isLineNumbersVisible = message.lineNumbersVisible;
-	            document.getElementById('editor')?.classList.toggle('show-line-numbers', isLineNumbersVisible);
-	            document.getElementById('source-editor')?.classList.toggle('hide-line-numbers', !isLineNumbersVisible);
-	            const lineNumbersBtn = document.querySelector('.file-header-btn[title*="line numbers"]') as HTMLElement;
-	            if (lineNumbersBtn) {
-	              lineNumbersBtn.classList.toggle('active', isLineNumbersVisible);
-	              lineNumbersBtn.title = isLineNumbersVisible ? 'Hide line numbers' : 'Show line numbers';
-	            }
-	          }
 	        }
 
         if (content === currentContent && message.type !== 'init') return;
@@ -1157,7 +1140,7 @@ function initEditor() {
 
         const isInit = message.type === 'init';
         const tSetContent = isInit ? performance.now() : 0;
-        editor.setContent(content, isInit);
+	        editor.setContent(content, isInit);
         if (Array.isArray(message.gitLineRanges) && view) {
           view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
             lineRanges: message.gitLineRanges,
@@ -1168,6 +1151,11 @@ function initEditor() {
           console.log(`[InLineMd perf] editor.setContent(init): ${(performance.now() - tSetContent).toFixed(1)}ms`);
           toolbar.update(view);
           toc.update(view);
+          requestAnimationFrame(() => {
+            editor.view?.dom.querySelectorAll('.mdpre-source-line-gutter').forEach((el) => el.remove());
+            document.body.classList.remove('inlinemd-booting');
+            document.body.classList.add('inlinemd-ready');
+          });
           console.log(`[InLineMd perf] init message TOTAL: ${(performance.now() - tMsg).toFixed(1)}ms`);
           console.log(`[InLineMd perf] initEditor TOTAL: ${(performance.now() - tInit).toFixed(1)}ms`);
         }

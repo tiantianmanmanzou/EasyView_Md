@@ -5,8 +5,8 @@
 
 export interface FileHeaderDeps {
   postMessage: (msg: any) => void;
-  getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; isLineNumbersVisible: boolean; currentContent: string };
-  setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; isLineNumbersVisible: boolean }>) => void;
+  getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; currentContent: string };
+  setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean }>) => void;
   onSettingsChange: () => void;
 }
 
@@ -29,6 +29,14 @@ export interface FileHeader {
 export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const { postMessage, getState, setState, onSettingsChange } = deps;
   type ThemeMode = 'light' | 'dark';
+  type AccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple';
+  const accentThemes: Array<{ value: AccentTheme; label: string }> = [
+    { value: 'default', label: 'Default text' },
+    { value: 'blue', label: 'Blue' },
+    { value: 'orangeRed', label: 'Orange red' },
+    { value: 'green', label: 'Green' },
+    { value: 'purple', label: 'Purple' },
+  ];
 
   function readStoredThemeMode(): ThemeMode | null {
     try {
@@ -47,6 +55,16 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
+  function readStoredAccentTheme(): AccentTheme {
+    try {
+      const stored = localStorage.getItem('mdpre-zalman-accent-theme') as AccentTheme | null;
+      if (accentThemes.some((theme) => theme.value === stored)) return stored!;
+    } catch {
+      // Webview storage can be unavailable in restricted contexts.
+    }
+    return 'default';
+  }
+
   const bar = document.createElement('div');
   bar.className = 'file-header-bar';
 
@@ -58,7 +76,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       fullWidth: s.isFullWidth,
       tocVisible: s.isTocVisible,
       tableWrap: s.isTableWrap,
-      lineNumbersVisible: s.isLineNumbersVisible,
     });
   };
 
@@ -133,23 +150,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     onSettingsChange();
   });
   leftGroup.appendChild(tableWrapBtn);
-
-  const lineNumbersBtn = document.createElement('button');
-  lineNumbersBtn.className = 'file-header-btn';
-  lineNumbersBtn.title = 'Show line numbers';
-  lineNumbersBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M4 14h2l-2 4h2"/></svg>';
-  lineNumbersBtn.addEventListener('click', () => {
-    const state = getState();
-    const newLineNumbersVisible = !state.isLineNumbersVisible;
-    setState({ isLineNumbersVisible: newLineNumbersVisible });
-    document.getElementById('editor')?.classList.toggle('show-line-numbers', newLineNumbersVisible);
-    document.getElementById('source-editor')?.classList.toggle('hide-line-numbers', !newLineNumbersVisible);
-    lineNumbersBtn.classList.toggle('active', newLineNumbersVisible);
-    lineNumbersBtn.title = newLineNumbersVisible ? 'Hide line numbers' : 'Show line numbers';
-    postCurrentEdit();
-    onSettingsChange();
-  });
-  leftGroup.appendChild(lineNumbersBtn);
 
   // Zoom controls
   const ZOOM_MIN = 50, ZOOM_MAX = 200, ZOOM_STEP = 10;
@@ -272,6 +272,30 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   });
   applyThemeMode(themeMode);
   rightGroup.appendChild(themeToggleBtn);
+
+  const accentSelect = document.createElement('select');
+  accentSelect.className = 'file-header-accent-select';
+  accentSelect.title = 'Choose editor text color theme';
+  for (const theme of accentThemes) {
+    const option = document.createElement('option');
+    option.value = theme.value;
+    option.textContent = theme.label;
+    accentSelect.appendChild(option);
+  }
+  function applyAccentTheme(theme: AccentTheme) {
+    document.body.dataset.mdpreAccent = theme;
+    accentSelect.value = theme;
+    try {
+      localStorage.setItem('mdpre-zalman-accent-theme', theme);
+    } catch {
+      // Webview storage can be unavailable in restricted contexts.
+    }
+  }
+  accentSelect.addEventListener('change', () => {
+    applyAccentTheme(accentSelect.value as AccentTheme);
+  });
+  applyAccentTheme(readStoredAccentTheme());
+  rightGroup.appendChild(accentSelect);
 
   // Toggle dropdown on button click
   exportBtn.addEventListener('click', (e) => {

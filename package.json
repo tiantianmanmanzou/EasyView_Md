@@ -1,8 +1,8 @@
 {
   "name": "markdown-preview-wysiwyg",
-  "displayName": "MdPre-zalman",
-  "description": "Private WYSIWYG Markdown preview editor for VS Code.",
-  "version": "1.0.1",
+  "displayName": "Markdown-preview-wysiwyg",
+  "description": "Markdown-preview-wysiwyg supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
+  "version": "1.0.20",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "icon.png",
@@ -20,16 +20,24 @@
     "markdown",
     "wysiwyg",
     "editor",
-    "prosemirror",
-    "outline"
+    "native-inline-suggestion",
+    "decorations",
+    "codelens",
+    "hover",
+    "overlay"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:markdown",
+    "onLanguage:mdx",
+    "onCommand:inlineMd.openEditor",
+    "onCommand:inlineMd.openNativeEditor"
+  ],
   "contributes": {
     "customEditors": [
       {
         "viewType": "inlineMd.markdownEditor",
-        "displayName": "MdPre-zalman",
+        "displayName": "Markdown-preview-wysiwyg (Rich Editor)",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -41,34 +49,39 @@
             "filenamePattern": "*.mdx"
           }
         ],
-        "priority": "default"
+        "priority": "option"
       }
     ],
     "commands": [
       {
         "command": "inlineMd.openEditor",
-        "title": "Open with MdPre-zalman",
-        "category": "MdPre-zalman"
+        "title": "Open with Markdown-preview-wysiwyg (Rich Editor)",
+        "category": "Markdown-preview-wysiwyg"
+      },
+      {
+        "command": "inlineMd.openNativeEditor",
+        "title": "Open in Native Markdown Editor",
+        "category": "Markdown-preview-wysiwyg"
       },
       {
         "command": "inlineMd.exportHtmlLight",
         "title": "Export to HTML (Light)",
-        "category": "MdPre-zalman"
+        "category": "Markdown-preview-wysiwyg"
       },
       {
         "command": "inlineMd.exportHtmlDark",
         "title": "Export to HTML (Dark)",
-        "category": "MdPre-zalman"
+        "category": "Markdown-preview-wysiwyg"
       },
       {
         "command": "inlineMd.exportPdfLight",
         "title": "Export to PDF (Light)",
-        "category": "MdPre-zalman"
+        "category": "Markdown-preview-wysiwyg"
       },
       {
         "command": "inlineMd.exportPdfDark",
         "title": "Export to PDF (Dark)",
-        "category": "MdPre-zalman"
+        "category": "Markdown-preview-wysiwyg"
       }
     ],
     "menus": {
@@ -77,6 +90,11 @@
           "command": "inlineMd.openEditor",
           "when": "resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
           "group": "navigation@1"
+        },
+        {
+          "command": "inlineMd.openNativeEditor",
+          "when": "resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
+          "group": "navigation@2"
         }
       ]
     },
@@ -98,7 +116,7 @@
       }
     ],
     "configuration": {
-      "title": "MdPre-zalman",
+      "title": "Markdown-preview-wysiwyg",
       "properties": {
         "inlineMd.csvDelimiter": {
           "type": "string",
@@ -114,6 +132,11 @@
             "Auto-detect based on system locale (may not work correctly)"
           ],
           "description": "CSV delimiter to use when exporting tables"
+        },
+        "inlineMd.nativeDecorations.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable lightweight inline markdown decorations in the native VS Code editor."
         }
       }
     }

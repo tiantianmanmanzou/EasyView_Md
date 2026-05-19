@@ -20,6 +20,7 @@ export interface FileHeader {
   setExportPdfLightHandler: (handler: () => void) => void;
   setExportPdfDarkHandler: (handler: () => void) => void;
   setSourceHandler: (handler: () => void) => void;
+  setStageHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
   getSourceBtn: () => HTMLElement;
   getHistoryBtn: () => HTMLElement;
@@ -165,6 +166,12 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   // Right group
   const rightGroup = document.createElement('div');
   rightGroup.className = 'file-header-actions file-header-actions-right';
+  const stageBtn = document.createElement('button');
+  stageBtn.className = 'file-header-btn';
+  stageBtn.title = 'Stage current file';
+  stageBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
+  rightGroup.appendChild(stageBtn);
+
   const historyBtn = document.createElement('button');
   historyBtn.className = 'file-header-btn';
   historyBtn.title = 'Toggle history panel';
@@ -308,6 +315,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       });
     },
     setSourceHandler(handler: () => void) { sourceBtn.addEventListener('click', handler); },
+    setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
     getSourceBtn() { return sourceBtn; },
     getHistoryBtn() { return historyBtn; },

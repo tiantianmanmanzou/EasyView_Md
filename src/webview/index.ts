@@ -112,6 +112,80 @@ function stripSettingsComment(content: string): string {
   return content.replace(SETTINGS_COMMENT_RE, '');
 }
 
+function normalizeMarkdownLineForMatch(line: string): string {
+  return line
+    .replace(/^\s{0,3}#{1,6}\s+/, '')
+    .replace(/^\s{0,3}>\s?/, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+(?:\[(?: |x|X|~)\]\s+)?/, '')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[*_~`]/g, '')
+    .replace(/<\/?[^>]+>/g, '')
+    .trim();
+}
+
+function findApproximateMarkdownPosition(
+  markdown: string,
+  lineText: string,
+  textBeforeLine: string,
+  wordPrefix: string,
+): { line: number; character: number } {
+  const rawLines = markdown.split('\n');
+  const normalizedLineText = normalizeMarkdownLineForMatch(lineText);
+  const normalizedBefore = normalizeMarkdownLineForMatch(textBeforeLine);
+  let best: { line: number; character: number; score: number } | null = null;
+
+  for (let index = 0; index < rawLines.length; index++) {
+    const rawLine = rawLines[index];
+    const normalizedRaw = normalizeMarkdownLineForMatch(rawLine);
+    let score = -1;
+
+    if (normalizedBefore && normalizedRaw.includes(normalizedBefore)) {
+      score = 3;
+    } else if (normalizedLineText && normalizedRaw.includes(normalizedLineText)) {
+      score = 2;
+    } else if (wordPrefix && rawLine.toLowerCase().includes(wordPrefix.toLowerCase())) {
+      score = 1;
+    }
+
+    if (score < 0) continue;
+
+    let character = rawLine.length;
+    const beforeIndex = textBeforeLine ? rawLine.indexOf(textBeforeLine) : -1;
+    if (beforeIndex >= 0) {
+      character = beforeIndex + textBeforeLine.length;
+    } else {
+      const wordIndex = wordPrefix ? rawLine.toLowerCase().lastIndexOf(wordPrefix.toLowerCase()) : -1;
+      if (wordIndex >= 0) {
+        character = wordIndex + wordPrefix.length;
+      }
+    }
+
+    if (!best || score > best.score) {
+      best = { line: index, character, score };
+      if (score === 3) break;
+    }
+  }
+
+  return best ? { line: best.line, character: best.character } : { line: 0, character: 0 };
+}
+
+interface WysiwygGhostSuggestion {
+  anchor: number;
+  replaceFrom: number;
+  replaceTo: number;
+  insertText: string;
+  displayText: string;
+}
+
+interface WysiwygTabContext {
+  anchor: number;
+  replaceFrom: number;
+  replaceTo: number;
+  wordPrefix: string;
+  approx: { line: number; character: number };
+}
+
 /** Update the settings comment line in CodeMirror when flags change */
 function updateSourceSettingsComment(): void {
   return;
@@ -170,6 +244,31 @@ function initEditor() {
     console.error('Editor element not found');
     return;
   }
+
+  const wysiwygGhostEl = document.createElement('span');
+  wysiwygGhostEl.style.position = 'fixed';
+  wysiwygGhostEl.style.display = 'none';
+  wysiwygGhostEl.style.pointerEvents = 'none';
+  wysiwygGhostEl.style.whiteSpace = 'pre';
+  wysiwygGhostEl.style.color = 'var(--vscode-inlineSuggestion-foreground, var(--vscode-editorGhostText-foreground, rgba(128, 128, 128, 0.7)))';
+  wysiwygGhostEl.style.opacity = '0.9';
+  wysiwygGhostEl.style.zIndex = '40';
+  document.body.appendChild(wysiwygGhostEl);
+
+  let wysiwygGhostSuggestion: WysiwygGhostSuggestion | null = null;
+  let wysiwygGhostRequestToken = 0;
+  let wysiwygGhostTimer: ReturnType<typeof setTimeout> | null = null;
+  let hideWysiwygGhost = () => {
+    wysiwygGhostSuggestion = null;
+    wysiwygGhostEl.style.display = 'none';
+    wysiwygGhostEl.textContent = '';
+  };
+  let renderWysiwygGhost = () => {
+    wysiwygGhostEl.style.display = 'none';
+  };
+  let getWysiwygTabContext = (_pmView: EditorView): WysiwygTabContext | null => null;
+  let scheduleWysiwygGhost: ((pmView: EditorView) => void) | null = null;
+  let runWysiwygTabCompletion: ((pmView: EditorView) => boolean) | null = null;
 
   // Apply default table-wrap class (enabled by default)
   editorElement.classList.add('table-wrap');
@@ -243,6 +342,7 @@ function initEditor() {
   const editor = new EditorCore({
     extensions,
     keymaps: {
+      Tab: (_state, _dispatch, view) => view ? (runWysiwygTabCompletion?.(view) ?? false) : false,
       'Mod-k': (_state, _dispatch, view) => {
         if (view) linkEditPopup.toggle(view);
         return true;
@@ -261,6 +361,12 @@ function initEditor() {
         if (imageToolbar.visible) imageToolbar.hide();
       }
       toc.update(view);
+      if (tr.docChanged || tr.selectionSet) {
+        hideWysiwygGhost();
+        scheduleWysiwygGhost?.(view);
+      } else {
+        renderWysiwygGhost();
+      }
     },
     onContentChange(markdown) {
       _hasEditedInCurrentMode = true;
@@ -327,6 +433,12 @@ function initEditor() {
 
   const view = editor.view!;
   globalEditorView = view;
+  window.addEventListener('resize', renderWysiwygGhost);
+  document.getElementById('editor-scroll-area')?.addEventListener('scroll', renderWysiwygGhost, { passive: true });
+  editorElement.addEventListener('focusout', () => {
+    wysiwygGhostRequestToken++;
+    hideWysiwygGhost();
+  });
   toolbar.attach(view);
 
   // Initialize custom context menu (Cut/Copy/Paste/Paste as Text)
@@ -369,6 +481,10 @@ function initEditor() {
   });
 
   // 5. Wire file header handlers
+  fileHeader.setStageHandler(() => {
+    editor.flushSync();
+    vscode.postMessage({ type: 'stageFile' });
+  });
   fileHeader.setHistoryHandler(() => {
     historyPanel.toggle();
     fileHeader.getHistoryBtn().classList.toggle('active', historyPanel.visible);
@@ -451,12 +567,214 @@ function initEditor() {
   fileHeader.setExportPdfLightHandler(() => triggerExportPdf('light'));
   fileHeader.setExportPdfDarkHandler(() => triggerExportPdf('dark'));
 
+  hideWysiwygGhost = () => {
+    wysiwygGhostSuggestion = null;
+    wysiwygGhostEl.style.display = 'none';
+    wysiwygGhostEl.textContent = '';
+  };
+
+  renderWysiwygGhost = () => {
+    if (isSourceMode || !editor.view || !wysiwygGhostSuggestion) {
+      wysiwygGhostEl.style.display = 'none';
+      return;
+    }
+
+    const selection = editor.view.state.selection;
+    if (!selection.empty || selection.from !== wysiwygGhostSuggestion.anchor) {
+      wysiwygGhostEl.style.display = 'none';
+      return;
+    }
+
+    try {
+      const caretRect = editor.view.coordsAtPos(wysiwygGhostSuggestion.anchor);
+      const fontSource = (window.getSelection()?.anchorNode?.parentElement as HTMLElement | null) ?? editorElement;
+      const computed = getComputedStyle(fontSource);
+
+      wysiwygGhostEl.textContent = wysiwygGhostSuggestion.displayText;
+      wysiwygGhostEl.style.left = `${caretRect.left}px`;
+      wysiwygGhostEl.style.top = `${caretRect.top}px`;
+      wysiwygGhostEl.style.lineHeight = `${caretRect.bottom - caretRect.top}px`;
+      wysiwygGhostEl.style.fontFamily = computed.fontFamily;
+      wysiwygGhostEl.style.fontSize = computed.fontSize;
+      wysiwygGhostEl.style.fontWeight = computed.fontWeight;
+      wysiwygGhostEl.style.fontStyle = computed.fontStyle;
+      wysiwygGhostEl.style.letterSpacing = computed.letterSpacing;
+      wysiwygGhostEl.style.display = 'block';
+    } catch {
+      wysiwygGhostEl.style.display = 'none';
+    }
+  };
+
+  getWysiwygTabContext = (pmView: EditorView) => {
+    const selection = pmView.state.selection;
+    if (!selection.empty) return null;
+
+    const { $from } = selection;
+    if (!$from.parent.isTextblock) return null;
+
+    const textBeforeBlock = $from.parent.textBetween(0, $from.parentOffset, '\n', '\n');
+    const textBeforeLine = textBeforeBlock.split('\n').at(-1) ?? textBeforeBlock;
+    const wordPrefixMatch = textBeforeLine.match(/[\p{L}\p{N}_-]+$/u);
+    const wordPrefix = wordPrefixMatch?.[0] ?? '';
+    if (textBeforeLine.trim().length === 0) return null;
+
+    const fullBlockText = $from.parent.textBetween(0, $from.parent.content.size, '\n', '\n');
+    const blockLines = fullBlockText.split('\n');
+    const currentLineIndex = textBeforeBlock.split('\n').length - 1;
+    const lineText = blockLines[currentLineIndex] ?? fullBlockText;
+    const markdown = editor.getMarkdown();
+    const approx = findApproximateMarkdownPosition(markdown, lineText, textBeforeLine, wordPrefix);
+
+    return {
+      anchor: selection.from,
+      replaceFrom: selection.from - wordPrefix.length,
+      replaceTo: selection.from,
+      wordPrefix,
+      approx,
+    };
+  };
+
+  scheduleWysiwygGhost = (pmView: EditorView) => {
+    wysiwygGhostRequestToken++;
+    if (wysiwygGhostTimer) {
+      clearTimeout(wysiwygGhostTimer);
+      wysiwygGhostTimer = null;
+    }
+
+    const context = getWysiwygTabContext(pmView);
+    if (!context) {
+      hideWysiwygGhost();
+      return;
+    }
+
+    const requestToken = wysiwygGhostRequestToken;
+    wysiwygGhostTimer = setTimeout(() => {
+      void requestTabCompletionFromHost(
+        context.approx.line,
+        context.approx.character,
+        context.wordPrefix,
+      ).then((completion) => {
+        if (requestToken !== wysiwygGhostRequestToken || !editor.view) return;
+
+        const activeSelection = editor.view.state.selection;
+        if (!activeSelection.empty || activeSelection.from !== context.anchor) return;
+
+        const insertText = completion?.insertText ?? '';
+        const currentText = editor.view.state.doc.textBetween(context.replaceFrom, context.replaceTo, '\n', '\n');
+        const displayText = insertText.startsWith(currentText)
+          ? insertText.slice(currentText.length)
+          : insertText;
+
+        if (!displayText) {
+          hideWysiwygGhost();
+          return;
+        }
+
+        wysiwygGhostSuggestion = {
+          anchor: context.anchor,
+          replaceFrom: context.replaceFrom,
+          replaceTo: context.replaceTo,
+          insertText,
+          displayText,
+        };
+        renderWysiwygGhost();
+      }).catch(() => {
+        if (requestToken === wysiwygGhostRequestToken) {
+          hideWysiwygGhost();
+        }
+      });
+    }, 120);
+  };
+
+  const requestTabCompletionFromHost = (
+    line: number,
+    character: number,
+    wordPrefix: string,
+  ): Promise<{ insertText: string; replaceStartCharacter?: number; replaceEndCharacter?: number } | null> => {
+    return new Promise((resolve) => {
+      const requestId = Math.random().toString(36).slice(2, 11);
+      const timeout = setTimeout(() => {
+        window.removeEventListener('message', handler);
+        resolve(null);
+      }, 1200);
+
+      const handler = (event: MessageEvent) => {
+        const message = event.data;
+        if (message?.type !== 'tabCompletionResponse' || message.requestId !== requestId) return;
+        clearTimeout(timeout);
+        window.removeEventListener('message', handler);
+        if (typeof message.insertText !== 'string' || !message.insertText) {
+          resolve(null);
+          return;
+        }
+        resolve({
+          insertText: message.insertText,
+          replaceStartCharacter: typeof message.replaceStartCharacter === 'number'
+            ? message.replaceStartCharacter
+            : undefined,
+          replaceEndCharacter: typeof message.replaceEndCharacter === 'number'
+            ? message.replaceEndCharacter
+            : undefined,
+        });
+      };
+
+      window.addEventListener('message', handler);
+      vscode.postMessage({ type: 'requestTabCompletion', requestId, line, character, wordPrefix });
+    });
+  };
+
+  runWysiwygTabCompletion = (pmView: EditorView): boolean => {
+    const selection = pmView.state.selection;
+    if (!selection.empty) return false;
+
+    if (wysiwygGhostSuggestion && selection.from === wysiwygGhostSuggestion.anchor) {
+      pmView.dispatch(
+        pmView.state.tr.insertText(
+          wysiwygGhostSuggestion.insertText,
+          wysiwygGhostSuggestion.replaceFrom,
+          wysiwygGhostSuggestion.replaceTo,
+        )
+      );
+      hideWysiwygGhost();
+      pmView.focus();
+      return true;
+    }
+
+    const context = getWysiwygTabContext(pmView);
+    if (!context) return false;
+
+    void requestTabCompletionFromHost(
+      context.approx.line,
+      context.approx.character,
+      context.wordPrefix,
+    ).then((completion) => {
+      if (!completion?.insertText || !editor.view) return;
+
+      const activeSelection = editor.view.state.selection;
+      if (!activeSelection.empty || activeSelection.from !== context.anchor) return;
+
+      editor.view.dispatch(
+        editor.view.state.tr.insertText(
+          completion.insertText,
+          context.replaceFrom,
+          context.replaceTo,
+        )
+      );
+      hideWysiwygGhost();
+      editor.view.focus();
+    });
+
+    return true;
+  };
+
   // 6. Source mode toggle
   function toggleSourceMode() {
     const scrollArea = document.getElementById('editor-scroll-area')!;
     const editorEl = document.getElementById('editor')!;
 
     if (!isSourceMode) {
+      wysiwygGhostRequestToken++;
+      hideWysiwygGhost();
       // WYSIWYG → Source
       if (!_skipDualHistoryRecord) {
         dualHistory.recordModeSwitch(editor.getMarkdown(), 'wysiwyg', editor.view?.state);
@@ -489,6 +807,9 @@ function initEditor() {
               currentContent = content;
               vscode.postMessage({ type: 'edit', content, fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap });
             }
+          },
+          requestTabCompletion({ line, character, wordPrefix }) {
+            return requestTabCompletionFromHost(line, character, wordPrefix);
           },
           onUndoExhausted() {
             const rawMd = sourceEditor!.getContent();
@@ -633,6 +954,7 @@ function initEditor() {
       toc.exitSourceMode();
       view.focus();
       isSourceMode = false;
+      scheduleWysiwygGhost?.(view);
       _hasEditedInCurrentMode = false;
       _modeEntryContent = md; // snapshot for cross-mode undo guard
       fileHeader.getSourceBtn().classList.remove('active');

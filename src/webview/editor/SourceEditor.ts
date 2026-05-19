@@ -3,7 +3,7 @@
  * Provides a VS Code-themed editor with markdown syntax highlighting.
  */
 
-import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
+import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet, WidgetType, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { EditorState, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -398,14 +398,247 @@ export interface SourceEditorOptions {
   onUndoExhausted?: () => boolean;
   /** Called when native CM redo stack is exhausted — return true if cross-mode redo was handled */
   onRedoExhausted?: () => boolean;
+  /** Optional VS Code-style tab completion provider (line/character are 0-based) */
+  requestTabCompletion?: (context: {
+    line: number;
+    character: number;
+    wordPrefix: string;
+  }) => Promise<{
+    insertText: string;
+    replaceStartCharacter?: number;
+    replaceEndCharacter?: number;
+  } | null>;
 }
+
+interface SourceGhostSuggestion {
+  anchor: number;
+  replaceFrom: number;
+  replaceTo: number;
+  insertText: string;
+  displayText: string;
+}
+
+const setGhostSuggestionEffect = StateEffect.define<SourceGhostSuggestion | null>();
+
+class GhostTextWidget extends WidgetType {
+  constructor(private readonly text: string) {
+    super();
+  }
+
+  eq(other: GhostTextWidget): boolean {
+    return this.text === other.text;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-inline-ghost-text';
+    span.textContent = this.text;
+    return span;
+  }
+}
+
+const ghostSuggestionField = StateField.define<SourceGhostSuggestion | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setGhostSuggestionEffect)) {
+        return effect.value;
+      }
+    }
+
+    if (tr.docChanged || tr.selection) {
+      return null;
+    }
+
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field, (value) => {
+    if (!value?.displayText) {
+      return Decoration.none;
+    }
+    return Decoration.set([
+      Decoration.widget({
+        widget: new GhostTextWidget(value.displayText),
+        side: 1,
+      }).range(value.anchor),
+    ]);
+  }),
+});
 
 export function createSourceEditor(options: SourceEditorOptions) {
   let suppressChange = false;
+  let tabCompletionInFlight = false;
+  let previewRequestToken = 0;
+  let previewTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const clearGhostSuggestion = (cmView: EditorView) => {
+    if (cmView.state.field(ghostSuggestionField, false)) {
+      cmView.dispatch({ effects: setGhostSuggestionEffect.of(null) });
+    }
+  };
+
+  const scheduleGhostSuggestion = (cmView: EditorView) => {
+    previewRequestToken++;
+    if (previewTimeoutId) {
+      clearTimeout(previewTimeoutId);
+      previewTimeoutId = null;
+    }
+
+    const selection = cmView.state.selection.main;
+    if (!selection.empty || !options.requestTabCompletion) {
+      clearGhostSuggestion(cmView);
+      return;
+    }
+
+    const head = selection.head;
+    const line = cmView.state.doc.lineAt(head);
+    const character = head - line.from;
+    const linePrefix = line.text.slice(0, character);
+    const wordPrefixMatch = linePrefix.match(/[\p{L}\p{N}_-]+$/u);
+    const wordPrefix = wordPrefixMatch?.[0] ?? '';
+    const hasContextBeforeCursor = linePrefix.trim().length > 0;
+
+    if (!hasContextBeforeCursor) {
+      clearGhostSuggestion(cmView);
+      return;
+    }
+
+    const requestToken = previewRequestToken;
+    previewTimeoutId = setTimeout(() => {
+      void (async () => {
+        try {
+          const completion = await options.requestTabCompletion!({
+            line: line.number - 1,
+            character,
+            wordPrefix,
+          });
+
+          if (requestToken !== previewRequestToken) return;
+
+          const activeSelection = cmView.state.selection.main;
+          if (!activeSelection.empty || activeSelection.head !== head) return;
+
+          const replaceStartCharacter = completion?.replaceStartCharacter ?? (character - wordPrefix.length);
+          const replaceEndCharacter = completion?.replaceEndCharacter ?? character;
+          const replaceFrom = Math.max(line.from, Math.min(line.to, line.from + replaceStartCharacter));
+          const replaceTo = Math.max(replaceFrom, Math.min(line.to, line.from + replaceEndCharacter));
+          const currentText = cmView.state.doc.sliceString(replaceFrom, replaceTo);
+          const insertText = completion?.insertText ?? '';
+          const displayText = insertText.startsWith(currentText)
+            ? insertText.slice(currentText.length)
+            : insertText;
+
+          if (!displayText) {
+            clearGhostSuggestion(cmView);
+            return;
+          }
+
+          cmView.dispatch({
+            effects: setGhostSuggestionEffect.of({
+              anchor: head,
+              replaceFrom,
+              replaceTo,
+              insertText,
+              displayText,
+            }),
+          });
+        } catch {
+          if (requestToken === previewRequestToken) {
+            clearGhostSuggestion(cmView);
+          }
+        }
+      })();
+    }, 120);
+  };
+
+  const tabCompletionCommand = (cmView: EditorView): boolean => {
+    const selection = cmView.state.selection.main;
+    if (!selection.empty) return false;
+
+    const ghostSuggestion = cmView.state.field(ghostSuggestionField, false);
+    if (ghostSuggestion && selection.head === ghostSuggestion.anchor) {
+      cmView.dispatch({
+        changes: {
+          from: ghostSuggestion.replaceFrom,
+          to: ghostSuggestion.replaceTo,
+          insert: ghostSuggestion.insertText,
+        },
+        selection: { anchor: ghostSuggestion.replaceFrom + ghostSuggestion.insertText.length },
+      });
+      return true;
+    }
+
+    if (!options.requestTabCompletion) return false;
+    if (tabCompletionInFlight) return true;
+
+    const head = selection.head;
+    const line = cmView.state.doc.lineAt(head);
+    const character = head - line.from;
+    const linePrefix = line.text.slice(0, character);
+    const wordPrefixMatch = linePrefix.match(/[\p{L}\p{N}_-]+$/u);
+    const wordPrefix = wordPrefixMatch?.[0] ?? '';
+
+    const hasContextBeforeCursor = linePrefix.trim().length > 0;
+
+    // Keep regular indentation behavior when there is no usable completion context.
+    if (!hasContextBeforeCursor) return false;
+
+    tabCompletionInFlight = true;
+    void (async () => {
+      try {
+        const completion = await options.requestTabCompletion!({
+          line: line.number - 1,
+          character,
+          wordPrefix,
+        });
+
+        const activeSelection = cmView.state.selection.main;
+        if (!activeSelection.empty) return;
+        const activeHead = activeSelection.head;
+        const activeLine = cmView.state.doc.lineAt(activeHead);
+        const activeChar = activeHead - activeLine.from;
+        if (activeLine.number !== line.number || activeChar !== character) return;
+
+        if (completion?.insertText) {
+          const replaceStartCharacter = completion.replaceStartCharacter ?? (character - wordPrefix.length);
+          const replaceEndCharacter = completion.replaceEndCharacter ?? character;
+          const replaceFrom = Math.max(activeLine.from, Math.min(activeLine.to, activeLine.from + replaceStartCharacter));
+          const replaceTo = Math.max(replaceFrom, Math.min(activeLine.to, activeLine.from + replaceEndCharacter));
+
+          cmView.dispatch({
+            changes: { from: replaceFrom, to: replaceTo, insert: completion.insertText },
+            selection: { anchor: replaceFrom + completion.insertText.length },
+          });
+          return;
+        }
+
+        // Fallback to regular Tab indentation when no completion candidate exists.
+        indentWithTab.run?.(cmView);
+      } catch {
+        indentWithTab.run?.(cmView);
+      } finally {
+        tabCompletionInFlight = false;
+      }
+    })();
+
+    return true;
+  };
 
   const onChangeExtension = EditorView.updateListener.of((update) => {
     if (update.docChanged && !suppressChange) {
       options.onChange(update.state.doc.toString());
+    }
+
+    if (suppressChange) return;
+
+    if (update.focusChanged && !update.view.hasFocus) {
+      previewRequestToken++;
+      clearGhostSuggestion(update.view);
+      return;
+    }
+
+    if (update.docChanged || update.selectionSet || update.focusChanged) {
+      scheduleGhostSuggestion(update.view);
     }
   });
 
@@ -421,7 +654,12 @@ export function createSourceEditor(options: SourceEditorOptions) {
         closeBrackets(),
         markdown({ codeLanguages: languages }),
         syntaxHighlighting(vscodeHighlightStyle),
-        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          { key: 'Tab', run: tabCompletionCommand },
+          indentWithTab,
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
         // Cross-mode undo/redo fallback — runs when native history stack is exhausted
         keymap.of([
           { key: 'Mod-z', run: () => options.onUndoExhausted?.() ?? false },
@@ -429,7 +667,17 @@ export function createSourceEditor(options: SourceEditorOptions) {
           { key: 'Mod-Shift-z', run: () => options.onRedoExhausted?.() ?? false },
         ]),
         vscodeTheme,
+        EditorView.theme({
+          '.cm-inline-ghost-text': {
+            color: 'var(--vscode-inlineSuggestion-foreground, var(--vscode-editorGhostText-foreground, rgba(128, 128, 128, 0.7)))',
+            opacity: '0.9',
+            pointerEvents: 'none',
+            userSelect: 'none',
+            whiteSpace: 'pre',
+          },
+        }),
         markdownDecoPlugin,
+        ghostSuggestionField,
         sourceSearchField,
         sourceSearchDecorations,
         EditorView.lineWrapping,
@@ -482,7 +730,14 @@ export function createSourceEditor(options: SourceEditorOptions) {
       }
     },
     focus: () => view.focus(),
-    destroy: () => view.destroy(),
+    destroy: () => {
+      previewRequestToken++;
+      if (previewTimeoutId) {
+        clearTimeout(previewTimeoutId);
+        previewTimeoutId = null;
+      }
+      view.destroy();
+    },
 
     // ── Search API ──
     search(query: string, caseSensitive: boolean, regexEnabled: boolean) {

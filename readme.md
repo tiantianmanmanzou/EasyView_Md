@@ -1,11 +1,19 @@
-# MdPre-zalman — WYSIWYG Markdown Editor for VS Code
+# Markdown-preview-wysiwyg — Native Inline Suggestion Markdown Editor for VS Code
 
-A beautiful, feature-rich WYSIWYG Markdown editor inspired by [Outline](https://www.getoutline.com/). Rich editing powered by ProseMirror, integrated with VS Code themes.
+Markdown-preview-wysiwyg supports **native inline suggestion** in VS Code.
+Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
+so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
+
+The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,
+but the default direction is native-editor enhancement.
 
 ---
 
 ## Editor
 
+- **Native inline suggestion support** — keep Copilot / VS Code inline suggestion on the native Markdown editor path
+- **Native editor enhancement architecture** — based on `TextEditor` + decorations / CodeLens / hover / overlay
+- **Native markdown decorations** — lightweight inline styling directly in the VS Code editor
 - **WYSIWYG editing** — visual editing with full Markdown serialization
 - **Source mode** — switch to raw Markdown editing with CodeMirror 6 (`Ctrl+/`)
 - **Auto-save** — seamless integration with VS Code document lifecycle
@@ -184,11 +192,15 @@ Render Mermaid diagrams directly in the editor:
 
 ## VS Code Integration
 
+- **Default open behavior** — Markdown files stay in the native VS Code text editor
+- **Optional custom editor** — the legacy custom editor can still be opened manually when needed
+- **Native inline suggestion host** — available on the native editor path, not on the legacy webview custom-editor path
+
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `Open with MdPre-zalman` | Open current markdown file in WYSIWYG mode |
+| `Open with Markdown-preview-wysiwyg` | Open current markdown file in the optional custom editor |
 | `Export to HTML (Light)` | Export as HTML with light theme |
 | `Export to HTML (Dark)` | Export as HTML with dark theme |
 | `Export to PDF (Light)` | Export as PDF with light theme |
@@ -205,6 +217,7 @@ Render Mermaid diagrams directly in the editor:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `inlineMd.csvDelimiter` | CSV delimiter: `,`, `;`, or `auto` | `auto` |
+| `inlineMd.nativeDecorations.enabled` | Enable lightweight inline markdown decorations in the native VS Code editor | `true` |
 
 ### Per-File Settings
 

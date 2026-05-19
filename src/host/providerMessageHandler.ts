@@ -2,11 +2,17 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as https from 'https';
 import * as http from 'http';
-import { spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { SETTINGS_COMMENT_RE, type EditorSettings, computeMinimalDiff } from './providerUtils';
 import { buildImagePathMap } from './providerImageManager';
 import { downloadFile, ExportImage } from './providerExportHandler';
 import { roundPdfCorners } from './pdfRoundCorners';
+
+const inlineSuggestOutput = vscode.window.createOutputChannel('MdPre Inline Suggest');
+
+function logInlineSuggest(message: string): void {
+  inlineSuggestOutput.appendLine(`[${new Date().toISOString()}] ${message}`);
+}
 
 /** Open a file with the OS default application. Works with Cyrillic/Unicode paths and spaces. */
 function openWithDefaultApp(fsPath: string) {
@@ -17,6 +23,561 @@ function openWithDefaultApp(fsPath: string) {
   } else {
     spawn('xdg-open', [fsPath], { detached: true, stdio: 'ignore' });
   }
+}
+
+function stripSnippetPlaceholders(value: string): string {
+  return value
+    .replace(/\$\{(\d+):([^}]+)\}/g, '$2')
+    .replace(/\$\{(\d+)\|([^}]+)\|\}/g, (_m, _index, choices: string) => choices.split(',')[0] ?? '')
+    .replace(/\$\{\d+\}/g, '')
+    .replace(/\$\d+/g, '');
+}
+
+function getDocumentLineOffset(document: vscode.TextDocument): number {
+  const match = document.getText().match(SETTINGS_COMMENT_RE);
+  if (!match?.[0]) {
+    return 0;
+  }
+  return match[0].split(/\r?\n/).length - 1;
+}
+
+async function ensureVisibleTextEditorForInlineCompletion(
+  document: vscode.TextDocument,
+  webviewPanel: vscode.WebviewPanel,
+  position: vscode.Position
+): Promise<vscode.TextEditor | null> {
+  const existingEditor = vscode.window.visibleTextEditors.find(
+    (editor) => editor.document.uri.toString() === document.uri.toString()
+  );
+  const targetEditor = existingEditor ?? null;
+
+  if (!targetEditor) {
+    logInlineSuggest(`visible-editor: no existing native editor for ${document.uri.toString()}`);
+    return null;
+  }
+
+  targetEditor.selection = new vscode.Selection(position, position);
+  targetEditor.revealRange(
+    new vscode.Range(position, position),
+    vscode.TextEditorRevealType.InCenterIfOutsideViewport
+  );
+  webviewPanel.reveal(webviewPanel.viewColumn, true);
+
+  return targetEditor;
+}
+
+async function activateTextEditorForInlineCompletion(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): Promise<vscode.TextEditor | null> {
+  const existingEditor = vscode.window.visibleTextEditors.find(
+    (candidate) => candidate.document.uri.toString() === document.uri.toString()
+  ) ?? (vscode.window.activeTextEditor?.document.uri.toString() === document.uri.toString()
+    ? vscode.window.activeTextEditor
+    : undefined);
+
+  if (!existingEditor) {
+    logInlineSuggest(`active-editor: no existing native editor for ${document.uri.toString()}`);
+    return null;
+  }
+
+  const editor = await vscode.window.showTextDocument(existingEditor.document, {
+    viewColumn: existingEditor.viewColumn,
+    preserveFocus: false,
+    preview: false,
+  });
+
+  if (!editor) {
+    return null;
+  }
+
+  editor.selection = new vscode.Selection(position, position);
+  editor.revealRange(
+    new vscode.Range(position, position),
+    vscode.TextEditorRevealType.InCenterIfOutsideViewport
+  );
+  return editor;
+}
+
+function getInlineCompletionInsertText(item: vscode.InlineCompletionItem): string {
+  const rawInsert = item.insertText as string | vscode.SnippetString | { value?: string } | undefined;
+  if (typeof rawInsert === 'string') {
+    return rawInsert;
+  }
+  if (rawInsert instanceof vscode.SnippetString) {
+    return stripSnippetPlaceholders(rawInsert.value);
+  }
+  if (rawInsert && typeof rawInsert === 'object' && typeof rawInsert.value === 'string') {
+    return stripSnippetPlaceholders(rawInsert.value);
+  }
+  return '';
+}
+
+function getInlineCompletionRange(
+  item: vscode.InlineCompletionItem,
+  position: vscode.Position
+): { start: number; end: number } {
+  const itemRange = item.range;
+  if (
+    itemRange &&
+    typeof itemRange.start?.character === 'number' &&
+    typeof itemRange.end?.character === 'number'
+  ) {
+    return { start: itemRange.start.character, end: itemRange.end.character };
+  }
+  return { start: position.character, end: position.character };
+}
+
+function getInlineCompletionItems(
+  result: vscode.InlineCompletionItem[] | vscode.InlineCompletionList | null | undefined
+): vscode.InlineCompletionItem[] {
+  if (!result) return [];
+  return Array.isArray(result) ? result : result.items ?? [];
+}
+
+type TabCompletionResult = {
+  insertText: string;
+  replaceStartCharacter?: number;
+  replaceEndCharacter?: number;
+};
+
+const INLINE_COMPLETION_COMMAND_CANDIDATES = [
+  'vscode.executeInlineCompletionItemProvider',
+  '_executeInlineCompletionItemProvider',
+  'vscode.provideInlineCompletionItems',
+  '_executeInlineCompletionsProvider',
+] as const;
+
+type InlineCompletionCommandResult =
+  | vscode.InlineCompletionItem[]
+  | vscode.InlineCompletionList
+  | { items?: vscode.InlineCompletionItem[] | readonly vscode.InlineCompletionItem[] }
+  | null
+  | undefined;
+
+type StructuredInlineCompletionCandidate = {
+  insertText: string;
+  filterText?: string;
+  replaceStartCharacter?: number;
+  replaceEndCharacter?: number;
+};
+
+const STRUCTURED_INLINE_FETCH_CHANNEL = 'structuredLogger:editor.inlineSuggest.logFetch.commandId';
+const STRUCTURED_INLINE_FETCH_CONTEXT = 'structuredLogger.enabled:editor.inlineSuggest.logFetch.commandId';
+const STRUCTURED_INLINE_FETCH_SETTLE_MS = 90;
+const ACTIVE_EDITOR_INLINE_FETCH_SETTLE_MS = 260;
+const ACTIVE_EDITOR_INLINE_TRIGGER_WAIT_MS = 120;
+
+function createSelectedCompletionInfo(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  wordPrefix: string
+): vscode.SelectedCompletionInfo {
+  const startCharacter = Math.max(0, position.character - wordPrefix.length);
+  const range = new vscode.Range(position.line, startCharacter, position.line, position.character);
+  const lineText = document.lineAt(position.line).text;
+  return {
+    range,
+    text: lineText.slice(startCharacter, position.character),
+  };
+}
+
+const INLINE_COMPLETION_COMMAND_ARGUMENT_VARIANTS = [
+  (document: vscode.TextDocument, position: vscode.Position, wordPrefix: string) => [
+    document.uri,
+    position,
+    {
+      triggerKind: vscode.InlineCompletionTriggerKind.Automatic,
+      selectedCompletionInfo: createSelectedCompletionInfo(document, position, wordPrefix),
+    },
+  ],
+  (document: vscode.TextDocument, position: vscode.Position, wordPrefix: string) => [
+    document.uri,
+    position,
+    {
+      triggerKind: vscode.InlineCompletionTriggerKind.Invoke,
+      selectedCompletionInfo: createSelectedCompletionInfo(document, position, wordPrefix),
+    },
+  ],
+  (document: vscode.TextDocument, position: vscode.Position) => [
+    document.uri,
+    position,
+    {
+      triggerKind: vscode.InlineCompletionTriggerKind.Automatic,
+    },
+  ],
+  (document: vscode.TextDocument, position: vscode.Position) => [
+    document.uri,
+    position,
+    {
+      triggerKind: vscode.InlineCompletionTriggerKind.Invoke,
+    },
+  ],
+  (document: vscode.TextDocument, position: vscode.Position) => [
+    document.uri,
+    position,
+  ],
+] as const;
+
+function normalizeInlineCompletionCommandResult(
+  result: InlineCompletionCommandResult
+): vscode.InlineCompletionItem[] {
+  if (!result) return [];
+  if (Array.isArray(result)) return [...result];
+  if ('items' in result && Array.isArray(result.items)) return [...result.items];
+  return getInlineCompletionItems(result);
+}
+
+function toTabCompletionResult(
+  lineText: string,
+  position: vscode.Position,
+  wordPrefix: string,
+  insertText: string,
+  range: { start: number; end: number },
+  filterText?: string
+): TabCompletionResult | null {
+  if (!insertText) return null;
+  if (range.start > position.character || range.end < range.start) return null;
+
+  const existing = lineText.slice(range.start, Math.min(range.end, lineText.length));
+  const typedPrefix = lineText.slice(range.start, position.character);
+  const matchText = filterText || insertText;
+  if (
+    wordPrefix &&
+    typedPrefix &&
+    !matchText.toLowerCase().startsWith(typedPrefix.toLowerCase()) &&
+    !insertText.toLowerCase().startsWith(typedPrefix.toLowerCase())
+  ) {
+    return null;
+  }
+  if (insertText === existing) return null;
+
+  return {
+    insertText,
+    replaceStartCharacter: range.start,
+    replaceEndCharacter: range.end,
+  };
+}
+
+function parseStructuredInlineRange(
+  value: unknown
+): { start: number; end: number } | undefined {
+  const objectValue = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  const directStart = objectValue?.start;
+  const directEnd = objectValue?.end;
+  if (
+    directStart && typeof directStart === 'object' &&
+    typeof (directStart as { character?: unknown }).character === 'number' &&
+    directEnd && typeof directEnd === 'object' &&
+    typeof (directEnd as { character?: unknown }).character === 'number'
+  ) {
+    return {
+      start: (directStart as { character: number }).character,
+      end: (directEnd as { character: number }).character,
+    };
+  }
+
+  if (
+    objectValue &&
+    typeof objectValue.startCharacter === 'number' &&
+    typeof objectValue.endCharacter === 'number'
+  ) {
+    return {
+      start: objectValue.startCharacter,
+      end: objectValue.endCharacter,
+    };
+  }
+
+  return undefined;
+}
+
+function extractStructuredInlineCandidates(
+  value: unknown,
+  documentUri: string,
+  results: StructuredInlineCompletionCandidate[],
+  seen: WeakSet<object>
+): void {
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      extractStructuredInlineCandidates(item, documentUri, results, seen);
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const uriHint =
+    typeof record.modelUri === 'string' ? record.modelUri
+      : typeof record.documentUri === 'string' ? record.documentUri
+        : typeof record.uri === 'string' ? record.uri
+          : undefined;
+  if (uriHint && uriHint !== documentUri) {
+    return;
+  }
+
+  const insertText =
+    typeof record.insertText === 'string' ? record.insertText
+      : typeof record.text === 'string' ? record.text
+        : typeof record.completionText === 'string' ? record.completionText
+          : typeof record.insertTextPreview === 'string' ? record.insertTextPreview
+            : undefined;
+  if (insertText) {
+    const range = parseStructuredInlineRange(record.range);
+    results.push({
+      insertText,
+      filterText: typeof record.filterText === 'string' ? record.filterText : undefined,
+      replaceStartCharacter: range?.start,
+      replaceEndCharacter: range?.end,
+    });
+  }
+
+  for (const child of Object.values(record)) {
+    extractStructuredInlineCandidates(child, documentUri, results, seen);
+  }
+}
+
+type StructuredInlineLoggerCapture = {
+  dispose: () => void;
+  takeMatch: () => TabCompletionResult | null;
+  waitForMatch: (timeoutMs: number) => Promise<TabCompletionResult | null>;
+};
+
+function startStructuredInlineLoggerCapture(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  wordPrefix: string
+): StructuredInlineLoggerCapture {
+  const envAny = vscode.env as typeof vscode.env & {
+    getDataChannel?: (channelName: string) => {
+      onDidReceiveData?: (listener: (event: { data?: unknown }) => void) => vscode.Disposable;
+    };
+  };
+  let channel:
+    | {
+      onDidReceiveData?: (listener: (event: { data?: unknown }) => void) => vscode.Disposable;
+    }
+    | undefined;
+  try {
+    channel = envAny.getDataChannel?.(STRUCTURED_INLINE_FETCH_CHANNEL);
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error);
+    logInlineSuggest(`structured-logger: unavailable (${errorText})`);
+    return {
+      dispose: () => {},
+      takeMatch: () => null,
+      waitForMatch: async () => null,
+    };
+  }
+  if (!channel?.onDidReceiveData) {
+    logInlineSuggest('structured-logger: data channel not available');
+    return {
+      dispose: () => {},
+      takeMatch: () => null,
+      waitForMatch: async () => null,
+    };
+  }
+
+  void vscode.commands.executeCommand('setContext', STRUCTURED_INLINE_FETCH_CONTEXT, true).then(
+    () => undefined,
+    () => undefined
+  );
+
+  const lineText = document.lineAt(position.line).text;
+  let latestMatch: TabCompletionResult | null = null;
+  let disposed = false;
+  const waiters = new Set<(value: TabCompletionResult | null) => void>();
+
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    subscription.dispose();
+    void vscode.commands.executeCommand('setContext', STRUCTURED_INLINE_FETCH_CONTEXT, undefined).then(
+      () => undefined,
+      () => undefined
+    );
+    for (const waiter of waiters) {
+      waiter(latestMatch);
+    }
+    waiters.clear();
+  };
+
+  const notify = (value: TabCompletionResult | null) => {
+    for (const waiter of waiters) {
+      waiter(value);
+    }
+    waiters.clear();
+  };
+
+  const subscription = channel.onDidReceiveData((event) => {
+    if (disposed || latestMatch) return;
+
+    const candidates: StructuredInlineCompletionCandidate[] = [];
+    extractStructuredInlineCandidates(event?.data, document.uri.toString(), candidates, new WeakSet<object>());
+
+    for (const candidate of candidates) {
+      const match = toTabCompletionResult(
+        lineText,
+        position,
+        wordPrefix,
+        candidate.insertText,
+        {
+          start: typeof candidate.replaceStartCharacter === 'number'
+            ? candidate.replaceStartCharacter
+            : Math.max(0, position.character - wordPrefix.length),
+          end: typeof candidate.replaceEndCharacter === 'number'
+            ? candidate.replaceEndCharacter
+            : position.character,
+        },
+        candidate.filterText
+      );
+      if (match) {
+        latestMatch = match;
+        notify(match);
+        return;
+      }
+    }
+  });
+
+  return {
+    dispose,
+    takeMatch: () => latestMatch,
+    waitForMatch: (timeoutMs: number) => new Promise((resolve) => {
+      if (latestMatch || disposed) {
+        resolve(latestMatch);
+        return;
+      }
+      const timer = setTimeout(() => {
+        waiters.delete(finish);
+        resolve(latestMatch);
+      }, timeoutMs);
+      const finish = (value: TabCompletionResult | null) => {
+        clearTimeout(timer);
+        waiters.delete(finish);
+        resolve(value);
+      };
+      waiters.add(finish);
+    }),
+  };
+}
+
+async function requestInlineCompletion(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  wordPrefix: string,
+  options?: {
+    settleMs?: number;
+    logLabel?: string;
+  }
+): Promise<TabCompletionResult | null> {
+  const lineText = document.lineAt(position.line).text;
+  const structuredLoggerCapture = startStructuredInlineLoggerCapture(document, position, wordPrefix);
+  const logLabel = options?.logLabel ?? 'direct';
+
+  try {
+    for (const commandId of INLINE_COMPLETION_COMMAND_CANDIDATES) {
+      for (const getArgs of INLINE_COMPLETION_COMMAND_ARGUMENT_VARIANTS) {
+        try {
+          const result = await vscode.commands.executeCommand<InlineCompletionCommandResult>(
+            commandId,
+            ...getArgs(document, position, wordPrefix)
+          );
+
+          for (const item of normalizeInlineCompletionCommandResult(result)) {
+            const match = toTabCompletionResult(
+              lineText,
+              position,
+              wordPrefix,
+              getInlineCompletionInsertText(item),
+              getInlineCompletionRange(item, position),
+              item.filterText
+            );
+            if (match) {
+              logInlineSuggest(`${logLabel}: matched via ${commandId} at ${position.line}:${position.character}`);
+              return match;
+            }
+          }
+
+          const structuredMatch = structuredLoggerCapture.takeMatch();
+          if (structuredMatch) {
+            logInlineSuggest(`${logLabel}: matched via structured logger after ${commandId} at ${position.line}:${position.character}`);
+            return structuredMatch;
+          }
+        } catch (error) {
+          const errorText = error instanceof Error ? error.message : String(error);
+          if (errorText.includes('not found')) {
+            continue;
+          }
+          console.warn(`[InLineMd] inline completion command failed: ${commandId}`, error);
+          logInlineSuggest(`${logLabel}: command failed ${commandId}: ${errorText}`);
+          break;
+        }
+      }
+    }
+
+    const fallbackMatch = await structuredLoggerCapture.waitForMatch(options?.settleMs ?? STRUCTURED_INLINE_FETCH_SETTLE_MS);
+    if (fallbackMatch) {
+      logInlineSuggest(`${logLabel}: matched via structured logger settle at ${position.line}:${position.character}`);
+      return fallbackMatch;
+    }
+    logInlineSuggest(`${logLabel}: no inline completion at ${position.line}:${position.character}`);
+    return null;
+  } finally {
+    structuredLoggerCapture.dispose();
+  }
+}
+
+async function requestInlineCompletionFromActiveEditor(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  wordPrefix: string,
+  webviewPanel: vscode.WebviewPanel
+): Promise<TabCompletionResult | null> {
+  const activeEditor = await activateTextEditorForInlineCompletion(document, position);
+  if (!activeEditor) {
+    logInlineSuggest(`active-editor: failed to activate native editor for ${document.uri.toString()}`);
+    return null;
+  }
+
+  logInlineSuggest(`active-editor: activated native editor for ${document.uri.toString()} at ${position.line}:${position.character}`);
+
+  try {
+    try {
+      await vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
+      logInlineSuggest('active-editor: executed editor.action.inlineSuggest.trigger');
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      logInlineSuggest(`active-editor: trigger command failed: ${errorText}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, ACTIVE_EDITOR_INLINE_TRIGGER_WAIT_MS));
+
+    return await requestInlineCompletion(document, activeEditor.selection.active, wordPrefix, {
+      settleMs: ACTIVE_EDITOR_INLINE_FETCH_SETTLE_MS,
+      logLabel: 'active-editor',
+    });
+  } finally {
+    webviewPanel.reveal(webviewPanel.viewColumn, false);
+  }
+}
+
+function execGit(args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 /**
@@ -94,6 +655,25 @@ export async function handleWebviewMessage(
       break;
     }
 
+    case 'requestTabCompletion': {
+      const requestId = message.requestId;
+      const requestedLine = typeof message.line === 'number' ? message.line : 0;
+      const character = typeof message.character === 'number' ? message.character : 0;
+      const wordPrefix = typeof message.wordPrefix === 'string' ? message.wordPrefix : '';
+
+      logInlineSuggest(
+        `request: custom-editor/webview path does not have a native inline-suggestion host; use VS Code text editor for ${document.uri.toString()}`
+      );
+
+      webviewPanel.webview.postMessage({
+        type: 'tabCompletionResponse',
+        requestId,
+        insertText: null,
+      });
+      break;
+
+    }
+
     case 'ready': {
       const rawContent = document.getText();
       const settings = ctx.getEditorSettings();
@@ -143,6 +723,35 @@ export async function handleWebviewMessage(
           ctx.setIsUpdatingDocument(false);
         }
       });
+      ctx.setOperationQueue(newQueue);
+      break;
+    }
+
+    case 'stageFile': {
+      if (document.uri.scheme !== 'file') {
+        vscode.window.showInformationMessage('Only files on disk can be staged.');
+        break;
+      }
+
+      const newQueue = ctx.getOperationQueue().then(async () => {
+        ctx.setIsUpdatingDocument(true);
+        try {
+          await document.save();
+        } finally {
+          ctx.setIsUpdatingDocument(false);
+        }
+
+        try {
+          const cwd = path.dirname(document.uri.fsPath);
+          await execGit(['add', '--', document.uri.fsPath], cwd);
+          await ctx.refreshGitChanges?.();
+          vscode.window.showInformationMessage(`Staged: ${path.basename(document.uri.fsPath)}`);
+        } catch (error) {
+          const messageText = error instanceof Error ? error.message : String(error);
+          vscode.window.showErrorMessage(`Failed to stage file: ${messageText}`);
+        }
+      });
+
       ctx.setOperationQueue(newQueue);
       break;
     }

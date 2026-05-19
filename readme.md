@@ -1,6 +1,6 @@
-# Markdown-preview-wysiwyg — Native Inline Suggestion Markdown Editor for VS Code
+# EasyView — Native Inline Suggestion Markdown Editor for VS Code
 
-Markdown-preview-wysiwyg supports **native inline suggestion** in VS Code.
+EasyView supports **native inline suggestion** in VS Code.
 Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
@@ -200,7 +200,7 @@ Render Mermaid diagrams directly in the editor:
 
 | Command | Description |
 |---------|-------------|
-| `Open with Markdown-preview-wysiwyg` | Open current markdown file in the optional custom editor |
+| `Open with EasyView` | Open current markdown file in the optional custom editor |
 | `Export to HTML (Light)` | Export as HTML with light theme |
 | `Export to HTML (Dark)` | Export as HTML with dark theme |
 | `Export to PDF (Light)` | Export as PDF with light theme |

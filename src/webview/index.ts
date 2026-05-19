@@ -498,6 +498,27 @@ function initEditor() {
   });
 
   // 5. Wire file header handlers
+  const scrollToEditorTop = () => {
+    if (isSourceMode && sourceEditor?.view?.scrollDOM) {
+      sourceEditor.view.scrollDOM.scrollTo({ top: 0, behavior: 'auto' });
+    } else {
+      document.getElementById('editor-scroll-area')?.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  };
+
+  const scrollToEditorBottom = () => {
+    if (isSourceMode && sourceEditor?.view?.scrollDOM) {
+      const scroller = sourceEditor.view.scrollDOM;
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
+    } else {
+      const scroller = document.getElementById('editor-scroll-area');
+      if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
+    }
+  };
+
+  fileHeader.setScrollTopHandler(() => scrollToEditorTop());
+  fileHeader.setScrollBottomHandler(() => scrollToEditorBottom());
+
   fileHeader.setStageHandler(() => {
     editor.flushSync();
     vscode.postMessage({ type: 'stageFile' });
@@ -510,6 +531,7 @@ function initEditor() {
 
   document.addEventListener('keydown', (e) => {
     const isModKey = e.ctrlKey || e.metaKey;
+    const isOptionOnly = e.altKey && !e.ctrlKey && !e.metaKey;
     if (isModKey && e.shiftKey && e.code === 'KeyT' && !e.altKey) {
       e.preventDefault();
       toc.toggle();
@@ -517,7 +539,23 @@ function initEditor() {
       const tocBtnEl = document.querySelector('.file-header-btn[title*="Table of Contents"], .file-header-btn[title*="Hide Table"]');
       if (tocBtnEl) {
         tocBtnEl.classList.toggle('active', isTocVisible);
-        (tocBtnEl as HTMLElement).title = isTocVisible ? 'Hide Table of Contents' : 'Toggle Table of Contents';
+        (tocBtnEl as HTMLElement).title = isTocVisible
+          ? 'Hide Table of Contents (Option+W)'
+          : 'Toggle Table of Contents (Option+W)';
+      }
+      postEdit(currentContent);
+      updateSourceSettingsComment();
+    }
+    if (isOptionOnly && e.code === 'KeyW') {
+      e.preventDefault();
+      toc.toggle();
+      isTocVisible = toc.visible;
+      const tocBtnEl = document.querySelector('.file-header-btn[title*="Table of Contents"], .file-header-btn[title*="Hide Table"]');
+      if (tocBtnEl) {
+        tocBtnEl.classList.toggle('active', isTocVisible);
+        (tocBtnEl as HTMLElement).title = isTocVisible
+          ? 'Hide Table of Contents (Option+W)'
+          : 'Toggle Table of Contents (Option+W)';
       }
       postEdit(currentContent);
       updateSourceSettingsComment();
@@ -1024,9 +1062,49 @@ function initEditor() {
   // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     const isModKey = e.ctrlKey || e.metaKey;
+    const isOptionOnly = e.altKey && !e.ctrlKey && !e.metaKey;
     if (isModKey && e.key === '/') {
       e.preventDefault();
       openNativeSourceMode();
+    }
+    if (isOptionOnly && e.code === 'KeyQ') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      openNativeSourceMode();
+    }
+    if (isOptionOnly && e.code === 'KeyS') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      editor.flushSync();
+      vscode.postMessage({ type: 'stageFile' });
+    }
+    if (isOptionOnly && e.code === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      scrollToEditorTop();
+    }
+    if (isOptionOnly && e.code === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      scrollToEditorBottom();
+    }
+    if (isOptionOnly && e.code === 'KeyA') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const widthBtn = document.querySelector('.file-header-btn[title*="full width"]') as HTMLElement | null;
+      widthBtn?.click();
+    }
+    if (isOptionOnly && e.code === 'KeyD') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const wrapBtn = document.querySelector('.file-header-btn[title*="table word wrap"]') as HTMLElement | null;
+      wrapBtn?.click();
     }
     if (isModKey && e.key === 's' && isSourceMode) {
       e.preventDefault();
@@ -1104,7 +1182,7 @@ function initEditor() {
             const widthBtn = document.querySelector('.file-header-btn[title*="full width"]') as HTMLElement;
             if (widthBtn) {
               widthBtn.classList.toggle('active', isFullWidth);
-              widthBtn.title = isFullWidth ? 'Exit full width' : 'Expand to full width';
+              widthBtn.title = isFullWidth ? 'Exit full width (Option+A)' : 'Expand to full width (Option+A)';
               widthBtn.innerHTML = isFullWidth
                 ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
                 : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
@@ -1116,7 +1194,7 @@ function initEditor() {
             const tocBtnEl = document.querySelector('.file-header-btn[title*="Table of Contents"], .file-header-btn[title*="Hide Table"]') as HTMLElement;
             if (tocBtnEl) {
               tocBtnEl.classList.add('active');
-              tocBtnEl.title = 'Hide Table of Contents';
+              tocBtnEl.title = 'Hide Table of Contents (Option+W)';
             }
           }
 	          if (typeof message.tableWrap === 'boolean') {
@@ -1125,7 +1203,7 @@ function initEditor() {
             const wrapBtn = document.querySelector('.file-header-btn[title*="table word wrap"]') as HTMLElement;
             if (wrapBtn) {
               wrapBtn.classList.toggle('active', isTableWrap);
-	              wrapBtn.title = isTableWrap ? 'Disable table word wrap' : 'Enable table word wrap';
+	              wrapBtn.title = isTableWrap ? 'Disable table word wrap (Option+D)' : 'Enable table word wrap (Option+D)';
 	            }
 	          }
 	        }
@@ -1152,6 +1230,27 @@ function initEditor() {
           toolbar.update(view);
           toc.update(view);
           requestAnimationFrame(() => {
+            const scrollArea = document.getElementById('editor-scroll-area');
+            if (scrollArea) {
+              const cursorLine = typeof (message as any).initialCursorLine === 'number'
+                ? (message as any).initialCursorLine
+                : 0;
+              const totalLines = typeof (message as any).initialTotalLines === 'number'
+                ? (message as any).initialTotalLines
+                : 1;
+              const safeTotal = Math.max(1, totalLines);
+              const safeLine = Math.min(Math.max(0, cursorLine), safeTotal - 1);
+              const ratioDenominator = Math.max(1, safeTotal - 1);
+              const lineRatio = safeLine / ratioDenominator;
+              const applyCursorScroll = () => {
+                const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+                scrollArea.scrollTop = Number.isFinite(lineRatio) ? Math.round(maxScrollTop * lineRatio) : 0;
+              };
+
+              applyCursorScroll();
+              requestAnimationFrame(applyCursorScroll);
+              setTimeout(applyCursorScroll, 80);
+            }
             editor.view?.dom.querySelectorAll('.mdpre-source-line-gutter').forEach((el) => el.remove());
             document.body.classList.remove('inlinemd-booting');
             document.body.classList.add('inlinemd-ready');
@@ -1174,6 +1273,24 @@ function initEditor() {
       case 'focus':
         editor.focus();
         break;
+      case 'revealCursor': {
+        const scrollArea = document.getElementById('editor-scroll-area');
+        if (!scrollArea) break;
+        const cursorLine = typeof (message as any).line === 'number' ? (message as any).line : 0;
+        const totalLinesFromMsg = typeof (message as any).totalLines === 'number' ? (message as any).totalLines : 0;
+        const totalLinesFromContent = Math.max(1, currentContent.split('\n').length);
+        const safeTotal = Math.max(1, totalLinesFromMsg || totalLinesFromContent);
+        const safeLine = Math.min(Math.max(0, cursorLine), safeTotal - 1);
+        const ratio = safeLine / Math.max(1, safeTotal - 1);
+        const applyReveal = () => {
+          const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+          scrollArea.scrollTop = Number.isFinite(ratio) ? Math.round(maxScrollTop * ratio) : 0;
+        };
+        applyReveal();
+        requestAnimationFrame(applyReveal);
+        setTimeout(applyReveal, 80);
+        break;
+      }
 
       case 'fileRenamed':
         if (message.fileName) fileHeader.setName(message.fileName);

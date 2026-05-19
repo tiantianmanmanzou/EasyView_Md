@@ -5,8 +5,8 @@
 
 export interface FileHeaderDeps {
   postMessage: (msg: any) => void;
-  getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; currentContent: string };
-  setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean }>) => void;
+  getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; isLineNumbersVisible: boolean; currentContent: string };
+  setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; isLineNumbersVisible: boolean }>) => void;
   onSettingsChange: () => void;
 }
 
@@ -49,6 +49,18 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const bar = document.createElement('div');
   bar.className = 'file-header-bar';
+
+  const postCurrentEdit = () => {
+    const s = getState();
+    postMessage({
+      type: 'edit',
+      content: s.currentContent,
+      fullWidth: s.isFullWidth,
+      tocVisible: s.isTocVisible,
+      tableWrap: s.isTableWrap,
+      lineNumbersVisible: s.isLineNumbersVisible,
+    });
+  };
 
   const nameEl = document.createElement('span');
   nameEl.className = 'file-header-name';
@@ -101,8 +113,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     widthBtn.innerHTML = newFullWidth
       ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
       : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
-    const s = getState();
-    postMessage({ type: 'edit', content: s.currentContent, fullWidth: s.isFullWidth, tocVisible: s.isTocVisible, tableWrap: s.isTableWrap });
+    postCurrentEdit();
     onSettingsChange();
   });
   leftGroup.appendChild(widthBtn);
@@ -118,11 +129,27 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     document.getElementById('editor')?.classList.toggle('table-wrap', newTableWrap);
     tableWrapBtn.classList.toggle('active', newTableWrap);
     tableWrapBtn.title = newTableWrap ? 'Disable table word wrap' : 'Enable table word wrap';
-    const s = getState();
-    postMessage({ type: 'edit', content: s.currentContent, fullWidth: s.isFullWidth, tocVisible: s.isTocVisible, tableWrap: s.isTableWrap });
+    postCurrentEdit();
     onSettingsChange();
   });
   leftGroup.appendChild(tableWrapBtn);
+
+  const lineNumbersBtn = document.createElement('button');
+  lineNumbersBtn.className = 'file-header-btn';
+  lineNumbersBtn.title = 'Show line numbers';
+  lineNumbersBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M4 14h2l-2 4h2"/></svg>';
+  lineNumbersBtn.addEventListener('click', () => {
+    const state = getState();
+    const newLineNumbersVisible = !state.isLineNumbersVisible;
+    setState({ isLineNumbersVisible: newLineNumbersVisible });
+    document.getElementById('editor')?.classList.toggle('show-line-numbers', newLineNumbersVisible);
+    document.getElementById('source-editor')?.classList.toggle('hide-line-numbers', !newLineNumbersVisible);
+    lineNumbersBtn.classList.toggle('active', newLineNumbersVisible);
+    lineNumbersBtn.title = newLineNumbersVisible ? 'Hide line numbers' : 'Show line numbers';
+    postCurrentEdit();
+    onSettingsChange();
+  });
+  leftGroup.appendChild(lineNumbersBtn);
 
   // Zoom controls
   const ZOOM_MIN = 50, ZOOM_MAX = 200, ZOOM_STEP = 10;
@@ -180,7 +207,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const sourceBtn = document.createElement('button');
   sourceBtn.className = 'file-header-btn';
-  sourceBtn.title = 'Toggle source mode (Ctrl+/)';
+  sourceBtn.title = 'Open native source mode with inline suggestions (Ctrl+/)';
   sourceBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
   rightGroup.appendChild(sourceBtn);
 
@@ -236,6 +263,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     themeToggleBtn.innerHTML = mode === 'dark'
       ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>'
       : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/></svg>';
+    window.dispatchEvent(new CustomEvent('inlinemd:themeChanged', {
+      detail: { mode, isDark: mode === 'dark' },
+    }));
   }
   themeToggleBtn.addEventListener('click', () => {
     applyThemeMode(themeMode === 'dark' ? 'light' : 'dark');
@@ -285,8 +315,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
         setState({ isTocVisible: newTocVisible });
         tocBtn.classList.toggle('active', newTocVisible);
         tocBtn.title = newTocVisible ? 'Hide Table of Contents' : 'Toggle Table of Contents';
-        const s = getState();
-        postMessage({ type: 'edit', content: s.currentContent, fullWidth: s.isFullWidth, tocVisible: s.isTocVisible, tableWrap: s.isTableWrap });
+        postCurrentEdit();
         onSettingsChange();
       });
     },

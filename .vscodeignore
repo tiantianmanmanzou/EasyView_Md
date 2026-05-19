@@ -1,0 +1,16 @@
+.git/**
+.github/**
+node_modules/**
+src/**
+e2e/**
+*.vsix
+.DS_Store
+coverage/**
+playwright-report/**
+test-results/**
+FORK_NOTES.md
+tsconfig.json
+esbuild.mjs
+package-lock.json
+*.md
+!readme.md

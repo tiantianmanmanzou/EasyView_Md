@@ -20,6 +20,8 @@ export interface FileHeader {
   setExportPdfLightHandler: (handler: () => void) => void;
   setExportPdfDarkHandler: (handler: () => void) => void;
   setSourceHandler: (handler: () => void) => void;
+  setScrollTopHandler: (handler: () => void) => void;
+  setScrollBottomHandler: (handler: () => void) => void;
   setStageHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
   getSourceBtn: () => HTMLElement;
@@ -29,13 +31,14 @@ export interface FileHeader {
 export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const { postMessage, getState, setState, onSettingsChange } = deps;
   type ThemeMode = 'light' | 'dark';
-  type AccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple';
+  type AccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple' | 'cherryRed';
   const accentThemes: Array<{ value: AccentTheme; label: string }> = [
     { value: 'default', label: 'Default text' },
     { value: 'blue', label: 'Blue' },
     { value: 'orangeRed', label: 'Orange red' },
     { value: 'green', label: 'Green' },
     { value: 'purple', label: 'Purple' },
+    { value: 'cherryRed', label: 'Cherry red' },
   ];
 
   function readStoredThemeMode(): ThemeMode | null {
@@ -105,7 +108,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const tocBtn = document.createElement('button');
   tocBtn.className = 'file-header-btn';
-  tocBtn.title = 'Toggle Table of Contents';
+  tocBtn.title = 'Toggle Table of Contents (Option+W)';
   tocBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="15" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="17" y2="18"/></svg>';
   leftGroup.appendChild(tocBtn);
 
@@ -118,7 +121,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const widthBtn = document.createElement('button');
   widthBtn.className = 'file-header-btn';
-  widthBtn.title = 'Expand to full width';
+  widthBtn.title = 'Expand to full width (Option+A)';
   widthBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
   widthBtn.addEventListener('click', () => {
     const state = getState();
@@ -126,7 +129,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setState({ isFullWidth: newFullWidth });
     document.getElementById('editor')?.classList.toggle('full-width', newFullWidth);
     widthBtn.classList.toggle('active', newFullWidth);
-    widthBtn.title = newFullWidth ? 'Exit full width' : 'Expand to full width';
+    widthBtn.title = newFullWidth ? 'Exit full width (Option+A)' : 'Expand to full width (Option+A)';
     widthBtn.innerHTML = newFullWidth
       ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
       : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
@@ -137,7 +140,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const tableWrapBtn = document.createElement('button');
   tableWrapBtn.className = 'file-header-btn active'; // default: active (enabled)
-  tableWrapBtn.title = 'Disable table word wrap';
+  tableWrapBtn.title = 'Disable table word wrap (Option+D)';
   tableWrapBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="10" y2="18"/></svg>';
   tableWrapBtn.addEventListener('click', () => {
     const state = getState();
@@ -145,7 +148,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setState({ isTableWrap: newTableWrap });
     document.getElementById('editor')?.classList.toggle('table-wrap', newTableWrap);
     tableWrapBtn.classList.toggle('active', newTableWrap);
-    tableWrapBtn.title = newTableWrap ? 'Disable table word wrap' : 'Enable table word wrap';
+    tableWrapBtn.title = newTableWrap ? 'Disable table word wrap (Option+D)' : 'Enable table word wrap (Option+D)';
     postCurrentEdit();
     onSettingsChange();
   });
@@ -193,10 +196,23 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   // Right group
   const rightGroup = document.createElement('div');
   rightGroup.className = 'file-header-actions file-header-actions-right';
+
+  const scrollTopBtn = document.createElement('button');
+  scrollTopBtn.className = 'file-header-btn';
+  scrollTopBtn.title = 'Scroll to top (Option+↑)';
+  scrollTopBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m17 14-5-5-5 5"/><path d="M5 3h14"/></svg>';
+  rightGroup.appendChild(scrollTopBtn);
+
+  const scrollBottomBtn = document.createElement('button');
+  scrollBottomBtn.className = 'file-header-btn';
+  scrollBottomBtn.title = 'Scroll to bottom (Option+↓)';
+  scrollBottomBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
+  rightGroup.appendChild(scrollBottomBtn);
+
   const stageBtn = document.createElement('button');
   stageBtn.className = 'file-header-btn';
-  stageBtn.title = 'Stage current file';
-  stageBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
+  stageBtn.title = 'Stage current file (Option+S)';
+  stageBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5c-1.1-1.1-2.6-1.7-4.5-1.7-2.8 0-4.8 1.3-4.8 3.5 0 1.9 1.5 2.9 4.4 3.5l1.2.3c2.6.6 3.8 1.4 3.8 3.2 0 2.4-2.1 3.8-5 3.8-2 0-3.7-.6-5-1.8"/></svg>';
   rightGroup.appendChild(stageBtn);
 
   const historyBtn = document.createElement('button');
@@ -207,7 +223,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const sourceBtn = document.createElement('button');
   sourceBtn.className = 'file-header-btn';
-  sourceBtn.title = 'Open native source mode with inline suggestions (Ctrl+/)';
+  sourceBtn.title = 'Open native source mode with inline suggestions (Ctrl+/, Option+Q)';
   sourceBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
   rightGroup.appendChild(sourceBtn);
 
@@ -338,7 +354,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
         const newTocVisible = !state.isTocVisible;
         setState({ isTocVisible: newTocVisible });
         tocBtn.classList.toggle('active', newTocVisible);
-        tocBtn.title = newTocVisible ? 'Hide Table of Contents' : 'Toggle Table of Contents';
+        tocBtn.title = newTocVisible
+          ? 'Hide Table of Contents (Option+W)'
+          : 'Toggle Table of Contents (Option+W)';
         postCurrentEdit();
         onSettingsChange();
       });
@@ -368,6 +386,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       });
     },
     setSourceHandler(handler: () => void) { sourceBtn.addEventListener('click', handler); },
+    setScrollTopHandler(handler: () => void) { scrollTopBtn.addEventListener('click', handler); },
+    setScrollBottomHandler(handler: () => void) { scrollBottomBtn.addEventListener('click', handler); },
     setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
     getSourceBtn() { return sourceBtn; },

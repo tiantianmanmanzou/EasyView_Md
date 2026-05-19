@@ -4,6 +4,7 @@ import { SETTINGS_COMMENT_RE, extractSettings, type EditorSettings } from './pro
 import { buildImagePathMap } from './providerImageManager';
 import { handleWebviewMessage, MessageHandlerContext } from './providerMessageHandler';
 import { computeGitLineRanges, type GitLineRange } from './gitChangeTracker';
+import { consumePendingCursorForUri } from './openCursorContext';
 
 /**
  * CustomTextEditorProvider for WYSIWYG Markdown editing.
@@ -12,12 +13,15 @@ import { computeGitLineRanges, type GitLineRange } from './gitChangeTracker';
  */
 export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'inlineMd.markdownEditor';
+  private static instance: MarkdownEditorProvider | undefined;
 
   /** The most recently focused webview panel (for command-triggered actions). */
   private activePanel: vscode.WebviewPanel | undefined;
+  private readonly panelsByDocumentUri = new Map<string, Set<vscode.WebviewPanel>>();
 
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
     const provider = new MarkdownEditorProvider(context);
+    MarkdownEditorProvider.instance = provider;
 
     const editorDisposable = vscode.window.registerCustomEditorProvider(
       MarkdownEditorProvider.viewType,
@@ -66,11 +70,33 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // so these commands are intentionally no-ops.
     const undoCommand = vscode.commands.registerCommand('inlineMd.undo', () => {});
     const redoCommand = vscode.commands.registerCommand('inlineMd.redo', () => {});
+    const revealCursorCommand = vscode.commands.registerCommand(
+      'inlineMd.revealCursorInEasyView',
+      async (uri: vscode.Uri, line: number, character: number) => {
+        await provider.revealCursorInEasyView(uri, line, character);
+      }
+    );
 
-    return vscode.Disposable.from(editorDisposable, exportHtmlLightCommand, exportHtmlDarkCommand, exportPdfLightCommand, exportPdfDarkCommand, undoCommand, redoCommand);
+    return vscode.Disposable.from(editorDisposable, exportHtmlLightCommand, exportHtmlDarkCommand, exportPdfLightCommand, exportPdfDarkCommand, undoCommand, redoCommand, revealCursorCommand);
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  private async revealCursorInEasyView(uri: vscode.Uri, line: number, character: number): Promise<void> {
+    const key = uri.toString();
+    const panels = this.panelsByDocumentUri.get(key);
+    if (!panels || panels.size === 0) return;
+    const panel = [...panels].find((candidate) => candidate.visible) ?? [...panels][0];
+    if (!panel) return;
+    panel.webview.postMessage({
+      type: 'revealCursor',
+      line,
+      character,
+      totalLines: Math.max(1, vscode.window.activeTextEditor?.document.uri.toString() === key
+        ? vscode.window.activeTextEditor.document.lineCount
+        : 1),
+    });
+  }
 
   async resolveCustomTextEditor(
     document: vscode.TextDocument,
@@ -102,6 +128,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Track active panel for command-triggered actions
     this.activePanel = webviewPanel;
+    const documentUriKey = document.uri.toString();
+    const panelSet = this.panelsByDocumentUri.get(documentUriKey) ?? new Set<vscode.WebviewPanel>();
+    panelSet.add(webviewPanel);
+    this.panelsByDocumentUri.set(documentUriKey, panelSet);
     webviewPanel.onDidChangeViewState(() => {
       if (webviewPanel.active) {
         this.activePanel = webviewPanel;
@@ -224,6 +254,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     console.log(`[InLineMd perf] buildImagePathMap: ${(performance.now() - t3).toFixed(1)}ms`);
 
     const initialGitLineRanges = await computeGitLineRanges(document.uri, rawContent);
+    const pendingCursor = consumePendingCursorForUri(document.uri);
+    const activeEditor = vscode.window.activeTextEditor;
+    const initialCursorLine = pendingCursor
+      ? pendingCursor.line
+      : (activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
+        ? activeEditor.selection.active.line
+        : 0);
+    const initialCursorCharacter = pendingCursor
+      ? pendingCursor.character
+      : (activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
+        ? activeEditor.selection.active.character
+        : 0);
 
     const initialData = {
       type: 'init',
@@ -234,6 +276,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       tableWrap: settings.tableWrap,
       imagePathMap,
       gitLineRanges: initialGitLineRanges,
+      initialCursorLine,
+      initialCursorCharacter,
+      initialTotalLines: Math.max(1, document.lineCount),
     };
     lastGitLineRangesJson = JSON.stringify(initialGitLineRanges);
 
@@ -261,6 +306,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       clearInterval(gitRefreshInterval);
       if (this.activePanel === webviewPanel) {
         this.activePanel = undefined;
+      }
+      const existing = this.panelsByDocumentUri.get(documentUriKey);
+      if (existing) {
+        existing.delete(webviewPanel);
+        if (existing.size === 0) {
+          this.panelsByDocumentUri.delete(documentUriKey);
+        }
       }
     });
   }

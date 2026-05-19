@@ -1,8 +1,8 @@
 {
-  "name": "markdown-preview-wysiwyg",
-  "displayName": "Markdown-preview-wysiwyg",
-  "description": "Markdown-preview-wysiwyg supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.54",
+  "name": "easyview",
+  "displayName": "EasyView",
+  "description": "EasyView supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
+  "version": "1.0.80",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "icon.png",
@@ -37,7 +37,7 @@
     "customEditors": [
       {
         "viewType": "inlineMd.markdownEditor",
-        "displayName": "Markdown-preview-wysiwyg (Rich Editor)",
+        "displayName": "EasyView",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -55,34 +55,39 @@
     "commands": [
       {
         "command": "inlineMd.openEditor",
-        "title": "Open with Markdown-preview-wysiwyg (Rich Editor)",
-        "category": "Markdown-preview-wysiwyg",
+        "title": "Open with EasyView",
+        "category": "EasyView",
         "icon": "$(preview)"
       },
       {
         "command": "inlineMd.openNativeEditor",
         "title": "Open in Native Markdown Editor",
-        "category": "Markdown-preview-wysiwyg"
+        "category": "EasyView"
       },
       {
         "command": "inlineMd.exportHtmlLight",
         "title": "Export to HTML (Light)",
-        "category": "Markdown-preview-wysiwyg"
+        "category": "EasyView"
       },
       {
         "command": "inlineMd.exportHtmlDark",
         "title": "Export to HTML (Dark)",
-        "category": "Markdown-preview-wysiwyg"
+        "category": "EasyView"
       },
       {
         "command": "inlineMd.exportPdfLight",
         "title": "Export to PDF (Light)",
-        "category": "Markdown-preview-wysiwyg"
+        "category": "EasyView"
       },
       {
         "command": "inlineMd.exportPdfDark",
         "title": "Export to PDF (Dark)",
-        "category": "Markdown-preview-wysiwyg"
+        "category": "EasyView"
+      },
+      {
+        "command": "inlineMd.stageFile",
+        "title": "Stage Current File",
+        "category": "EasyView"
       }
     ],
     "menus": {
@@ -121,6 +126,18 @@
         "key": "ctrl+y",
         "command": "inlineMd.redo",
         "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
+      },
+      {
+        "key": "alt+s",
+        "mac": "alt+s",
+        "command": "inlineMd.stageFile",
+        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
+      },
+      {
+        "key": "alt+e",
+        "mac": "alt+e",
+        "command": "inlineMd.openEditor",
+        "when": "editorTextFocus && (resourceLangId == markdown || resourceLangId == mdx)"
       }
     ],
     "configurationDefaults": {
@@ -132,7 +149,7 @@
       }
     },
     "configuration": {
-      "title": "Markdown-preview-wysiwyg",
+      "title": "EasyView",
       "properties": {
         "inlineMd.csvDelimiter": {
           "type": "string",
@@ -167,7 +184,7 @@
         "inlineMd.nativeEditor.forceMonospaceFont": {
           "type": "boolean",
           "default": true,
-          "description": "Force Markdown native source editors to use a CJK-aware monospace font family when opened from Markdown-preview-wysiwyg."
+          "description": "Force Markdown native source editors to use a CJK-aware monospace font family when opened from EasyView."
         }
       }
     }

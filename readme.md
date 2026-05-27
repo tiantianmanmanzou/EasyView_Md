@@ -2,20 +2,19 @@
 
 # Sample
 
-![](./readme.assets/readme-1779877705890.png)
+![](./readme.assets/readme-1779879416190.png)
 
 EasyView_Md supports **native inline suggestion** in VS Code.
 
-Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
+Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,<br>
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
 The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,
 
 but the default direction is native-editor enhancement.
 
-
-
 ## Editor
+
 - **Native inline suggestion support** — keep Copilot / VS Code inline suggestion on the native Markdown editor path
 - **Native editor enhancement architecture** — based on `TextEditor` + decorations / CodeLens / hover / overlay
 - **Native markdown decorations** — lightweight inline styling directly in the VS Code editor
@@ -45,7 +44,7 @@ but the default direction is native-editor enhancement.
 | *Italic*      | `*text*`                                                   | `Ctrl+I`     |
 | Underline     | `<u>text</u>`                                              | `Ctrl+U`     |
 | ~~Strikethrough~~ | `~~text~~`                                                 | `Ctrl+D`     |
-| `Inline code` | `` `code`                                                  | `Ctrl+E`     |
+| `Inline code` | \`\` `code`                                                | `Ctrl+E`     |
 | Highlight     | `==text==`                                                 | `Ctrl+Shift+H` |
 | [Link](https://github.com/inlinemd/inlinemd/blob/HEAD/url) | `[text](https://github.com/inlinemd/inlinemd/blob/HEAD/url)` | `Ctrl+K`     |
 

@@ -142,6 +142,9 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
           this.refreshEditor(editor);
         }
       }),
+      vscode.window.onDidChangeTextEditorSelection((event) => {
+        this.refreshEditor(event.textEditor);
+      }),
       vscode.workspace.onDidChangeTextDocument((event) => {
         for (const editor of vscode.window.visibleTextEditors) {
           if (editor.document.uri.toString() === event.document.uri.toString()) {
@@ -263,6 +266,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
     const tableBlockRanges: vscode.Range[] = [];
     const tablePipeRanges: vscode.Range[] = [];
     const tableSeparatorRanges: vscode.Range[] = [];
+    const activeLines = this.collectActiveLines(editor);
 
     const mermaidBlocks = config.get<boolean>('nativeDecorations.mermaid.enabled', true)
       ? this.collectMermaidBlocks(editor.document)
@@ -292,7 +296,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
       }
 
       const listMarkerMatch = /^(\s*)([-*+]|\d+[.)])(\s+)/.exec(line.text);
-      if (listMarkerMatch) {
+      if (listMarkerMatch && !activeLines.has(lineIndex)) {
         const startCharacter = listMarkerMatch[1].length;
         const endCharacter = startCharacter + listMarkerMatch[2].length + listMarkerMatch[3].length;
         const markerText = /^\d/.test(listMarkerMatch[2]) ? listMarkerMatch[2] : '•';
@@ -321,6 +325,10 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
         continue;
       }
 
+      if (activeLines.has(lineIndex)) {
+        continue;
+      }
+
       const markerLength = headingMatch[1].length + headingMatch[2].length;
       headingMarkerRanges.push(
         new vscode.Range(lineIndex, 0, lineIndex, markerLength)
@@ -338,7 +346,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
       );
     }
 
-    const inlineDecorations = this.collectInlineDecorations(editor.document, text);
+    const inlineDecorations = this.collectInlineDecorations(editor.document, text, activeLines);
 
     editor.setDecorations(this.monospaceDecoration, monospaceRanges);
     editor.setDecorations(this.headingMarkerDecoration, headingMarkerRanges);
@@ -573,7 +581,23 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
     return `${theme}\n${fontFamily ?? ''}\n${block.numLines}\n${block.source}`;
   }
 
-  private collectInlineDecorations(document: vscode.TextDocument, text: string): Record<string, InlineDecorationBucket> {
+  private collectActiveLines(editor: vscode.TextEditor): Set<number> {
+    const activeLines = new Set<number>();
+    for (const selection of editor.selections) {
+      const startLine = Math.min(selection.start.line, selection.end.line);
+      const endLine = Math.max(selection.start.line, selection.end.line);
+      for (let line = startLine; line <= endLine; line++) {
+        activeLines.add(line);
+      }
+    }
+    return activeLines;
+  }
+
+  private collectInlineDecorations(
+    document: vscode.TextDocument,
+    text: string,
+    activeLines: Set<number>
+  ): Record<string, InlineDecorationBucket> {
     const buckets = {
       inlineCode: { markerRanges: [], contentRanges: [] } as InlineDecorationBucket,
       boldItalic: { markerRanges: [], contentRanges: [] } as InlineDecorationBucket,
@@ -597,6 +621,18 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
         }
         const matchEnd = matchIndex + matchText.length;
         if (this.overlapsBlockedRange(matchIndex, matchEnd, blockedRanges)) {
+          continue;
+        }
+        const startLine = document.positionAt(matchIndex).line;
+        const endLine = document.positionAt(matchEnd).line;
+        let intersectsActiveLine = false;
+        for (let line = startLine; line <= endLine; line++) {
+          if (activeLines.has(line)) {
+            intersectsActiveLine = true;
+            break;
+          }
+        }
+        if (intersectsActiveLine) {
           continue;
         }
 

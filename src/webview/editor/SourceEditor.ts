@@ -653,7 +653,7 @@ export function createSourceEditor(options: SourceEditorOptions) {
         markdown({ codeLanguages: languages }),
         syntaxHighlighting(vscodeHighlightStyle),
         keymap.of([
-          { key: 'Tab', run: tabCompletionCommand },
+          { key: 'Tab', run: (cmView) => indentWithTab.run?.(cmView) ?? false },
           indentWithTab,
           ...defaultKeymap,
           ...historyKeymap,

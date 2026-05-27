@@ -88,13 +88,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     if (!panels || panels.size === 0) return;
     const panel = [...panels].find((candidate) => candidate.visible) ?? [...panels][0];
     if (!panel) return;
+    const textDocument = await vscode.workspace.openTextDocument(uri);
     panel.webview.postMessage({
       type: 'revealCursor',
       line,
       character,
-      totalLines: Math.max(1, vscode.window.activeTextEditor?.document.uri.toString() === key
-        ? vscode.window.activeTextEditor.document.lineCount
-        : 1),
+      totalLines: Math.max(1, textDocument.lineCount),
     });
   }
 

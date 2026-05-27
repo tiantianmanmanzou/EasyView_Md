@@ -27,6 +27,11 @@ export class EditorImageManager {
 
   insertImage(view: EditorView, src: string, originalSrc?: string, pos?: number): void {
     const effective = originalSrc || src;
+    const imgNode = schema.nodes.image.create({
+      src,
+      originalSrc: effective,
+      alt: '',
+    });
 
     if (typeof pos === 'number' && pos >= 0) {
       const node = view.state.doc.nodeAt(pos);
@@ -36,15 +41,23 @@ export class EditorImageManager {
           src,
           originalSrc: effective,
         });
-        view.dispatch(tr);
+        view.dispatch(tr.scrollIntoView());
+      } else {
+        const maxPos = view.state.doc.content.size;
+        const insertPos = Math.min(Math.max(0, pos), maxPos);
+        const $pos = view.state.doc.resolve(insertPos);
+        let tr = view.state.tr;
+
+        if ($pos.parent.isTextblock) {
+          tr = tr.insert(insertPos, imgNode);
+        } else {
+          tr = tr.insert(insertPos, schema.nodes.paragraph.create(null, imgNode));
+        }
+
+        view.dispatch(tr.scrollIntoView());
       }
     } else {
-      const imgNode = schema.nodes.image.create({
-        src,
-        originalSrc: effective,
-        alt: '',
-      });
-      view.dispatch(view.state.tr.replaceSelectionWith(imgNode));
+      view.dispatch(view.state.tr.replaceSelectionWith(imgNode).scrollIntoView());
     }
 
     if (originalSrc && src !== originalSrc) {

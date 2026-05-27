@@ -227,10 +227,63 @@ export function handlePaste(
   event: ClipboardEvent,
   pasteParser: MarkdownParser
 ): boolean {
-  const text = event.clipboardData?.getData('text/plain');
-  if (!text) return false;
+  const target = event.target as Node | null;
+  if (!view.hasFocus()) return false;
+  if (target && !view.dom.contains(target)) return false;
 
+  const text = event.clipboardData?.getData('text/plain');
   const html = event.clipboardData?.getData('text/html');
+
+  const clipboardDataUrl =
+    html?.match(/src=["'](data:image\/[a-zA-Z0-9.+-]+;base64,[^"']+)["']/i)?.[1]
+    ?? text?.match(/!\[[^\]]*]\(\s*(data:image\/[a-zA-Z0-9.+-]+;base64,[^)]+)\s*\)/i)?.[1]
+    ?? text?.match(/^(data:image\/[a-zA-Z0-9.+-]+;base64,\S+)$/i)?.[1];
+
+  if (clipboardDataUrl) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { from } = view.state.selection;
+    const mimeType = clipboardDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/i)?.[1] || 'image/png';
+    window.dispatchEvent(new CustomEvent('inlinemd:pasteImage', {
+      detail: {
+        dataUrl: clipboardDataUrl,
+        mimeType,
+        name: 'image',
+        pos: from,
+      },
+    }));
+    return true;
+  }
+
+  const imageItems = Array.from(event.clipboardData?.items || []).filter(
+    (item) => item.kind === 'file' && item.type.startsWith('image/'),
+  );
+  if (imageItems.length > 0) {
+    const file = imageItems[0].getAsFile();
+    if (file) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const { from } = view.state.selection;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (!dataUrl.startsWith('data:image/')) return;
+        window.dispatchEvent(new CustomEvent('inlinemd:pasteImage', {
+          detail: {
+            dataUrl,
+            mimeType: file.type || 'image/png',
+            name: file.name || 'image.png',
+            pos: from,
+          },
+        }));
+      };
+      reader.readAsDataURL(file);
+      return true;
+    }
+  }
+
+  if (!text) return false;
   const { $from } = view.state.selection;
   const inCodeBlock = $from.parent.type.name === 'code_block';
 

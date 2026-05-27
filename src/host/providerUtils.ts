@@ -18,9 +18,9 @@ export interface EditorSettings {
 export function extractSettings(content: string): EditorSettings {
   const match = content.match(SETTINGS_COMMENT_RE);
   return {
-    fullWidth: match ? match[1] === 'true' : false,
-    tocVisible: match && match[2] ? match[2] === 'true' : false,
-    tableWrap: match && match[3] ? match[3] === 'true' : true, // default: true
+    fullWidth: match ? match[1] === 'true' : true,
+    tocVisible: match && match[2] ? match[2] === 'true' : true,
+    tableWrap: match && match[3] ? match[3] === 'true' : false, // default: false
   };
 }
 

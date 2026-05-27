@@ -255,6 +255,7 @@ function createHeadingWidgets(doc: ProsemirrorNode): Decoration[] {
     if (node.type.name === 'heading') {
       const $pos = doc.resolve(pos);
       if ($pos.depth > 1) return;
+      if (node.content.size === 0) return;
 
       const collapsed = node.attrs.collapsed;
       const headingPos = pos;

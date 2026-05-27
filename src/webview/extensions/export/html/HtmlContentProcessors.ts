@@ -5,6 +5,7 @@
  */
 
 import katex from 'katex';
+import * as plantumlEncoder from 'plantuml-encoder';
 
 export interface TocEntry {
   id: string;
@@ -48,6 +49,44 @@ export function processMermaidBlocks(container: HTMLElement): boolean {
   });
 
   return hasMermaid;
+}
+
+export function processPlantUmlBlocks(container: HTMLElement): boolean {
+  let hasPlantUml = false;
+
+  const preElements = container.querySelectorAll('pre');
+  preElements.forEach((pre) => {
+    const code = pre.querySelector('code');
+    const className = `${code?.className || ''} ${pre.className || ''}`;
+    if (!className.includes('language-plantuml') && !className.includes('language-puml')) {
+      return;
+    }
+
+    const source = (code?.textContent || pre.textContent || '').trim();
+    if (!source) return;
+
+    const normalized = /^@start[\w-]+/i.test(source)
+      ? source
+      : `@startuml\n${source}\n@enduml`;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'plantuml-export-block';
+
+    const image = document.createElement('img');
+    image.className = 'plantuml-export-image';
+    image.alt = 'PlantUML diagram';
+    image.src = `https://www.plantuml.com/plantuml/svg/${encodePlantUmlSource(normalized)}`;
+
+    wrapper.appendChild(image);
+    pre.replaceWith(wrapper);
+    hasPlantUml = true;
+  });
+
+  return hasPlantUml;
+}
+
+function encodePlantUmlSource(source: string): string {
+  return plantumlEncoder.encode(source);
 }
 
 /**

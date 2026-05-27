@@ -405,6 +405,34 @@ export class ListsExtension extends Extension {
     const bsLiftListItemFromCheckbox = this.liftFromSublistCrossType(
       schema, schema.nodes.list_item, schema.nodes.checkbox_item, { checked: false }, true
     );
+    const structuredBackspace = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+      const { $from, empty } = state.selection;
+      if (!empty) return false;
+      if ($from.parentOffset !== 0 || $from.parent.content.size === 0) return false;
+
+      let closestListType: any = null;
+      let inListItem = false;
+
+      for (let d = $from.depth; d > 0; d--) {
+        const node = $from.node(d);
+        if (node.type === schema.nodes.list_item) {
+          inListItem = true;
+        }
+        if (
+          node.type === schema.nodes.bullet_list ||
+          node.type === schema.nodes.ordered_list ||
+          node.type === schema.nodes.checkbox_list
+        ) {
+          if (!closestListType) {
+            closestListType = node.type;
+          }
+        }
+      }
+
+      if (!inListItem || !closestListType) return false;
+
+      return liftListItem(schema.nodes.list_item)(state, dispatch);
+    };
 
     return keymap({
       Enter: chainCommands(
@@ -443,8 +471,12 @@ export class ListsExtension extends Extension {
         // Then split - try with empty attrs like checkbox
         (state, dispatch) => splitListItem(schema.nodes.list_item, {})(state, dispatch)
       ),
-      // Backspace: only first/only item in cross-type sublist (others -> joinBackward)
-      Backspace: bsLiftListItemFromCheckbox,
+      // Backspace: remove one list level at a time for non-empty items,
+      // then fall back to existing cross-type empty-item handling.
+      Backspace: chainCommands(
+        structuredBackspace,
+        bsLiftListItemFromCheckbox
+      ),
     });
   }
 
@@ -464,6 +496,34 @@ export class ListsExtension extends Extension {
     const bsLiftCheckboxFromListItem = this.liftFromSublistCrossType(
       schema, schema.nodes.checkbox_item, schema.nodes.list_item, {}, true
     );
+    const structuredBackspace = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+      const { $from, empty } = state.selection;
+      if (!empty) return false;
+      if ($from.parentOffset !== 0 || $from.parent.content.size === 0) return false;
+
+      let closestListType: any = null;
+      let inCheckboxItem = false;
+
+      for (let d = $from.depth; d > 0; d--) {
+        const node = $from.node(d);
+        if (node.type === schema.nodes.checkbox_item) {
+          inCheckboxItem = true;
+        }
+        if (
+          node.type === schema.nodes.bullet_list ||
+          node.type === schema.nodes.ordered_list ||
+          node.type === schema.nodes.checkbox_list
+        ) {
+          if (!closestListType) {
+            closestListType = node.type;
+          }
+        }
+      }
+
+      if (!inCheckboxItem || !closestListType) return false;
+
+      return liftListItem(schema.nodes.checkbox_item)(state, dispatch);
+    };
 
     return keymap({
       Enter: chainCommands(
@@ -501,8 +561,12 @@ export class ListsExtension extends Extension {
         // Then split
         splitListItem(schema.nodes.checkbox_item, { checked: false })
       ),
-      // Backspace: only first/only item in cross-type sublist (others -> joinBackward)
-      Backspace: bsLiftCheckboxFromListItem,
+      // Backspace: remove one list level at a time for non-empty items,
+      // then fall back to existing cross-type empty-item handling.
+      Backspace: chainCommands(
+        structuredBackspace,
+        bsLiftCheckboxFromListItem
+      ),
     });
   }
 }

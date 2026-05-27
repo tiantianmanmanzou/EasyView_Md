@@ -617,6 +617,12 @@ export function applyCustomRules(md: MarkdownIt): void {
       const newChildren: any[] = [];
       for (const child of children) {
         if (child.type === 'html_inline') {
+          if (/^<br\s*\/?>$/i.test(child.content.trim())) {
+            const t = new state.Token('hardbreak', 'br', 0);
+            t.markup = child.content;
+            newChildren.push(t);
+            continue;
+          }
           // Try to match opening tag
           const openMatch = child.content.match(/^<([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*)?\s*>$/);
           if (openMatch && KNOWN_INLINE_TAGS.has(openMatch[1].toLowerCase())) {

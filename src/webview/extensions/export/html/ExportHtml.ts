@@ -17,7 +17,7 @@ import { schema } from '../../../editor/EditorSchema';
 import { getRefractorLangForLanguage, getLoaderForLanguage } from '../../../editor/lib/CodeLanguages';
 import { buildTemplate, type TemplateOptions } from './ExportTemplate';
 import { highlightCodeBlocks } from './HtmlCodeHighlighting';
-import { processMermaidBlocks, renderMathBlocks, processHtmlComments, processFootnotes, renderTocBlocks, processTableKeywords } from './HtmlContentProcessors';
+import { processMermaidBlocks, processPlantUmlBlocks, renderMathBlocks, processHtmlComments, processFootnotes, renderTocBlocks, processTableKeywords } from './HtmlContentProcessors';
 import type { TocEntry } from './HtmlContentProcessors';
 import { cleanupDom, escapeHtml } from './HtmlDomCleanup';
 
@@ -57,6 +57,7 @@ export async function generateStandaloneHtml(
 
   // Post-process Mermaid blocks
   const hasMermaid = processMermaidBlocks(container);
+  processPlantUmlBlocks(container);
 
   // Extract headings for TOC and assign IDs
   const toc = extractHeadings(container);

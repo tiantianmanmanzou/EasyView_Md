@@ -1,6 +1,6 @@
-# EasyView — Native Inline Suggestion Markdown Editor for VS Code
+# EasyView_Md — Native Inline Suggestion Markdown Editor for VS Code
 
-EasyView supports **native inline suggestion** in VS Code.
+EasyView_Md supports **native inline suggestion** in VS Code.
 Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
@@ -200,7 +200,7 @@ Render Mermaid diagrams directly in the editor:
 
 | Command | Description |
 |---------|-------------|
-| `Open with EasyView` | Open current markdown file in the optional custom editor |
+| `Open with EasyView_Md` | Open current markdown file in the optional custom editor |
 | `Export to HTML (Light)` | Export as HTML with light theme |
 | `Export to HTML (Dark)` | Export as HTML with dark theme |
 | `Export to PDF (Light)` | Export as PDF with light theme |
@@ -218,7 +218,7 @@ Render Mermaid diagrams directly in the editor:
 |---------|-------------|---------|
 | `inlineMd.csvDelimiter` | CSV delimiter: `,`, `;`, or `auto` | `auto` |
 | `inlineMd.nativeDecorations.enabled` | Enable lightweight inline markdown decorations in the native VS Code editor | `true` |
-| `inlineMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `true` |
+| `inlineMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `false` |
 | `inlineMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor | `true` |
 | `inlineMd.nativeEditor.forceMonospaceFont` | Force Markdown native source editors to use a CJK-aware monospace font family | `true` |
 
@@ -258,6 +258,13 @@ Add an HTML comment at the top of your markdown file:
 | Source Mode | `Ctrl+/` |
 | Table of Contents | `Ctrl+Shift+T` |
 | Move Block Up | `Ctrl+Alt+↑` |
+
+---
+
+## Acknowledgements
+
+EasyView_Md is maintained as a secondary-development continuation based on **Markdown Inline Editor (CodeSmith)**.
+Thanks to the original author for the foundational editor architecture and implementation.
 | Move Block Down | `Ctrl+Alt+↓` |
 | Hard Break | `Shift+Enter` |
 | Slash Menu | `/` |

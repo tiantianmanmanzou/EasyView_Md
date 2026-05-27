@@ -845,6 +845,19 @@ body {
   height: auto;
 }
 
+.document-content .plantuml-export-block {
+  margin: 1em 0;
+  text-align: center;
+}
+
+.document-content .plantuml-export-image {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+
 /* ─── Strikethrough ──────────────────────────────────────────────────────── */
 
 .document-content del {

@@ -158,9 +158,9 @@ export class TableView extends ProsemirrorTableView {
       colGrip.dataset.index = String(colIndex);
       colGrip.style.position = 'absolute';
       colGrip.style.left = `${rect.left - containerRect.left + paddingLeft + 0.5}px`;
-      colGrip.style.top = '24px'; // 40px padding - 16px to position grip
+      colGrip.style.top = '0px'; // Keep grip in the top control band, avoid overlapping header text
       colGrip.style.width = `${rect.width - 1}px`;
-      colGrip.style.height = '12px';
+      colGrip.style.height = '8px';
       if (colIndex === 0) {
         colGrip.classList.add(TableStyleHelper.first);
         colGrip.style.left = `${rect.left - containerRect.left + paddingLeft}px`;
@@ -194,7 +194,7 @@ export class TableView extends ProsemirrorTableView {
       addCol.dataset.index = String(colIndex + 1);
       addCol.style.position = 'absolute';
       addCol.style.left = `${rect.right - containerRect.left + paddingLeft - 10}px`;
-      addCol.style.top = '8px'; // 40px padding - 32px to position button
+      addCol.style.top = '0px'; // Keep add handle anchored in the top control band
       addCol.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -213,7 +213,7 @@ export class TableView extends ProsemirrorTableView {
         addColBefore.dataset.index = '0';
         addColBefore.style.position = 'absolute';
         addColBefore.style.left = `${rect.left - containerRect.left + paddingLeft - 10}px`;
-        addColBefore.style.top = '8px'; // 40px padding - 32px to position button
+        addColBefore.style.top = '0px'; // Keep add handle anchored in the top control band
         addColBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -316,11 +316,13 @@ export class TableView extends ProsemirrorTableView {
     });
 
     // Table grip (corner)
+    const firstRowRect = firstRow.getBoundingClientRect();
+    const tableTopOffset = firstRowRect.top - this.dom.getBoundingClientRect().top;
     const tableGrip = document.createElement('div');
     tableGrip.className = TableStyleHelper.tableGrip;
     tableGrip.style.position = 'absolute';
     tableGrip.style.left = `${paddingLeftOffset - 16}px`; // 20px padding - 16px offset
-    tableGrip.style.top = '24px'; // 40px padding-top - 16px offset
+    tableGrip.style.top = `${tableTopOffset - 16}px`; // Anchor to actual table top-left corner
     tableGrip.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();

@@ -7,6 +7,7 @@ import { ensureNativeMarkdownEditorFont } from './nativeEditorFont';
 import { NativeMermaidRenderer } from './nativeMermaidRenderer';
 import { suppressConflictingMarkdownInlineDecorations } from './conflictingExtensions';
 import { setPendingCursorForUri } from './openCursorContext';
+import { registerNativeMarkdownImagePaste } from './nativeImagePaste';
 
 function execGit(args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -32,10 +33,29 @@ function resolveCurrentMarkdownUri(): vscode.Uri | undefined {
   return undefined;
 }
 
+async function migrateDefaultEditorLayoutState(context: vscode.ExtensionContext): Promise<void> {
+  const migrationKey = 'mdpre-zalman.migrations.defaultEditorLayoutState.1.0.121';
+  if (context.globalState.get<boolean>(migrationKey)) {
+    return;
+  }
+
+  const staleKeys = context.workspaceState.keys().filter((key) =>
+    key.startsWith('mdpre-zalman.editorSettings:'),
+  );
+
+  for (const key of staleKeys) {
+    await context.workspaceState.update(key, undefined);
+  }
+
+  await context.globalState.update(migrationKey, true);
+}
+
 export function activate(context: vscode.ExtensionContext) {
+  void migrateDefaultEditorLayoutState(context);
   const mermaidRenderer = NativeMermaidRenderer.register(context);
   context.subscriptions.push(NativeMarkdownDecorator.register(context, mermaidRenderer));
   context.subscriptions.push(MarkdownEditorProvider.register(context));
+  context.subscriptions.push(registerNativeMarkdownImagePaste());
 
   context.subscriptions.push(
     vscode.commands.registerCommand('inlineMd.openEditor', async (uri?: vscode.Uri) => {

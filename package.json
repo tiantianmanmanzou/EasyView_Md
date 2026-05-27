@@ -5,7 +5,7 @@
   "version": "1.0.124",
   "publisher": "zhangxy",
   "license": "MIT",
-  "icon": "icon.png",
+  "icon": "assets/logo.png",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tiantianmanmanzou/EasyView_Md.git"
@@ -18,7 +18,6 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Markdown",
     "Other"
   ],
   "keywords": [

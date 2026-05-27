@@ -2,11 +2,22 @@
 
 # Sample
 
-![](https://github.com/tiantianmanmanzou/EasyView_Md/blob/main/readme.assets/readme-1779879416190.png)
+### Demo Part 1
+
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/readme.assets/demo_part1.gif)
+
+### Demo Part 2
+
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/readme.assets/demo_part2.gif)
+
+### Demo Part 3
+
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/readme.assets/demo_part3.gif)
 
 EasyView_Md supports **native inline suggestion** in VS Code.
 
 Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,<br>
+<br>
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
 The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,
@@ -271,36 +282,36 @@ Add an HTML comment at the top of your markdown file:
 
 ## Keyboard Shortcuts
 
-| Action | Shortcut |
-| --- | --- |
-| Bold | `Ctrl+B` |
-| Italic | `Ctrl+I` |
-| Underline | `Ctrl+U` |
-| Strikethrough | `Ctrl+D` |
-| Inline Code | `Ctrl+E` |
-| Highlight | `Ctrl+Shift+H` |
-| Link | `Ctrl+K` |
-| Heading 1–4 | `Ctrl+Shift+1` – `Ctrl+Shift+4` |
-| Paragraph | `Ctrl+Shift+0` |
-| Checkbox List | `Ctrl+Shift+7` |
-| Bullet List | `Ctrl+Shift+8` |
-| Ordered List | `Ctrl+Shift+9` |
-| Blockquote | `Ctrl+Shift+B` |
-| Note Callout | `Ctrl+Shift+N` |
-| Find & Replace | `Ctrl+F` |
-| Source Mode | `Ctrl+/` or `Option+Q` |
-| Table of Contents | `Ctrl+Shift+T` or `Option+W` |
-| Full Width Toggle | `Option+A` |
-| Table Word Wrap Toggle | `Option+D` |
-| Theme Mode Toggle | `Option+R` |
-| Stage Current File | `Option+S` |
-| Scroll to Top | `Option+↑` |
-| Scroll to Bottom | `Option+↓` |
-| Move Block Up | `Ctrl+Alt+↑` |
-| Move Block Down | `Ctrl+Alt+↓` |
-| Hard Break | `Shift+Enter` |
-| Slash Menu | `/` |
-| Save | `Ctrl+S` |
+| Action                 | Shortcut                    |
+| ---------------------- | --------------------------- |
+| Bold                   | `Ctrl+B`                    |
+| Italic                 | `Ctrl+I`                    |
+| Underline              | `Ctrl+U`                    |
+| Strikethrough          | `Ctrl+D`                    |
+| Inline Code            | `Ctrl+E`                    |
+| Highlight              | `Ctrl+Shift+H`              |
+| Link                   | `Ctrl+K`                    |
+| Heading 1–4            | `Ctrl+Shift+1` – `Ctrl+Shift+4` |
+| Paragraph              | `Ctrl+Shift+0`              |
+| Checkbox List          | `Ctrl+Shift+7`              |
+| Bullet List            | `Ctrl+Shift+8`              |
+| Ordered List           | `Ctrl+Shift+9`              |
+| Blockquote             | `Ctrl+Shift+B`              |
+| Note Callout           | `Ctrl+Shift+N`              |
+| Find & Replace         | `Ctrl+F`                    |
+| Source Mode            | `Ctrl+/` or `Option+Q`      |
+| Table of Contents      | `Ctrl+Shift+T` or `Option+W` |
+| Full Width Toggle      | `Option+A`                  |
+| Table Word Wrap Toggle | `Option+D`                  |
+| Theme Mode Toggle      | `Option+R`                  |
+| Stage Current File     | `Option+S`                  |
+| Scroll to Top          | `Option+↑`                  |
+| Scroll to Bottom       | `Option+↓`                  |
+| Move Block Up          | `Ctrl+Alt+↑`                |
+| Move Block Down        | `Ctrl+Alt+↓`                |
+| Hard Break             | `Shift+Enter`               |
+| Slash Menu             | `/`                         |
+| Save                   | `Ctrl+S`                    |
 
 ---
 

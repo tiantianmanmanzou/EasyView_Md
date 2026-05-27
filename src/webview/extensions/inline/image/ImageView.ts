@@ -24,6 +24,26 @@ export class ImageView implements NodeView {
   private handles: HTMLElement[] = [];
   private isSelected = false;
   private resizing = false;
+  private readonly onImageError = () => {
+    const currentSrc = String(this.node.attrs.src || '');
+    const originalSrc = String(this.node.attrs.originalSrc || currentSrc || '');
+    if (!originalSrc) return;
+    if (currentSrc.startsWith('data:')) return;
+    if (this.img.dataset.fallbackTried === '1') return;
+
+    this.img.dataset.fallbackTried = '1';
+
+    window.dispatchEvent(new CustomEvent('inlinemd:resolveImageFallback', {
+      detail: {
+        originalSrc,
+        apply: (resolvedSrc: string | null) => {
+          if (!resolvedSrc) return;
+          this.img.src = resolvedSrc;
+          this.img.dataset.originalSrc = originalSrc;
+        },
+      },
+    }));
+  };
 
   constructor(node: Node, view: EditorView, getPos: () => number | undefined) {
     this.node = node;
@@ -37,6 +57,9 @@ export class ImageView implements NodeView {
 
     // Image element
     this.img = document.createElement('img');
+    this.img.referrerPolicy = 'no-referrer';
+    this.img.loading = 'lazy';
+    this.img.addEventListener('error', this.onImageError);
     this.syncAttrs();
     this.dom.appendChild(this.img);
 
@@ -46,6 +69,9 @@ export class ImageView implements NodeView {
 
   private syncAttrs() {
     const { src, originalSrc, alt, title, width, height } = this.node.attrs;
+    if (this.img.getAttribute('src') !== String(src || '')) {
+      delete this.img.dataset.fallbackTried;
+    }
     this.img.src = src || '';
     if (originalSrc) this.img.dataset.originalSrc = originalSrc;
     else delete this.img.dataset.originalSrc;
@@ -174,5 +200,9 @@ export class ImageView implements NodeView {
   ignoreMutation(mutation: MutationRecord | { type: string }): boolean {
     if (mutation.type === 'selection') return false;
     return true;
+  }
+
+  destroy() {
+    this.img.removeEventListener('error', this.onImageError);
   }
 }

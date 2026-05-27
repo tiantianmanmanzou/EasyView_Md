@@ -694,6 +694,50 @@ function initEditor() {
     toggleAllHeadings(view, isAllCollapsed);
   });
 
+  const requestImageBase64FromHost = (originalSrc: string, timeoutMs = 10000): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const requestId = Math.random().toString(36).slice(2, 11);
+      let settled = false;
+
+      const cleanup = () => {
+        window.removeEventListener('message', handler);
+      };
+
+      const handler = (event: MessageEvent) => {
+        const msg = event.data;
+        if (msg?.type !== 'imageBase64Response' || msg.requestId !== requestId) return;
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(msg.base64 || null);
+      };
+
+      window.addEventListener('message', handler);
+      vscode.postMessage({ type: 'getImageBase64', requestId, originalSrc });
+
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        console.warn('[InLineMd] Image request TIMED OUT:', originalSrc, requestId);
+        resolve(null);
+      }, timeoutMs);
+    });
+  };
+
+  window.addEventListener('inlinemd:resolveImageFallback', (event: Event) => {
+    const detail = (event as CustomEvent<{
+      originalSrc?: string;
+      apply?: (resolvedSrc: string | null) => void;
+    }>).detail;
+
+    if (!detail?.originalSrc || typeof detail.apply !== 'function') return;
+
+    void requestImageBase64FromHost(detail.originalSrc, 12000)
+      .then((base64) => detail.apply?.(base64))
+      .catch(() => detail.apply?.(null));
+  });
+
   // Export handler
   async function triggerExport(theme: 'light' | 'dark' = 'light') {
     try {
@@ -712,30 +756,7 @@ function initEditor() {
     try {
       const { generatePdfBase64 } = await import('./extensions/export/pdf/PdfMakeExport');
       const title = fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document';
-
-      // Callback to load local images from extension host
-      const loadImageFromHost = (originalSrc: string): Promise<string | null> => {
-        return new Promise((resolve) => {
-          const requestId = Math.random().toString(36).substr(2, 9);
-          const handler = (event: MessageEvent) => {
-            const msg = event.data;
-            if (msg.type === 'imageBase64Response' && msg.requestId === requestId) {
-              window.removeEventListener('message', handler);
-              resolve(msg.base64 || null);
-            }
-          };
-          window.addEventListener('message', handler);
-          vscode.postMessage({ type: 'getImageBase64', requestId, originalSrc });
-          // Timeout after 10 seconds
-          setTimeout(() => {
-            window.removeEventListener('message', handler);
-            console.warn('[InLineMd] Image request TIMED OUT:', originalSrc, requestId);
-            resolve(null);
-          }, 10000);
-        });
-      };
-
-      const base64 = await generatePdfBase64(view.state.doc, { title, theme }, loadImageFromHost);
+      const base64 = await generatePdfBase64(view.state.doc, { title, theme }, requestImageBase64FromHost);
       vscode.postMessage({ type: 'exportPdfBase64', data: base64 });
     } catch (err) {
       console.error('[InLineMd] PDF export failed:', err);

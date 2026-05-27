@@ -4,20 +4,19 @@
 
 ### Demo Part 1
 
-![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/readme.assets/demo_part1.gif)
+![](./assets/demo_part1.gif)
 
 ### Demo Part 2
 
-![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/readme.assets/demo_part2.gif)
+![](./assets/demo_part2.gif)
 
 ### Demo Part 3
 
-![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/readme.assets/demo_part3.gif)
+![](./assets/demo_part3.gif)
 
 EasyView_Md supports **native inline suggestion** in VS Code.
 
-Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,<br>
-<br>
+Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
 The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,

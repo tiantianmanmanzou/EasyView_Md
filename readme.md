@@ -2,7 +2,7 @@
 
 # Sample
 
-![](./readme.assets/readme-1779879416190.png)
+![](https://github.com/tiantianmanmanzou/EasyView_Md/blob/main/readme.assets/readme-1779879416190.png)
 
 EasyView_Md supports **native inline suggestion** in VS Code.
 

@@ -2,19 +2,20 @@
 
 # Sample
 
-![](./readme.assets/readme-1779877705890.png){width=1151}
+![](./readme.assets/readme-1779877705890.png)
 
-EasyView_Md supports **native inline suggestion** in VS Code.<br>
-Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,<br>
+EasyView_Md supports **native inline suggestion** in VS Code.
+
+Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
-The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,<br>
+The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,
+
 but the default direction is native-editor enhancement.
 
----
+
 
 ## Editor
-
 - **Native inline suggestion support** — keep Copilot / VS Code inline suggestion on the native Markdown editor path
 - **Native editor enhancement architecture** — based on `TextEditor` + decorations / CodeLens / hover / overlay
 - **Native markdown decorations** — lightweight inline styling directly in the VS Code editor
@@ -44,7 +45,7 @@ but the default direction is native-editor enhancement.
 | *Italic*      | `*text*`                                                   | `Ctrl+I`     |
 | Underline     | `<u>text</u>`                                              | `Ctrl+U`     |
 | ~~Strikethrough~~ | `~~text~~`                                                 | `Ctrl+D`     |
-| `Inline code` | `` `code``                                                 | `Ctrl+E`     |
+| `Inline code` | `` `code`                                                  | `Ctrl+E`     |
 | Highlight     | `==text==`                                                 | `Ctrl+Shift+H` |
 | [Link](https://github.com/inlinemd/inlinemd/blob/HEAD/url) | `[text](https://github.com/inlinemd/inlinemd/blob/HEAD/url)` | `Ctrl+K`     |
 
@@ -270,15 +271,18 @@ Add an HTML comment at the top of your markdown file:
 
 ## Acknowledgements
 
-EasyView_Md is maintained as a secondary-development continuation based on **Markdown Inline Editor (CodeSmith)**.<br>
-Thanks to the original author for the foundational editor architecture and implementation.<br>
-| Move Block Down | `Ctrl+Alt+↓` |<br>
-| Hard Break | `Shift+Enter` |<br>
-| Slash Menu | `/` |<br>
+EasyView_Md is maintained as a secondary-development continuation based on **Markdown Inline Editor (CodeSmith)**.
+
+Thanks to the original author for the foundational editor architecture and implementation.
+
+| Move Block Down | `Ctrl+Alt+↓` |
+
+| Hard Break | `Shift+Enter` |
+
+| Slash Menu | `/` |
+
 | Save | `Ctrl+S` |
 
 ---
 
 ## License
-
-MIT

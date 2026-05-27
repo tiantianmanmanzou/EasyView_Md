@@ -1,10 +1,14 @@
 # EasyView_Md — Native Inline Suggestion Markdown Editor for VS Code
 
-EasyView_Md supports **native inline suggestion** in VS Code.
-Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
+# Sample
+
+![](./readme.assets/readme-1779877705890.png){width=1151}
+
+EasyView_Md supports **native inline suggestion** in VS Code.<br>
+Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,<br>
 so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
 
-The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,
+The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,<br>
 but the default direction is native-editor enhancement.
 
 ---
@@ -34,19 +38,20 @@ but the default direction is native-editor enhancement.
 
 ### Text Formatting
 
-| Format | Syntax | Shortcut |
-|--------|--------|----------|
-| **Bold** | `**text**` | `Ctrl+B` |
-| *Italic* | `*text*` | `Ctrl+I` |
-| Underline | `<u>text</u>` | `Ctrl+U` |
-| ~~Strikethrough~~ | `~~text~~` | `Ctrl+D` |
-| `Inline code` | `` `code` `` | `Ctrl+E` |
-| Highlight | `==text==` | `Ctrl+Shift+H` |
-| [Link](https://github.com/inlinemd/inlinemd/blob/HEAD/url) | `[text](https://github.com/inlinemd/inlinemd/blob/HEAD/url)` | `Ctrl+K` |
+| Format        | Syntax                                                     | Shortcut     |
+| ------------- | ---------------------------------------------------------- | ------------ |
+| **Bold**      | `**text**`                                                 | `Ctrl+B`     |
+| *Italic*      | `*text*`                                                   | `Ctrl+I`     |
+| Underline     | `<u>text</u>`                                              | `Ctrl+U`     |
+| ~~Strikethrough~~ | `~~text~~`                                                 | `Ctrl+D`     |
+| `Inline code` | `` `code``                                                 | `Ctrl+E`     |
+| Highlight     | `==text==`                                                 | `Ctrl+Shift+H` |
+| [Link](https://github.com/inlinemd/inlinemd/blob/HEAD/url) | `[text](https://github.com/inlinemd/inlinemd/blob/HEAD/url)` | `Ctrl+K`     |
 
 ### Headings
 
 Six heading levels (`# H1` through `###### H6`) with:
+
 - Collapsible sections — click the arrow to collapse/expand
 - Collapse all — toggle from the file header bar
 - Anchor links — copy heading link for navigation
@@ -67,6 +72,7 @@ Nested blockquotes with styled left border. Toggle with `Ctrl+Shift+B`.
 ### Callout / Notice Blocks
 
 Five callout types with colored left border and icon:
+
 - **Note** (blue) — `Ctrl+Shift+N`
 - **Tip** (green)
 - **Important** (purple)
@@ -104,6 +110,7 @@ Five callout types with colored left border and icon:
 ### Mermaid Diagrams
 
 Render Mermaid diagrams directly in the editor:
+
 - Flowcharts, sequence diagrams, Gantt charts, and more
 - Dark / light theme support
 - Rendered in exports (HTML and PDF)
@@ -198,13 +205,13 @@ Render Mermaid diagrams directly in the editor:
 
 ### Commands
 
-| Command | Description |
-|---------|-------------|
+| Command                | Description                                              |
+| ---------------------- | -------------------------------------------------------- |
 | `Open with EasyView_Md` | Open current markdown file in the optional custom editor |
-| `Export to HTML (Light)` | Export as HTML with light theme |
-| `Export to HTML (Dark)` | Export as HTML with dark theme |
-| `Export to PDF (Light)` | Export as PDF with light theme |
-| `Export to PDF (Dark)` | Export as PDF with dark theme |
+| `Export to HTML (Light)` | Export as HTML with light theme                          |
+| `Export to HTML (Dark)` | Export as HTML with dark theme                           |
+| `Export to PDF (Light)` | Export as PDF with light theme                           |
+| `Export to PDF (Dark)` | Export as PDF with dark theme                            |
 
 ### Supported File Types
 
@@ -214,13 +221,13 @@ Render Mermaid diagrams directly in the editor:
 
 ### Settings
 
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `inlineMd.csvDelimiter` | CSV delimiter: `,`, `;`, or `auto` | `auto` |
-| `inlineMd.nativeDecorations.enabled` | Enable lightweight inline markdown decorations in the native VS Code editor | `true` |
+| Setting                                    | Description                                                                     | Default |
+| ------------------------------------------ | ------------------------------------------------------------------------------- | ------- |
+| `inlineMd.csvDelimiter`                    | CSV delimiter: `,`, `;`, or `auto`                                              | `auto`  |
+| `inlineMd.nativeDecorations.enabled`       | Enable lightweight inline markdown decorations in the native VS Code editor     | `true`  |
 | `inlineMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `false` |
-| `inlineMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor | `true` |
-| `inlineMd.nativeEditor.forceMonospaceFont` | Force Markdown native source editors to use a CJK-aware monospace font family | `true` |
+| `inlineMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor         | `true`  |
+| `inlineMd.nativeEditor.forceMonospaceFont` | Force Markdown native source editors to use a CJK-aware monospace font family   | `true`  |
 
 ### Per-File Settings
 
@@ -238,36 +245,36 @@ Add an HTML comment at the top of your markdown file:
 
 ## Keyboard Shortcuts
 
-| Action | Shortcut |
-|--------|----------|
-| Bold | `Ctrl+B` |
-| Italic | `Ctrl+I` |
-| Underline | `Ctrl+U` |
-| Strikethrough | `Ctrl+D` |
-| Inline Code | `Ctrl+E` |
-| Highlight | `Ctrl+Shift+H` |
-| Link | `Ctrl+K` |
-| Heading 1–4 | `Ctrl+Shift+1` – `Ctrl+Shift+4` |
-| Paragraph | `Ctrl+Shift+0` |
-| Checkbox List | `Ctrl+Shift+7` |
-| Bullet List | `Ctrl+Shift+8` |
-| Ordered List | `Ctrl+Shift+9` |
-| Blockquote | `Ctrl+Shift+B` |
-| Note Callout | `Ctrl+Shift+N` |
-| Find & Replace | `Ctrl+F` |
-| Source Mode | `Ctrl+/` |
-| Table of Contents | `Ctrl+Shift+T` |
-| Move Block Up | `Ctrl+Alt+↑` |
+| Action            | Shortcut                    |
+| ----------------- | --------------------------- |
+| Bold              | `Ctrl+B`                    |
+| Italic            | `Ctrl+I`                    |
+| Underline         | `Ctrl+U`                    |
+| Strikethrough     | `Ctrl+D`                    |
+| Inline Code       | `Ctrl+E`                    |
+| Highlight         | `Ctrl+Shift+H`              |
+| Link              | `Ctrl+K`                    |
+| Heading 1–4       | `Ctrl+Shift+1` – `Ctrl+Shift+4` |
+| Paragraph         | `Ctrl+Shift+0`              |
+| Checkbox List     | `Ctrl+Shift+7`              |
+| Bullet List       | `Ctrl+Shift+8`              |
+| Ordered List      | `Ctrl+Shift+9`              |
+| Blockquote        | `Ctrl+Shift+B`              |
+| Note Callout      | `Ctrl+Shift+N`              |
+| Find & Replace    | `Ctrl+F`                    |
+| Source Mode       | `Ctrl+/`                    |
+| Table of Contents | `Ctrl+Shift+T`              |
+| Move Block Up     | `Ctrl+Alt+↑`                |
 
 ---
 
 ## Acknowledgements
 
-EasyView_Md is maintained as a secondary-development continuation based on **Markdown Inline Editor (CodeSmith)**.
-Thanks to the original author for the foundational editor architecture and implementation.
-| Move Block Down | `Ctrl+Alt+↓` |
-| Hard Break | `Shift+Enter` |
-| Slash Menu | `/` |
+EasyView_Md is maintained as a secondary-development continuation based on **Markdown Inline Editor (CodeSmith)**.<br>
+Thanks to the original author for the foundational editor architecture and implementation.<br>
+| Move Block Down | `Ctrl+Alt+↓` |<br>
+| Hard Break | `Shift+Enter` |<br>
+| Slash Menu | `/` |<br>
 | Save | `Ctrl+S` |
 
 ---

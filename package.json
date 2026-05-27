@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "EasyView_Md supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.124",
+  "version": "1.0.125",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "assets/logo.png",

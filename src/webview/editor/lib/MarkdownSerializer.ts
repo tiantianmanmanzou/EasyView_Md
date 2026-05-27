@@ -427,7 +427,7 @@ function serializeHtmlInline(state: MarkdownSerializerState, node: ProsemirrorNo
 }
 
 function serializeHardBreak(state: MarkdownSerializerState) {
-  state.write('\\\n');
+  state.write('<br>\n');
 }
 
 function serializeFrontmatter(state: MarkdownSerializerState, node: ProsemirrorNode) {

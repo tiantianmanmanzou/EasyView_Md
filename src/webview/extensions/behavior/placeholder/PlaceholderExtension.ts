@@ -52,11 +52,12 @@ export class PlaceholderExtension extends Extension {
               ? "Start writing, or type '/' for commands..."
               : "Type '/' for commands...";
 
-            const decoration = Decoration.node($from.before(), $from.after(), {
-              class: 'placeholder',
+            const hostDecoration = Decoration.node($from.before(), $from.after(), {
+              class: 'easyview-placeholder-host',
               'data-placeholder': text,
             });
-            return DecorationSet.create(doc, [decoration]);
+
+            return DecorationSet.create(doc, [hostDecoration]);
           }
 
           return DecorationSet.empty;

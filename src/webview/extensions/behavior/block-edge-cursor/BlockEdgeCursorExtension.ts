@@ -37,6 +37,12 @@ interface BlockEdgeCursorState {
 }
 
 const blockEdgeCursorKey = new PluginKey<BlockEdgeCursorState>('blockEdgeCursor');
+const BLOCK_EDGE_TEXT_INPUT_TYPES = new Set([
+  'insertText',
+  'insertCompositionText',
+  'insertFromComposition',
+  'insertReplacementText',
+]);
 
 export class BlockEdgeCursorExtension extends Extension {
   get name() {
@@ -51,6 +57,13 @@ export class BlockEdgeCursorExtension extends Extension {
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
+  const arrowKeyHandler = keydownHandler({
+    ArrowLeft: arrow('horiz', -1),
+    ArrowRight: arrow('horiz', 1),
+    ArrowUp: arrow('vert', -1),
+    ArrowDown: arrow('vert', 1),
+  });
+
   return new Plugin<BlockEdgeCursorState>({
     key: blockEdgeCursorKey,
 
@@ -166,14 +179,36 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
         return true;
       },
 
-      handleKeyDown: keydownHandler({
-        ArrowLeft: arrow('horiz', -1),
-        ArrowRight: arrow('horiz', 1),
-        ArrowUp: arrow('vert', -1),
-        ArrowDown: arrow('vert', 1),
-      }),
+      handleKeyDown(view: EditorView, event: KeyboardEvent) {
+        if (shouldPrepareBlockEdgeForTyping(view, event)) {
+          materializeTextCursorFromBlockEdge(view);
+          return false;
+        }
+
+        return arrowKeyHandler(view, event);
+      },
+      handleTextInput(view: EditorView, _from: number, _to: number, text: string) {
+        if (!(view.state.selection instanceof BlockEdgeCursor)) return false;
+        if (!materializeTextCursorFromBlockEdge(view)) return false;
+
+        const selection = view.state.selection;
+        if (!(selection instanceof TextSelection) || !selection.empty) {
+          return false;
+        }
+
+        const insertPos = selection.from;
+        view.dispatch(
+          view.state.tr.insertText(text, insertPos, insertPos)
+        );
+        return true;
+      },
 
       handleDOMEvents: {
+        compositionstart(view: EditorView) {
+          if (!(view.state.selection instanceof BlockEdgeCursor)) return false;
+          materializeTextCursorFromBlockEdge(view);
+          return false;
+        },
         mousedown(view: EditorView, event: MouseEvent) {
           if (!(view.state.selection instanceof BlockEdgeCursor)) return false;
           const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
@@ -190,29 +225,13 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
         },
         beforeinput(view: EditorView, event: InputEvent) {
           if (
-            event.inputType !== 'insertCompositionText' ||
+            !BLOCK_EDGE_TEXT_INPUT_TYPES.has(event.inputType) ||
             !(view.state.selection instanceof BlockEdgeCursor)
           ) {
             return false;
           }
 
-          const { $from } = view.state.selection;
-          const insert = $from.parent
-            .contentMatchAt($from.index())
-            .findWrapping(view.state.schema.nodes.text);
-          if (!insert) return false;
-
-          let frag = Fragment.empty;
-          for (let i = insert.length - 1; i >= 0; i--) {
-            frag = Fragment.from(insert[i].createAndFill(null, frag));
-          }
-          const tr = view.state.tr.replace(
-            $from.pos,
-            $from.pos,
-            new Slice(frag, 0, 0)
-          );
-          tr.setSelection(TextSelection.near(tr.doc.resolve($from.pos + 1)));
-          view.dispatch(tr);
+          materializeTextCursorFromBlockEdge(view);
           return false;
         },
       },
@@ -222,6 +241,39 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
       return new BlockEdgeCursorView(editorView);
     },
   });
+}
+
+function shouldPrepareBlockEdgeForTyping(view: EditorView, event: KeyboardEvent): boolean {
+  if (!(view.state.selection instanceof BlockEdgeCursor)) return false;
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  return event.isComposing || event.key === 'Process' || event.key === 'Dead' || event.keyCode === 229;
+}
+
+function materializeTextCursorFromBlockEdge(view: EditorView): boolean {
+  if (!(view.state.selection instanceof BlockEdgeCursor)) return false;
+
+  const { $from } = view.state.selection;
+  const insert = $from.parent
+    .contentMatchAt($from.index())
+    .findWrapping(view.state.schema.nodes.text);
+  if (!insert) return false;
+
+  let frag = Fragment.empty;
+  for (let index = insert.length - 1; index >= 0; index--) {
+    frag = Fragment.from(insert[index].createAndFill(null, frag));
+  }
+
+  const tr = view.state.tr.replace(
+    $from.pos,
+    $from.pos,
+    new Slice(frag, 0, 0)
+  );
+  tr.setSelection(TextSelection.near(tr.doc.resolve($from.pos + 1)));
+  view.dispatch(tr);
+  if (!view.hasFocus()) {
+    view.focus();
+  }
+  return true;
 }
 
 // ─── Visual rect helper ──────────────────────────────────────────────────────

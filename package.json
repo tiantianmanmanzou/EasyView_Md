@@ -1,19 +1,24 @@
 {
-  "name": "easyview",
-  "displayName": "EasyView",
-  "description": "EasyView supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.80",
+  "name": "easyview-md",
+  "displayName": "EasyView_Md",
+  "description": "EasyView_Md supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
+  "version": "1.0.124",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "file:///Users/zhangxy/GenAI/Markdown-preview-wysiwyg"
+    "url": "git+https://github.com/tiantianmanmanzou/EasyView_Md.git"
+  },
+  "homepage": "https://github.com/tiantianmanmanzou/EasyView_Md#readme",
+  "bugs": {
+    "url": "https://github.com/tiantianmanmanzou/EasyView_Md/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
+    "Markdown",
     "Other"
   ],
   "keywords": [
@@ -37,7 +42,7 @@
     "customEditors": [
       {
         "viewType": "inlineMd.markdownEditor",
-        "displayName": "EasyView",
+        "displayName": "EasyView_Md",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -55,39 +60,39 @@
     "commands": [
       {
         "command": "inlineMd.openEditor",
-        "title": "Open with EasyView",
-        "category": "EasyView",
+        "title": "Open with EasyView_Md",
+        "category": "EasyView_Md",
         "icon": "$(preview)"
       },
       {
         "command": "inlineMd.openNativeEditor",
         "title": "Open in Native Markdown Editor",
-        "category": "EasyView"
+        "category": "EasyView_Md"
       },
       {
         "command": "inlineMd.exportHtmlLight",
         "title": "Export to HTML (Light)",
-        "category": "EasyView"
+        "category": "EasyView_Md"
       },
       {
         "command": "inlineMd.exportHtmlDark",
         "title": "Export to HTML (Dark)",
-        "category": "EasyView"
+        "category": "EasyView_Md"
       },
       {
         "command": "inlineMd.exportPdfLight",
         "title": "Export to PDF (Light)",
-        "category": "EasyView"
+        "category": "EasyView_Md"
       },
       {
         "command": "inlineMd.exportPdfDark",
         "title": "Export to PDF (Dark)",
-        "category": "EasyView"
+        "category": "EasyView_Md"
       },
       {
         "command": "inlineMd.stageFile",
         "title": "Stage Current File",
-        "category": "EasyView"
+        "category": "EasyView_Md"
       }
     ],
     "menus": {
@@ -141,6 +146,8 @@
       }
     ],
     "configurationDefaults": {
+      "markdown.editor.filePaste.enabled": "smart",
+      "markdown.editor.filePaste.copyIntoWorkspace": "mediaFiles",
       "[markdown]": {
         "editor.fontFamily": "\"Sarasa Mono SC\", \"Sarasa Fixed SC\", \"SF Mono\", Menlo, Monaco, \"Courier New\", monospace"
       },
@@ -149,7 +156,7 @@
       }
     },
     "configuration": {
-      "title": "EasyView",
+      "title": "EasyView_Md",
       "properties": {
         "inlineMd.csvDelimiter": {
           "type": "string",
@@ -184,7 +191,7 @@
         "inlineMd.nativeEditor.forceMonospaceFont": {
           "type": "boolean",
           "default": true,
-          "description": "Force Markdown native source editors to use a CJK-aware monospace font family when opened from EasyView."
+          "description": "Force Markdown native source editors to use a CJK-aware monospace font family when opened from EasyView_Md."
         }
       }
     }
@@ -238,6 +245,7 @@
     "mermaid": "^11.12.1",
     "pdf-lib": "^1.17.1",
     "pdfmake": "^0.3.4",
+    "plantuml-encoder": "^1.4.0",
     "prosemirror-commands": "^1.7.1",
     "prosemirror-dropcursor": "^1.8.2",
     "prosemirror-gapcursor": "^1.4.0",

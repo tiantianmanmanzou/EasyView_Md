@@ -9,6 +9,7 @@ import { downloadFile, ExportImage } from './providerExportHandler';
 import { roundPdfCorners } from './pdfRoundCorners';
 import { ensureNativeMarkdownEditorFont } from './nativeEditorFont';
 import { suppressConflictingMarkdownInlineDecorations } from './conflictingExtensions';
+import { consumePendingCursorForUri } from './openCursorContext';
 
 const inlineSuggestOutput = vscode.window.createOutputChannel('MdPre Inline Suggest');
 
@@ -33,6 +34,43 @@ function stripSnippetPlaceholders(value: string): string {
     .replace(/\$\{(\d+)\|([^}]+)\|\}/g, (_m, _index, choices: string) => choices.split(',')[0] ?? '')
     .replace(/\$\{\d+\}/g, '')
     .replace(/\$\d+/g, '');
+}
+
+function sanitizeImageBaseName(name: string): string {
+  const normalized = name
+    .normalize('NFKD')
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return normalized || 'image';
+}
+
+function allocatePastedImageTarget(document: vscode.TextDocument, extension: string): { directory: vscode.Uri; file: vscode.Uri } {
+  const docDir = path.dirname(document.uri.fsPath);
+  const stem = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath));
+  const safeStem = sanitizeImageBaseName(stem);
+  const directory = vscode.Uri.file(path.join(docDir, `${safeStem}.assets`));
+  const filename = `${safeStem}-${Date.now()}${extension}`;
+  const file = vscode.Uri.joinPath(directory, filename);
+  return { directory, file };
+}
+
+function mimeTypeToImageExtension(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'image/jpeg':
+    case 'image/jpg':
+      return '.jpg';
+    case 'image/webp':
+      return '.webp';
+    case 'image/gif':
+      return '.gif';
+    case 'image/bmp':
+      return '.bmp';
+    case 'image/svg+xml':
+      return '.svg';
+    default:
+      return '.png';
+  }
 }
 
 function getDocumentLineOffset(document: vscode.TextDocument): number {
@@ -654,9 +692,9 @@ export async function handleWebviewMessage(
       if (ctx.getIsUpdatingWebview()) return;
 
       const editContent = message.content;
-      const fullWidth = message.fullWidth ?? false;
-      const tocVisible = message.tocVisible ?? false;
-      const tableWrap = message.tableWrap ?? true;
+      const fullWidth = message.fullWidth ?? true;
+      const tocVisible = message.tocVisible ?? true;
+      const tableWrap = message.tableWrap ?? false;
 
       const newQueue = ctx.getOperationQueue().then(async () => {
         await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap });
@@ -669,9 +707,9 @@ export async function handleWebviewMessage(
       const editContent = typeof message.content === 'string'
         ? message.content
         : ctx.getLastKnownContent();
-      const fullWidth = message.fullWidth ?? false;
-      const tocVisible = message.tocVisible ?? false;
-      const tableWrap = message.tableWrap ?? true;
+      const fullWidth = message.fullWidth ?? true;
+      const tocVisible = message.tocVisible ?? true;
+      const tableWrap = message.tableWrap ?? false;
       const requestedLine = typeof message.line === 'number' ? message.line : 0;
       const requestedCharacter = typeof message.character === 'number' ? message.character : 0;
 
@@ -727,6 +765,13 @@ export async function handleWebviewMessage(
     case 'ready': {
       const rawContent = document.getText();
       const settings = ctx.getEditorSettings();
+      const pendingCursor = consumePendingCursorForUri(document.uri);
+      const activeEditor = vscode.window.activeTextEditor;
+      const fallbackEditor = activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
+        ? activeEditor
+        : vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === document.uri.toString());
+      const initialCursorLine = pendingCursor?.line ?? fallbackEditor?.selection.active.line ?? 0;
+      const initialCursorCharacter = pendingCursor?.character ?? fallbackEditor?.selection.active.character ?? 0;
 
       // Remove settings comment and normalize to LF before sending to webview
       const contentWithoutComment = rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
@@ -741,6 +786,9 @@ export async function handleWebviewMessage(
         fullWidth: settings.fullWidth,
         tocVisible: settings.tocVisible,
         tableWrap: settings.tableWrap,
+        initialCursorLine,
+        initialCursorCharacter,
+        initialTotalLines: Math.max(1, document.lineCount),
         imagePathMap: imagePathMap,
       });
       break;
@@ -1019,6 +1067,52 @@ export async function handleWebviewMessage(
           images,
           pos: dropPos,
         });
+      }
+      break;
+    }
+
+    case 'pasteImage': {
+      const dataUrl = typeof message.dataUrl === 'string' ? message.dataUrl : '';
+      const mimeType = typeof message.mimeType === 'string' ? message.mimeType : 'image/png';
+      const insertPos = typeof message.pos === 'number' ? message.pos : undefined;
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i);
+      if (!match) break;
+
+      try {
+        const effectiveMime = (match[1] || mimeType).toLowerCase();
+        const base64 = match[2].replace(/\s+/g, '');
+        const bytes = Uint8Array.from(Buffer.from(base64, 'base64'));
+        const extension = mimeTypeToImageExtension(effectiveMime);
+        const { directory, file } = allocatePastedImageTarget(document, extension);
+        await vscode.workspace.fs.createDirectory(directory);
+        await vscode.workspace.fs.writeFile(file, bytes);
+
+        const fileDir = vscode.Uri.file(path.dirname(file.fsPath));
+        const currentRoots = webviewPanel.webview.options.localResourceRoots || [];
+        const alreadyIncluded = currentRoots.some((root) => file.fsPath.startsWith(root.fsPath));
+        if (!alreadyIncluded) {
+          webviewPanel.webview.options = {
+            ...webviewPanel.webview.options,
+            localResourceRoots: [...currentRoots, fileDir],
+          };
+        }
+
+        const webviewUri = webviewPanel.webview.asWebviewUri(file);
+        const docDir = path.dirname(document.uri.fsPath);
+        let relPath = path.relative(docDir, file.fsPath).replace(/\\/g, '/');
+        if (!relPath.startsWith('.') && !relPath.startsWith('/')) {
+          relPath = './' + relPath;
+        }
+
+        webviewPanel.webview.postMessage({
+          type: 'imageSelected',
+          src: webviewUri.toString(),
+          originalSrc: relPath,
+          pos: insertPos,
+        });
+      } catch (error) {
+        console.error('[InLineMd] Failed to persist pasted image:', error);
+        vscode.window.showErrorMessage('Failed to save pasted image as a file.');
       }
       break;
     }

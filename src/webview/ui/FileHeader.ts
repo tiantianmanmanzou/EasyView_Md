@@ -107,8 +107,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   leftGroup.className = 'file-header-actions file-header-actions-left';
 
   const tocBtn = document.createElement('button');
-  tocBtn.className = 'file-header-btn';
-  tocBtn.title = 'Toggle Table of Contents (Option+W)';
+  tocBtn.className = 'file-header-btn active';
+  tocBtn.title = 'Hide Table of Contents (Option+W)';
   tocBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="15" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="17" y2="18"/></svg>';
   leftGroup.appendChild(tocBtn);
 
@@ -120,9 +120,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   leftGroup.appendChild(collapseBtn);
 
   const widthBtn = document.createElement('button');
-  widthBtn.className = 'file-header-btn';
-  widthBtn.title = 'Expand to full width (Option+A)';
-  widthBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+  widthBtn.className = 'file-header-btn active';
+  widthBtn.title = 'Exit full width (Option+A)';
+  widthBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>';
   widthBtn.addEventListener('click', () => {
     const state = getState();
     const newFullWidth = !state.isFullWidth;
@@ -139,8 +139,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   leftGroup.appendChild(widthBtn);
 
   const tableWrapBtn = document.createElement('button');
-  tableWrapBtn.className = 'file-header-btn active'; // default: active (enabled)
-  tableWrapBtn.title = 'Disable table word wrap (Option+D)';
+  tableWrapBtn.className = 'file-header-btn'; // default: inactive (disabled)
+  tableWrapBtn.title = 'Enable table word wrap (Option+D)';
   tableWrapBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="10" y2="18"/></svg>';
   tableWrapBtn.addEventListener('click', () => {
     const state = getState();
@@ -275,7 +275,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       // Webview storage can be unavailable in restricted contexts.
     }
     themeToggleBtn.classList.toggle('active', mode === 'dark');
-    themeToggleBtn.title = mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    themeToggleBtn.title = mode === 'dark' ? 'Switch to light mode (Option+R)' : 'Switch to dark mode (Option+R)';
     themeToggleBtn.innerHTML = mode === 'dark'
       ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>'
       : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/></svg>';

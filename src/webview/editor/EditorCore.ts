@@ -325,7 +325,10 @@ export class EditorCore {
         if (!selectionSet) {
           try { tr.setSelection(TextSelection.atStart(tr.doc)); } catch { /* ignore */ }
         }
-        tr.scrollIntoView();
+        const shouldScrollIntoView = meta?.scrollIntoView !== false;
+        if (shouldScrollIntoView) {
+          tr.scrollIntoView();
+        }
 
         this._view.dispatch(tr);
       }

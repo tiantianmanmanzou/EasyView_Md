@@ -14,3 +14,8 @@ esbuild.mjs
 package-lock.json
 *.md
 !readme.md
+CHANGELOG.md
+dist/**/*.map
+image/**
+image.png
+image-1.png

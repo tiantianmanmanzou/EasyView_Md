@@ -21,3 +21,10 @@ export function isMermaid(node: Node) {
     (node.attrs.language === "mermaid" || node.attrs.language === "mermaidjs")
   );
 }
+
+export function isPlantUml(node: Node) {
+  return (
+    isCode(node) &&
+    (node.attrs.language === 'plantuml' || node.attrs.language === 'puml')
+  );
+}

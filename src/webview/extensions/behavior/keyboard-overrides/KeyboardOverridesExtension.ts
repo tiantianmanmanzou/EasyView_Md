@@ -8,6 +8,7 @@
  */
 
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state';
+import type { EditorView } from 'prosemirror-view';
 import { BlockEdgeCursor } from '../block-edge-cursor/BlockEdgeCursor';
 import type { Schema } from 'prosemirror-model';
 import { Extension } from '../../../editor/EditorExtension';
@@ -17,9 +18,22 @@ export class KeyboardOverridesExtension extends Extension {
     return 'keyboardOverrides';
   }
 
+  private isInsideListContext(view: EditorView, schema: Schema): boolean {
+    const { $from } = view.state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      const nodeType = $from.node(d).type;
+      if (nodeType === schema.nodes.list_item || nodeType === schema.nodes.checkbox_item) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   plugins(schema: Schema): Plugin[] {
     let enterPressed = false;
     let resetTimeout: ReturnType<typeof setTimeout> | null = null;
+    const isInsideListContext = (view: EditorView) => this.isInsideListContext(view, schema);
 
     return [
       new Plugin({
@@ -68,6 +82,15 @@ export class KeyboardOverridesExtension extends Extension {
 
             // Prevent double Enter in VSCode webview
             if (event.code === 'Enter' && !event.shiftKey) {
+              if (isInsideListContext(view)) {
+                enterPressed = false;
+                if (resetTimeout) {
+                  clearTimeout(resetTimeout);
+                  resetTimeout = null;
+                }
+                return false;
+              }
+
               if (enterPressed) {
                 event.preventDefault();
                 event.stopPropagation();

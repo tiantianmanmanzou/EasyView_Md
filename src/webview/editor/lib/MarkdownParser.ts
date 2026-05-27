@@ -148,6 +148,10 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
     return null;
   }
 
+  if (contentDoc.childCount === 0) {
+    contentDoc = schema.nodes.doc.create(null, [schema.nodes.paragraph.create()]);
+  }
+
   // Restore complex HTML content in table cells
   contentDoc = restoreHtmlCells(contentDoc);
   const t3 = performance.now();
@@ -169,7 +173,10 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
   );
 
   // Combine frontmatter + content
-  const nodes = [frontmatterNode, ...contentDoc.content.content];
+  const bodyNodes = contentDoc.childCount > 0
+    ? contentDoc.content.content
+    : [schema.nodes.paragraph.create()];
+  const nodes = [frontmatterNode, ...bodyNodes];
   return schema.nodes.doc.create(null, nodes);
 }
 

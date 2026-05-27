@@ -8,6 +8,7 @@
 import { NodeSelection } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { undo, redo } from 'prosemirror-history';
+import { goToNextCell } from 'prosemirror-tables';
 
 import { EditorCore } from './editor/EditorCore';
 
@@ -24,6 +25,7 @@ import { HorizontalRuleExtension } from './extensions/blocks/horizontal-rule/Hor
 import { TableExtension } from './extensions/blocks/table/TableExtension';
 import { ImageExtension } from './extensions/inline/image/ImageExtension';
 import { MermaidExtension } from './extensions/blocks/mermaid/MermaidExtension';
+import { PlantUmlExtension } from './extensions/blocks/plantuml/PlantUmlExtension';
 import { FrontmatterExtension } from './extensions/blocks/frontmatter/FrontmatterExtension';
 import { DetailsExtension } from './extensions/blocks/details/DetailsExtension';
 import { HtmlBlockExtension } from './extensions/blocks/html-block/HtmlBlockExtension';
@@ -79,15 +81,122 @@ export function getEditorView(): EditorView | null {
 // ─── State ──────────────────────────────────────────────────────────────────
 
 let currentContent = '';
-let isFullWidth = false;
-let isTocVisible = false;
-let isTableWrap = true; // default: enabled
+let isFullWidth = true;
+let isTocVisible = true;
+let isTableWrap = false; // default: disabled
 let isSourceMode = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
 const dualHistory = new DualModeHistory();
 let _skipDualHistoryRecord = false;
 let _hasEditedInCurrentMode = false;
 let _modeEntryContent = ''; // content snapshot when entering current mode
+
+function ensurePlaceholderHorizontalFlowStyles(): void {
+  const styleId = 'easyview-placeholder-horizontal-flow';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .ProseMirror .easyview-placeholder-host {
+      position: relative;
+    }
+
+    .ProseMirror .easyview-placeholder-host::before {
+      content: attr(data-placeholder);
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: block;
+      max-width: calc(100% - 12px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow-wrap: normal;
+      word-break: keep-all;
+      writing-mode: horizontal-tb;
+      text-orientation: mixed;
+      pointer-events: none;
+      user-select: none;
+      vertical-align: top;
+      color: var(--vscode-input-placeholderForeground, #888);
+      font-style: italic;
+      opacity: 0.6;
+      z-index: 0;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureMinimalGitChangeStyles(): void {
+  const styleId = 'easyview-minimal-git-change-styles';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .ProseMirror .block-ai-modified,
+    .ProseMirror .block-ai-added,
+    .ProseMirror .block-ai-active,
+    .ProseMirror .block-ai-fadeout {
+      position: relative;
+      background: transparent !important;
+      background-image: none !important;
+      box-shadow: none !important;
+      border-left: none !important;
+      border-radius: 0 !important;
+    }
+
+    .ProseMirror .block-ai-modified::before,
+    .ProseMirror .block-ai-added::before,
+    .ProseMirror .block-ai-fadeout::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: calc(-1 * var(--easyview-change-rail-offset, 12px));
+      width: 2px;
+      border-radius: 999px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .ProseMirror .block-ai-modified::before {
+      background: var(--vscode-editorWarning-foreground, #f59e0b);
+    }
+
+    .ProseMirror .block-ai-added::before {
+      background: var(--vscode-gitDecoration-addedResourceForeground, #10b981);
+    }
+
+    .ProseMirror .block-ai-fadeout::before {
+      background: var(--vscode-gitDecoration-modifiedResourceForeground, #3b82f6);
+      opacity: 0.45;
+    }
+
+    .ProseMirror .block-ai-active::before {
+      content: none !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function updateGitChangeRailOffset(): void {
+  const scrollArea = document.getElementById('editor-scroll-area');
+  const proseMirror = document.querySelector('#editor .ProseMirror') as HTMLElement | null;
+  if (!scrollArea || !proseMirror) return;
+
+  const referenceBlock =
+    (proseMirror.querySelector(':scope > *:not(.table-wrapper)') as HTMLElement | null) ??
+    (proseMirror.firstElementChild as HTMLElement | null) ??
+    proseMirror;
+
+  const scrollRect = scrollArea.getBoundingClientRect();
+  const referenceRect = referenceBlock.getBoundingClientRect();
+  const paneInset = 6;
+  const offset = Math.max(12, Math.round(referenceRect.left - scrollRect.left - paneInset));
+  proseMirror.style.setProperty('--easyview-change-rail-offset', `${offset}px`);
+}
 
 /** Show a brief toast notification */
 function showToast(message: string) {
@@ -307,6 +416,7 @@ function initEditor() {
     new TableExtension(),
     new ImageExtension(),
     new MermaidExtension(isDark),
+    new PlantUmlExtension(),
     new FrontmatterExtension(),
     new DetailsExtension(),
     new HtmlBlockExtension(),
@@ -354,12 +464,23 @@ function initEditor() {
   const toolbar = new FloatingToolbar();
   console.log(`[InLineMd perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
 
+  const runNativeWysiwygTab = (pmView: EditorView, backwards = false): boolean => {
+    if (goToNextCell(backwards ? -1 : 1)(pmView.state, pmView.dispatch)) {
+      return true;
+    }
+    if (backwards) return false;
+    const { from, to } = pmView.state.selection;
+    pmView.dispatch(pmView.state.tr.insertText('\t', from, to));
+    return true;
+  };
+
   // 3. Create EditorCore
   const tCore = performance.now();
   const editor = new EditorCore({
     extensions,
     keymaps: {
-      Tab: (_state, _dispatch, view) => view ? (runWysiwygTabCompletion?.(view) ?? false) : false,
+      Tab: (_state, _dispatch, view) => view ? runNativeWysiwygTab(view, false) : false,
+      'Shift-Tab': (_state, _dispatch, view) => view ? runNativeWysiwygTab(view, true) : false,
       'Mod-k': (_state, _dispatch, view) => {
         if (view) linkEditPopup.toggle(view);
         return true;
@@ -451,7 +572,12 @@ function initEditor() {
   const view = editor.view!;
   globalEditorView = view;
   window.addEventListener('resize', renderWysiwygGhost);
+  window.addEventListener('resize', updateGitChangeRailOffset);
   document.getElementById('editor-scroll-area')?.addEventListener('scroll', renderWysiwygGhost, { passive: true });
+  const layoutObserver = new ResizeObserver(() => updateGitChangeRailOffset());
+  const scrollAreaElement = document.getElementById('editor-scroll-area');
+  if (scrollAreaElement) layoutObserver.observe(scrollAreaElement);
+  layoutObserver.observe(editorElement);
   editorElement.addEventListener('focusout', () => {
     wysiwygGhostRequestToken++;
     hideWysiwygGhost();
@@ -1106,6 +1232,13 @@ function initEditor() {
       const wrapBtn = document.querySelector('.file-header-btn[title*="table word wrap"]') as HTMLElement | null;
       wrapBtn?.click();
     }
+    if (isOptionOnly && e.code === 'KeyR') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const themeBtn = document.querySelector('.file-header-btn[title*="Switch to light mode"], .file-header-btn[title*="Switch to dark mode"]') as HTMLElement | null;
+      themeBtn?.click();
+    }
     if (isModKey && e.key === 's' && isSourceMode) {
       e.preventDefault();
       editor.flushSync();
@@ -1130,6 +1263,11 @@ function initEditor() {
   window.addEventListener('inlinemd:dropImages', ((e: CustomEvent) => {
     const { paths, pos } = e.detail;
     vscode.postMessage({ type: 'dropImages', paths, pos });
+  }) as EventListener);
+
+  window.addEventListener('inlinemd:pasteImage', ((e: CustomEvent) => {
+    const { dataUrl, mimeType, name, pos } = e.detail;
+    vscode.postMessage({ type: 'pasteImage', dataUrl, mimeType, name, pos });
   }) as EventListener);
 
   // 8. Theme change observer
@@ -1218,7 +1356,22 @@ function initEditor() {
 
         const isInit = message.type === 'init';
         const tSetContent = isInit ? performance.now() : 0;
-	        editor.setContent(content, isInit);
+        const scrollArea = document.getElementById('editor-scroll-area');
+        const prevScrollRatio = !isInit && scrollArea && scrollArea.scrollHeight > scrollArea.clientHeight
+          ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
+          : 0;
+        editor.setContent(content, isInit, isInit ? undefined : { scrollIntoView: false });
+        if (!isInit && scrollArea) {
+          const restoreScroll = () => {
+            const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+            scrollArea.scrollTop = Math.round(maxScrollTop * prevScrollRatio);
+          };
+          restoreScroll();
+          requestAnimationFrame(restoreScroll);
+          setTimeout(restoreScroll, 60);
+        }
+        requestAnimationFrame(updateGitChangeRailOffset);
+        setTimeout(updateGitChangeRailOffset, 60);
         if (Array.isArray(message.gitLineRanges) && view) {
           view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
             lineRanges: message.gitLineRanges,
@@ -1348,8 +1501,12 @@ function initEditor() {
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
+    ensurePlaceholderHorizontalFlowStyles();
+    ensureMinimalGitChangeStyles();
     initEditor();
   });
 } else {
+  ensurePlaceholderHorizontalFlowStyles();
+  ensureMinimalGitChangeStyles();
   initEditor();
 }

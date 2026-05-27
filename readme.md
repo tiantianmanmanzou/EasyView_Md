@@ -19,11 +19,14 @@ but the default direction is native-editor enhancement.
 - **Native editor enhancement architecture** — based on `TextEditor` + decorations / CodeLens / hover / overlay
 - **Native markdown decorations** — lightweight inline styling directly in the VS Code editor
 - **WYSIWYG editing** — visual editing with full Markdown serialization
-- **Source mode** — switch to raw Markdown editing with CodeMirror 6 (`Ctrl+/`)
+- **Source mode** — switch to raw Markdown editing with CodeMirror 6 (`Ctrl+/` or `Option+Q`)
 - **Auto-save** — seamless integration with VS Code document lifecycle
 - **Dark / Light theme** — auto-detects VS Code theme and adapts
 - **Zoom** — adjustable from 50% to 200%
 - **Full width mode** — expand editor to use the entire panel width
+- **History panel** — open editing history from the top toolbar
+- **One-click stage** — stage current markdown file from the top toolbar (`Option+S`)
+- **Accent text themes** — choose text accent color (`default`, `blue`, `orange red`, `green`, `purple`, `cherry red`)
 - **Slash menu** (`/`) — quick-insert 30+ block types by typing `/` in an empty line
 - **Floating toolbar** — context-aware formatting toolbar on text selection
 - **Drag & drop blocks** — reorder any block by dragging the grip handle
@@ -31,6 +34,29 @@ but the default direction is native-editor enhancement.
 - **Block movement** — move blocks up/down with `Ctrl+Alt+↑/↓`
 - **Undo / Redo** — full history support
 - **Placeholder hints** — helpful text in empty blocks
+
+---
+
+## Top Toolbar
+
+### Left Side
+
+- **TOC toggle** — show/hide table of contents (`Option+W`)
+- **Collapse all headings** — collapse/expand all heading sections
+- **Full width toggle** — switch full-width layout (`Option+A`)
+- **Table word wrap toggle** — enable/disable wrapping inside table cells (`Option+D`)
+- **Zoom controls** — 50% to 200%, click percentage label to reset to 100%, supports `Ctrl/Cmd + Mouse Wheel`
+
+### Right Side
+
+- **Scroll to top** — jump to top of current editor (`Option+↑`)
+- **Scroll to bottom** — jump to bottom of current editor (`Option+↓`)
+- **Stage current file** — stage current markdown file (`Option+S`)
+- **History panel** — toggle history panel from toolbar button
+- **Native source mode** — open native source mode with inline suggestions (`Ctrl+/` or `Option+Q`)
+- **Export menu** — `Export HTML (Light)`, `Export HTML (Dark)`, `Export PDF (Light)`, `Export PDF (Dark)`
+- **Theme mode toggle** — switch light/dark mode (`Option+R`)
+- **Accent theme selector** — `Default text`, `Blue`, `Orange red`, `Green`, `Purple`, `Cherry red`
 
 ---
 
@@ -245,26 +271,36 @@ Add an HTML comment at the top of your markdown file:
 
 ## Keyboard Shortcuts
 
-| Action            | Shortcut                    |
-| ----------------- | --------------------------- |
-| Bold              | `Ctrl+B`                    |
-| Italic            | `Ctrl+I`                    |
-| Underline         | `Ctrl+U`                    |
-| Strikethrough     | `Ctrl+D`                    |
-| Inline Code       | `Ctrl+E`                    |
-| Highlight         | `Ctrl+Shift+H`              |
-| Link              | `Ctrl+K`                    |
-| Heading 1–4       | `Ctrl+Shift+1` – `Ctrl+Shift+4` |
-| Paragraph         | `Ctrl+Shift+0`              |
-| Checkbox List     | `Ctrl+Shift+7`              |
-| Bullet List       | `Ctrl+Shift+8`              |
-| Ordered List      | `Ctrl+Shift+9`              |
-| Blockquote        | `Ctrl+Shift+B`              |
-| Note Callout      | `Ctrl+Shift+N`              |
-| Find & Replace    | `Ctrl+F`                    |
-| Source Mode       | `Ctrl+/`                    |
-| Table of Contents | `Ctrl+Shift+T`              |
-| Move Block Up     | `Ctrl+Alt+↑`                |
+| Action | Shortcut |
+| --- | --- |
+| Bold | `Ctrl+B` |
+| Italic | `Ctrl+I` |
+| Underline | `Ctrl+U` |
+| Strikethrough | `Ctrl+D` |
+| Inline Code | `Ctrl+E` |
+| Highlight | `Ctrl+Shift+H` |
+| Link | `Ctrl+K` |
+| Heading 1–4 | `Ctrl+Shift+1` – `Ctrl+Shift+4` |
+| Paragraph | `Ctrl+Shift+0` |
+| Checkbox List | `Ctrl+Shift+7` |
+| Bullet List | `Ctrl+Shift+8` |
+| Ordered List | `Ctrl+Shift+9` |
+| Blockquote | `Ctrl+Shift+B` |
+| Note Callout | `Ctrl+Shift+N` |
+| Find & Replace | `Ctrl+F` |
+| Source Mode | `Ctrl+/` or `Option+Q` |
+| Table of Contents | `Ctrl+Shift+T` or `Option+W` |
+| Full Width Toggle | `Option+A` |
+| Table Word Wrap Toggle | `Option+D` |
+| Theme Mode Toggle | `Option+R` |
+| Stage Current File | `Option+S` |
+| Scroll to Top | `Option+↑` |
+| Scroll to Bottom | `Option+↓` |
+| Move Block Up | `Ctrl+Alt+↑` |
+| Move Block Down | `Ctrl+Alt+↓` |
+| Hard Break | `Shift+Enter` |
+| Slash Menu | `/` |
+| Save | `Ctrl+S` |
 
 ---
 
@@ -274,14 +310,10 @@ EasyView_Md is maintained as a secondary-development continuation based on **Mar
 
 Thanks to the original author for the foundational editor architecture and implementation.
 
-| Move Block Down | `Ctrl+Alt+↓` |
-
-| Hard Break | `Shift+Enter` |
-
-| Slash Menu | `/` |
-
-| Save | `Ctrl+S` |
-
 ---
 
 ## License
+
+This project is licensed under the MIT License.
+
+See [LICENSE.txt](./LICENSE.txt) for the full license text.

@@ -24,7 +24,16 @@ export class TableOfContents {
   private view: EditorView;
   private sidebar: HTMLElement | null = null;
   private tocList: HTMLElement | null = null;
+  private statusBar: HTMLElement | null = null;
+  private statusTotalChars: HTMLElement | null = null;
+  private statusLine: HTMLElement | null = null;
+  private statusSelectedChars: HTMLElement | null = null;
   private filterInput: HTMLInputElement | null = null;
+  private levelButtons: Array<{ level: number; el: HTMLButtonElement }> = [];
+  private levelToggleBtn: HTMLButtonElement | null = null;
+  private maxVisibleLevel: number | null = null; // null = show all levels
+  private collapsedHeadingPos = new Set<number>();
+  private expandedHeadingPos = new Set<number>();
   private headings: HeadingEntry[] = [];
   private filterText = '';
   private isVisible = false;
@@ -52,40 +61,74 @@ export class TableOfContents {
     this.sidebar = document.createElement('div');
     this.sidebar.className = 'toc-sidebar hidden';
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'toc-sidebar-header';
-    header.textContent = 'Contents';
-    this.sidebar.appendChild(header);
-
-    // Filter input
-    const filterWrapper = document.createElement('div');
-    filterWrapper.className = 'toc-filter-wrapper';
-    this.filterInput = document.createElement('input');
-    this.filterInput.type = 'text';
-    this.filterInput.className = 'toc-filter-input';
-    this.filterInput.placeholder = 'Filter...';
-    this.filterInput.addEventListener('input', () => {
-      this.filterText = (this.filterInput?.value || '').toLowerCase();
+    // Top controls: show heading levels H1 / H1-H2 / H1-H2-H3.
+    const controls = document.createElement('div');
+    controls.className = 'toc-level-controls';
+    this.levelToggleBtn = document.createElement('button');
+    this.levelToggleBtn.className = 'toc-level-btn toc-level-toggle-btn active';
+    this.levelToggleBtn.addEventListener('click', () => {
+      // Toggle between "show all" and "collapsed to H1".
+      if (this.maxVisibleLevel === null) {
+        this.maxVisibleLevel = 1;
+      } else {
+        this.maxVisibleLevel = null;
+      }
+      this.refreshLevelControls();
       this.renderList();
     });
-    // Prevent editor from stealing focus on key events
-    this.filterInput.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.code === 'Escape') {
-        this.filterInput!.value = '';
-        this.filterText = '';
-        this.renderList();
-        this.view.focus();
+    controls.appendChild(this.levelToggleBtn);
+
+    const levelOptions: Array<{ level: number; label: string; title: string }> = [
+      { level: 1, label: 'H1', title: 'Show level 1 headings only' },
+      { level: 2, label: 'H2', title: 'Show level 1-2 headings' },
+      { level: 3, label: 'H3', title: 'Show level 1-3 headings' },
+    ];
+    levelOptions.forEach((option) => {
+      const btn = document.createElement('button');
+      btn.className = 'toc-level-btn';
+      if (option.level === this.maxVisibleLevel) {
+        btn.classList.add('active');
       }
+      btn.textContent = option.label;
+      btn.title = option.title;
+      btn.addEventListener('click', () => {
+        // Click same level again => cancel level filter (show all).
+        this.maxVisibleLevel = this.maxVisibleLevel === option.level ? null : option.level;
+        this.refreshLevelControls();
+        this.renderList();
+      });
+      controls.appendChild(btn);
+      this.levelButtons.push({ level: option.level, el: btn });
     });
-    filterWrapper.appendChild(this.filterInput);
-    this.sidebar.appendChild(filterWrapper);
+    this.sidebar.appendChild(controls);
+    this.refreshLevelControls();
 
     // List
     this.tocList = document.createElement('ul');
     this.tocList.className = 'toc-list';
     this.sidebar.appendChild(this.tocList);
+
+    this.statusBar = document.createElement('div');
+    this.statusBar.className = 'toc-status-bar';
+
+    this.statusTotalChars = document.createElement('span');
+    this.statusTotalChars.className = 'toc-status-item';
+    this.statusBar.appendChild(this.statusTotalChars);
+
+    this.statusLine = document.createElement('span');
+    this.statusLine.className = 'toc-status-item';
+    this.statusBar.appendChild(this.statusLine);
+
+    this.statusSelectedChars = document.createElement('span');
+    this.statusSelectedChars.className = 'toc-status-item';
+    this.statusBar.appendChild(this.statusSelectedChars);
+
+    this.sidebar.appendChild(this.statusBar);
+    this.setStatus({
+      totalChars: 0,
+      line: 1,
+      selectedChars: 0,
+    });
 
     // Insert into #editor-body before #editor-scroll-area
     const editorBody = document.getElementById('editor-body');
@@ -127,10 +170,20 @@ export class TableOfContents {
 
     this.tocList.innerHTML = '';
 
+    const headingPosSet = new Set(this.headings.map((h) => h.pos));
+    // Drop stale state for headings no longer present.
+    this.collapsedHeadingPos.forEach((pos) => {
+      if (!headingPosSet.has(pos)) this.collapsedHeadingPos.delete(pos);
+    });
+    this.expandedHeadingPos.forEach((pos) => {
+      if (!headingPosSet.has(pos)) this.expandedHeadingPos.delete(pos);
+    });
+
+    const visibleByTree = this.computeVisibleHeadings();
     // Filter headings by search text
     const filtered = this.filterText
-      ? this.headings.filter(h => h.text.toLowerCase().includes(this.filterText))
-      : this.headings;
+      ? visibleByTree.filter((h) => h.text.toLowerCase().includes(this.filterText))
+      : visibleByTree;
 
     if (filtered.length === 0) {
       const empty = document.createElement('li');
@@ -141,19 +194,90 @@ export class TableOfContents {
     }
 
     // Outline: normalize heading levels (min becomes 1)
-    const minLevel = this.headings.reduce(
+    const minLevel = filtered.reduce(
       (min, h) => (h.level < min ? h.level : min),
       Infinity
     );
     const adjustment = minLevel - 1;
 
+    const hasChildrenMap = new Map<number, boolean>();
+    const hasChildrenBeyondMaxMap = new Map<number, boolean>();
+    // Child existence is computed from the full extracted heading tree, not current level filter,
+    // so H1/H2 still show toggle buttons even when their children are currently hidden by H1/H2 mode.
+    for (let i = 0; i < this.headings.length; i++) {
+      const current = this.headings[i];
+      let hasChildren = false;
+      let hasChildrenBeyondMax = false;
+      for (let j = i + 1; j < this.headings.length; j++) {
+        const next = this.headings[j];
+        if (next.level <= current.level) break;
+        hasChildren = true;
+        if (this.maxVisibleLevel !== null && next.level > this.maxVisibleLevel) {
+          hasChildrenBeyondMax = true;
+          // Found at least one descendant hidden by level mode; no need to keep scanning.
+          break;
+        }
+      }
+      hasChildrenMap.set(current.pos, hasChildren);
+      hasChildrenBeyondMaxMap.set(current.pos, hasChildrenBeyondMax);
+    }
+
     filtered.forEach((heading) => {
+      const hasChildren = hasChildrenMap.get(heading.pos) ?? false;
+      const hasChildrenBeyondMax = hasChildrenBeyondMaxMap.get(heading.pos) ?? false;
+
       const item = document.createElement('li');
       item.className = 'toc-item';
       item.setAttribute('data-level', String(heading.level - adjustment));
       item.setAttribute('data-pos', String(heading.pos));
-      item.textContent = heading.text || '(empty)';
       item.title = heading.text;
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'toc-item-toggle';
+      if (!hasChildren) {
+        toggleBtn.classList.add('empty');
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = '';
+        toggleBtn.title = 'No child headings';
+      } else {
+        const explicitCollapsed = this.collapsedHeadingPos.has(heading.pos);
+        const levelCollapsed = this.maxVisibleLevel !== null
+          && hasChildrenBeyondMax
+          && !this.expandedHeadingPos.has(heading.pos);
+        const isCollapsed = explicitCollapsed || levelCollapsed;
+        toggleBtn.textContent = isCollapsed ? '▸' : '▾';
+        toggleBtn.title = isCollapsed ? 'Expand children' : 'Collapse children';
+        toggleBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const explicitCollapsedNow = this.collapsedHeadingPos.has(heading.pos);
+          const expandedOverrideNow = this.expandedHeadingPos.has(heading.pos);
+          const levelCollapsedNow = this.maxVisibleLevel !== null
+            && hasChildrenBeyondMax
+            && !expandedOverrideNow;
+
+          if (explicitCollapsedNow) {
+            this.collapsedHeadingPos.delete(heading.pos);
+          } else if (levelCollapsedNow) {
+            this.expandedHeadingPos.add(heading.pos);
+            this.collapsedHeadingPos.delete(heading.pos);
+          } else if (expandedOverrideNow) {
+            this.expandedHeadingPos.delete(heading.pos);
+          } else {
+            this.collapsedHeadingPos.add(heading.pos);
+            this.expandedHeadingPos.delete(heading.pos);
+          }
+          this.renderList();
+        });
+      }
+
+      const text = document.createElement('span');
+      text.className = 'toc-item-text';
+      text.textContent = heading.text || '(empty)';
+      text.title = heading.text;
+
+      item.appendChild(toggleBtn);
+      item.appendChild(text);
 
       item.addEventListener('click', (e) => {
         e.preventDefault();
@@ -199,7 +323,7 @@ export class TableOfContents {
 
     // Source mode: use external provider for active heading
     if (this.sourceGetActivePos) {
-      const activePos = this.sourceGetActivePos();
+      const activePos = this.findVisibleAncestorPos(this.sourceGetActivePos());
       if (activePos === this.activeIndex) return;
       this.activeIndex = activePos;
       this.applyActiveClass(activePos);
@@ -250,9 +374,72 @@ export class TableOfContents {
       activePos = lastVisiblePos;
     }
 
+    activePos = this.findVisibleAncestorPos(activePos);
     if (activePos === this.activeIndex) return;
     this.activeIndex = activePos;
     this.applyActiveClass(activePos);
+  }
+
+  private findVisibleAncestorPos(pos: number): number {
+    if (pos < 0 || this.headings.length === 0) return -1;
+    const visibleByTree = this.computeVisibleHeadings();
+    const visiblePosSet = new Set(visibleByTree.map((h) => h.pos));
+    let candidate = -1;
+    for (const heading of this.headings) {
+      if (heading.pos > pos) break;
+      if (visiblePosSet.has(heading.pos)) {
+        candidate = heading.pos;
+      }
+    }
+    return candidate;
+  }
+
+  private computeVisibleHeadings(): HeadingEntry[] {
+    if (this.headings.length === 0) return [];
+    const result: HeadingEntry[] = [];
+    const collapsedStack: Array<{ level: number; pos: number }> = [];
+    const expandedStack: Array<{ level: number; pos: number }> = [];
+    const maxVisible = this.maxVisibleLevel ?? Number.POSITIVE_INFINITY;
+
+    for (const heading of this.headings) {
+      while (collapsedStack.length > 0 && heading.level <= collapsedStack[collapsedStack.length - 1].level) {
+        collapsedStack.pop();
+      }
+      while (expandedStack.length > 0 && heading.level <= expandedStack[expandedStack.length - 1].level) {
+        expandedStack.pop();
+      }
+
+      const hiddenByCollapse = collapsedStack.length > 0;
+      const expandedByAncestor = expandedStack.length > 0;
+      const visibleByLevel = heading.level <= maxVisible || expandedByAncestor;
+
+      if (!hiddenByCollapse && visibleByLevel) {
+        result.push(heading);
+      }
+
+      if (this.collapsedHeadingPos.has(heading.pos)) {
+        collapsedStack.push({ level: heading.level, pos: heading.pos });
+      }
+      if (this.expandedHeadingPos.has(heading.pos)) {
+        expandedStack.push({ level: heading.level, pos: heading.pos });
+      }
+    }
+
+    return result;
+  }
+
+  private refreshLevelControls(): void {
+    if (this.levelToggleBtn) {
+      const isAll = this.maxVisibleLevel === null;
+      this.levelToggleBtn.textContent = isAll ? '▾' : '▸';
+      this.levelToggleBtn.title = isAll
+        ? 'Collapse to level 1'
+        : 'Expand all levels';
+      this.levelToggleBtn.classList.toggle('active', isAll);
+    }
+    this.levelButtons.forEach((entry) => {
+      entry.el.classList.toggle('active', this.maxVisibleLevel === entry.level);
+    });
   }
 
   private applyActiveClass(activePos: number): void {
@@ -450,6 +637,16 @@ export class TableOfContents {
 
   public get visible(): boolean {
     return this.isVisible;
+  }
+
+  public setStatus(stats: { totalChars: number; line: number; selectedChars: number }): void {
+    if (!this.statusTotalChars || !this.statusLine || !this.statusSelectedChars) return;
+    const totalChars = Math.max(0, Number.isFinite(stats.totalChars) ? Math.floor(stats.totalChars) : 0);
+    const line = Math.max(1, Number.isFinite(stats.line) ? Math.floor(stats.line) : 1);
+    const selectedChars = Math.max(0, Number.isFinite(stats.selectedChars) ? Math.floor(stats.selectedChars) : 0);
+    this.statusTotalChars.textContent = `Chars ${totalChars}`;
+    this.statusLine.textContent = `Ln ${line}`;
+    this.statusSelectedChars.textContent = `Sel ${selectedChars}`;
   }
 
   public destroy(): void {

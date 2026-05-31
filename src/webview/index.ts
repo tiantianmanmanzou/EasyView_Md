@@ -48,7 +48,7 @@ import { PlaceholderExtension } from './extensions/behavior/placeholder/Placehol
 import { ClipboardExtension } from './extensions/behavior/clipboard/ClipboardExtension';
 import { AiChangesExtension, GIT_CHANGE_META } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
-import { createPasteParser } from './editor/lib/MarkdownParser';
+import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
 
 // UI
 import { FloatingToolbar } from './extensions/behavior/toolbar/ToolbarFloating';
@@ -59,7 +59,7 @@ import { TableOfContents } from './extensions/blocks/heading/TableOfContents';
 import { generateStandaloneHtml } from './extensions/export/html/ExportHtml';
 import { createSourceEditor } from './editor/SourceEditor';
 import { DualModeHistory } from './editor/DualModeHistory';
-import { createFileHeader } from './ui/FileHeader';
+import { createFileHeader, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
 import { HistoryPanel } from './ui/HistoryPanel';
 
 // ─── VS Code API ────────────────────────────────────────────────────────────
@@ -81,6 +81,7 @@ export function getEditorView(): EditorView | null {
 // ─── State ──────────────────────────────────────────────────────────────────
 
 let currentContent = '';
+let autoFollowExternalEdits = true;
 let isFullWidth = true;
 let isTocVisible = true;
 let isTableWrap = false; // default: disabled
@@ -90,6 +91,117 @@ const dualHistory = new DualModeHistory();
 let _skipDualHistoryRecord = false;
 let _hasEditedInCurrentMode = false;
 let _modeEntryContent = ''; // content snapshot when entering current mode
+let toolbarShortcuts: ToolbarShortcutConfig = {
+  openWithEasyView: 'Alt+E',
+  toggleToc: 'Alt+W',
+  toggleFullWidth: 'Alt+A',
+  toggleTableWrap: 'Alt+D',
+  toggleExternalFollow: 'Alt+F',
+  toggleTheme: 'Alt+R',
+  openSourceMode: 'Alt+Q',
+  stageFile: 'Alt+S',
+  scrollTop: 'Alt+ArrowUp',
+  scrollBottom: 'Alt+ArrowDown',
+};
+
+function normalizeShortcutKeyLabel(value: string): string {
+  const lower = value.trim().toLowerCase();
+  if (!lower) return '';
+  if (lower === 'up' || lower === 'arrowup') return 'ArrowUp';
+  if (lower === 'down' || lower === 'arrowdown') return 'ArrowDown';
+  if (lower === 'left' || lower === 'arrowleft') return 'ArrowLeft';
+  if (lower === 'right' || lower === 'arrowright') return 'ArrowRight';
+  if (lower === 'space' || lower === ' ') return 'Space';
+  if (/^f\d{1,2}$/i.test(lower)) return lower.toUpperCase();
+  if (lower.length === 1) return lower.toUpperCase();
+  return value[0].toUpperCase() + value.slice(1).toLowerCase();
+}
+
+function parseShortcut(shortcut: string): { ctrl: boolean; meta: boolean; alt: boolean; shift: boolean; key: string } | null {
+  const raw = shortcut.trim();
+  if (!raw) return null;
+  const parts = raw.split('+').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const parsed = { ctrl: false, meta: false, alt: false, shift: false, key: '' };
+  for (const partRaw of parts) {
+    const part = partRaw.toLowerCase();
+    if (part === 'ctrl' || part === 'control') {
+      parsed.ctrl = true;
+      continue;
+    }
+    if (part === 'meta' || part === 'cmd' || part === 'command') {
+      parsed.meta = true;
+      continue;
+    }
+    if (part === 'alt' || part === 'option') {
+      parsed.alt = true;
+      continue;
+    }
+    if (part === 'shift') {
+      parsed.shift = true;
+      continue;
+    }
+    parsed.key = normalizeShortcutKeyLabel(partRaw);
+  }
+  return parsed.key ? parsed : null;
+}
+
+function eventMatchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  const parsed = parseShortcut(shortcut);
+  if (!parsed) return false;
+
+  const code = event.code || '';
+  const codeKeyMap: Record<string, string> = {
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    Backquote: '`',
+    Space: 'Space',
+    Tab: 'Tab',
+    Enter: 'Enter',
+    Escape: 'Escape',
+    Delete: 'Delete',
+    Backspace: 'Backspace',
+  };
+  let key = '';
+  if (code.startsWith('Key') && code.length === 4) {
+    key = code.slice(3).toUpperCase();
+  } else if (code.startsWith('Digit') && code.length === 6) {
+    key = code.slice(5);
+  } else if (code.startsWith('Numpad') && code.length > 6) {
+    const np = code.slice(6);
+    const npMap: Record<string, string> = {
+      Divide: '/',
+      Multiply: '*',
+      Subtract: '-',
+      Add: '+',
+      Decimal: '.',
+      Enter: 'Enter',
+    };
+    key = npMap[np] ?? (np.length === 1 ? np : `Numpad${np}`);
+  } else if (codeKeyMap[code]) {
+    key = codeKeyMap[code];
+  } else {
+    const fallback = event.key === ' ' ? 'Space' : event.key;
+    key = normalizeShortcutKeyLabel(fallback);
+  }
+  return event.ctrlKey === parsed.ctrl
+    && event.metaKey === parsed.meta
+    && event.altKey === parsed.alt
+    && event.shiftKey === parsed.shift
+    && key === parsed.key;
+}
+
+function matchesToolbarShortcut(event: KeyboardEvent, action: ToolbarShortcutAction): boolean {
+  return eventMatchesShortcut(event, toolbarShortcuts[action] || '');
+}
 
 function ensurePlaceholderHorizontalFlowStyles(): void {
   const styleId = 'easyview-placeholder-horizontal-flow';
@@ -196,6 +308,40 @@ function updateGitChangeRailOffset(): void {
   const paneInset = 6;
   const offset = Math.max(12, Math.round(referenceRect.left - scrollRect.left - paneInset));
   proseMirror.style.setProperty('--easyview-change-rail-offset', `${offset}px`);
+}
+
+function findFirstChangedLine(previousContent: string, nextContent: string): number | null {
+  if (previousContent === nextContent) return null;
+  const prevLines = previousContent.split('\n');
+  const nextLines = nextContent.split('\n');
+  const minCount = Math.min(prevLines.length, nextLines.length);
+
+  for (let i = 0; i < minCount; i++) {
+    if (prevLines[i] !== nextLines[i]) {
+      return i + 1;
+    }
+  }
+
+  return minCount + 1;
+}
+
+function scrollWysiwygToApproxLine(line: number, totalLines: number): void {
+  const scrollArea = document.getElementById('editor-scroll-area');
+  if (!scrollArea) return;
+
+  const safeTotal = Math.max(1, totalLines);
+  const safeLine = Math.min(Math.max(1, line), safeTotal);
+  const ratio = (safeLine - 1) / Math.max(1, safeTotal - 1);
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  const behavior: ScrollBehavior = prefersReducedMotion ? 'auto' : 'smooth';
+  const animate = () => {
+    const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+    const targetTop = Number.isFinite(ratio) ? Math.round(maxScrollTop * ratio) : 0;
+    scrollArea.scrollTo({ top: targetTop, behavior });
+  };
+
+  requestAnimationFrame(animate);
+  setTimeout(animate, 50);
 }
 
 /** Show a brief toast notification */
@@ -395,6 +541,8 @@ function initEditor() {
   let getWysiwygTabContext = (_pmView: EditorView): WysiwygTabContext | null => null;
   let scheduleWysiwygGhost: ((pmView: EditorView) => void) | null = null;
   let runWysiwygTabCompletion: ((pmView: EditorView) => boolean) | null = null;
+  let cachedLineMapMarkdown = '';
+  let cachedTextblockLineMap: number[] = [];
 
   // Apply default table-wrap class (enabled by default)
   editorElement.classList.add('table-wrap');
@@ -457,6 +605,16 @@ function initEditor() {
     },
     onSettingsChange: () => updateSourceSettingsComment(),
   });
+  fileHeader.setShortcutChangeHandler((config) => {
+    toolbarShortcuts = config;
+    vscode.postMessage({
+      type: 'syncOpenEditorShortcut',
+      shortcut: config.openWithEasyView,
+    });
+  });
+  fileHeader.setExternalFollowHandler((enabled) => {
+    autoFollowExternalEdits = enabled;
+  });
   const editorBody = document.getElementById('editor-body');
   if (editorBody) {
     editorBody.parentElement?.insertBefore(fileHeader.el, editorBody);
@@ -473,6 +631,7 @@ function initEditor() {
     pmView.dispatch(pmView.state.tr.insertText('\t', from, to));
     return true;
   };
+  let updateTocStatusBar = () => {};
 
   // 3. Create EditorCore
   const tCore = performance.now();
@@ -499,6 +658,7 @@ function initEditor() {
         if (imageToolbar.visible) imageToolbar.hide();
       }
       toc.update(view);
+      updateTocStatusBar();
       if (tr.docChanged || tr.selectionSet) {
         hideWysiwygGhost();
         scheduleWysiwygGhost?.(view);
@@ -655,39 +815,6 @@ function initEditor() {
   });
   fileHeader.setTocHandler(() => toc.toggle());
 
-  document.addEventListener('keydown', (e) => {
-    const isModKey = e.ctrlKey || e.metaKey;
-    const isOptionOnly = e.altKey && !e.ctrlKey && !e.metaKey;
-    if (isModKey && e.shiftKey && e.code === 'KeyT' && !e.altKey) {
-      e.preventDefault();
-      toc.toggle();
-      isTocVisible = toc.visible;
-      const tocBtnEl = document.querySelector('.file-header-btn[title*="Table of Contents"], .file-header-btn[title*="Hide Table"]');
-      if (tocBtnEl) {
-        tocBtnEl.classList.toggle('active', isTocVisible);
-        (tocBtnEl as HTMLElement).title = isTocVisible
-          ? 'Hide Table of Contents (Option+W)'
-          : 'Toggle Table of Contents (Option+W)';
-      }
-      postEdit(currentContent);
-      updateSourceSettingsComment();
-    }
-    if (isOptionOnly && e.code === 'KeyW') {
-      e.preventDefault();
-      toc.toggle();
-      isTocVisible = toc.visible;
-      const tocBtnEl = document.querySelector('.file-header-btn[title*="Table of Contents"], .file-header-btn[title*="Hide Table"]');
-      if (tocBtnEl) {
-        tocBtnEl.classList.toggle('active', isTocVisible);
-        (tocBtnEl as HTMLElement).title = isTocVisible
-          ? 'Hide Table of Contents (Option+W)'
-          : 'Toggle Table of Contents (Option+W)';
-      }
-      postEdit(currentContent);
-      updateSourceSettingsComment();
-    }
-  });
-
   let isAllCollapsed = false;
   fileHeader.setCollapseHandler(() => {
     isAllCollapsed = !isAllCollapsed;
@@ -764,10 +891,29 @@ function initEditor() {
     }
   }
 
+  function getMarkdownForExport(): string {
+    if (isSourceMode && sourceEditor) {
+      return stripSettingsComment(sourceEditor.getContent());
+    }
+    return editor.getMarkdown();
+  }
+
+  function triggerExportDocx() {
+    try {
+      const title = fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document';
+      const markdown = getMarkdownForExport();
+      vscode.postMessage({ type: 'exportDocx', title, markdown });
+    } catch (err) {
+      console.error('[InLineMd] DOCX export failed:', err);
+      vscode.postMessage({ type: 'showInfo', text: `DOCX export failed: ${err}` });
+    }
+  }
+
   fileHeader.setExportHtmlLightHandler(() => triggerExport('light'));
   fileHeader.setExportHtmlDarkHandler(() => triggerExport('dark'));
   fileHeader.setExportPdfLightHandler(() => triggerExportPdf('light'));
   fileHeader.setExportPdfDarkHandler(() => triggerExportPdf('dark'));
+  fileHeader.setExportDocxHandler(() => triggerExportDocx());
 
   hideWysiwygGhost = () => {
     wysiwygGhostSuggestion = null;
@@ -807,6 +953,93 @@ function initEditor() {
     }
   };
 
+  const getWysiwygApproxSourcePosition = (pmView: EditorView): { line: number; character: number } => {
+    const selection = pmView.state.selection;
+    const head = selection.from;
+    const $from = pmView.state.doc.resolve(head);
+    if (!$from.parent.isTextblock) return { line: 0, character: 0 };
+
+    const textBeforeBlock = $from.parent.textBetween(0, $from.parentOffset, '\n', '\n');
+    const textBeforeLine = textBeforeBlock.split('\n').at(-1) ?? textBeforeBlock;
+    const fullBlockText = $from.parent.textBetween(0, $from.parent.content.size, '\n', '\n');
+    const blockLines = fullBlockText.split('\n');
+    const currentLineIndex = Math.max(0, textBeforeBlock.split('\n').length - 1);
+    const lineText = blockLines[currentLineIndex] ?? fullBlockText;
+    const wordPrefixMatch = textBeforeLine.match(/[\p{L}\p{N}_-]+$/u);
+    const wordPrefix = wordPrefixMatch?.[0] ?? '';
+    const markdown = editor.getMarkdown();
+    const approx = findApproximateMarkdownPosition(markdown, lineText, textBeforeLine, wordPrefix);
+
+    if (cachedLineMapMarkdown !== markdown) {
+      cachedLineMapMarkdown = markdown;
+      cachedTextblockLineMap = extractTextblockLineMap(markdown);
+    }
+
+    let textblockOrdinal = 0;
+    let targetOrdinal = -1;
+    pmView.state.doc.descendants((node, pos) => {
+      if (!node.isTextblock) return;
+      const from = pos + 1;
+      const to = from + node.content.size;
+      if (targetOrdinal === -1 && head >= from && head <= to) {
+        targetOrdinal = textblockOrdinal;
+        return false;
+      }
+      textblockOrdinal++;
+    });
+
+    if (targetOrdinal >= 0 && targetOrdinal < cachedTextblockLineMap.length) {
+      const mappedLine1Based = cachedTextblockLineMap[targetOrdinal];
+      const rawLine = markdown.split('\n')[Math.max(0, mappedLine1Based - 1)] ?? '';
+      const beforeIdx = textBeforeLine ? rawLine.indexOf(textBeforeLine) : -1;
+      const character = beforeIdx >= 0
+        ? beforeIdx + textBeforeLine.length
+        : approx.character;
+      return {
+        line: Math.max(0, mappedLine1Based - 1),
+        character: Math.max(0, character),
+      };
+    }
+
+    return approx;
+  };
+
+  updateTocStatusBar = () => {
+    const markdown = isSourceMode && sourceEditor
+      ? stripSettingsComment(sourceEditor.getContent())
+      : editor.getMarkdown();
+
+    if (isSourceMode && sourceEditor) {
+      const sourceSelection = sourceEditor.view.state.selection.main;
+      const head = sourceSelection.head;
+      const line = sourceEditor.view.state.doc.lineAt(head);
+      toc.setStatus({
+        totalChars: markdown.length,
+        line: line.number,
+        selectedChars: Math.abs(sourceSelection.to - sourceSelection.from),
+      });
+      return;
+    }
+
+    if (editor.view) {
+      const approx = getWysiwygApproxSourcePosition(editor.view);
+      const pmSelection = editor.view.state.selection;
+      toc.setStatus({
+        totalChars: markdown.length,
+        line: approx.line + 1,
+        selectedChars: Math.abs(pmSelection.to - pmSelection.from),
+      });
+      return;
+    }
+
+    toc.setStatus({
+      totalChars: markdown.length,
+      line: 1,
+      selectedChars: 0,
+    });
+  };
+  updateTocStatusBar();
+
   getWysiwygTabContext = (pmView: EditorView) => {
     const selection = pmView.state.selection;
     if (!selection.empty) return null;
@@ -820,12 +1053,7 @@ function initEditor() {
     const wordPrefix = wordPrefixMatch?.[0] ?? '';
     if (textBeforeLine.trim().length === 0) return null;
 
-    const fullBlockText = $from.parent.textBetween(0, $from.parent.content.size, '\n', '\n');
-    const blockLines = fullBlockText.split('\n');
-    const currentLineIndex = textBeforeBlock.split('\n').length - 1;
-    const lineText = blockLines[currentLineIndex] ?? fullBlockText;
-    const markdown = editor.getMarkdown();
-    const approx = findApproximateMarkdownPosition(markdown, lineText, textBeforeLine, wordPrefix);
+    const approx = getWysiwygApproxSourcePosition(pmView);
 
     return {
       anchor: selection.from,
@@ -982,8 +1210,7 @@ function initEditor() {
     }
 
     if (editor.view) {
-      const context = getWysiwygTabContext(editor.view);
-      if (context) return context.approx;
+      return getWysiwygApproxSourcePosition(editor.view);
     }
 
     return { line: 0, character: 0 };
@@ -1051,6 +1278,9 @@ function initEditor() {
               postEdit(content);
             }
           },
+          onSelectionOrDocChange: () => {
+            updateTocStatusBar();
+          },
           requestTabCompletion({ line, character, wordPrefix }) {
             return requestTabCompletionFromHost(line, character, wordPrefix);
           },
@@ -1099,6 +1329,7 @@ function initEditor() {
       if (sourceEditor.getContent() !== fullMd) {
         sourceEditor.setContent(fullMd);
       }
+      updateTocStatusBar();
       sourceEditor.focus();
 
       requestAnimationFrame(() => {
@@ -1149,6 +1380,7 @@ function initEditor() {
       }, sourceEditor.view.scrollDOM);
 
       isSourceMode = true;
+      updateTocStatusBar();
       _hasEditedInCurrentMode = false;
       _modeEntryContent = rawMd; // snapshot for cross-mode undo guard
       fileHeader.getSourceBtn().classList.add('active');
@@ -1197,6 +1429,7 @@ function initEditor() {
       toc.exitSourceMode();
       view.focus();
       isSourceMode = false;
+      updateTocStatusBar();
       scheduleWysiwygGhost?.(view);
       _hasEditedInCurrentMode = false;
       _modeEntryContent = md; // snapshot for cross-mode undo guard
@@ -1209,56 +1442,94 @@ function initEditor() {
   // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     const isModKey = e.ctrlKey || e.metaKey;
-    const isOptionOnly = e.altKey && !e.ctrlKey && !e.metaKey;
+    const target = e.target as HTMLElement | null;
+    const isInShortcutModal = !!target?.closest('.file-header-shortcuts-modal');
+    const isTextInputLike = !!target && (
+      target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.tagName === 'SELECT'
+    );
+    const isFileNameEditing = !!target?.closest('.file-header-name');
+
+    // Do not hijack shortcuts when editing shortcut form fields or file name.
+    if (isInShortcutModal || isTextInputLike || isFileNameEditing) {
+      return;
+    }
+
+    if (isModKey && e.shiftKey && e.code === 'KeyT' && !e.altKey) {
+      e.preventDefault();
+      fileHeader.triggerTocToggle();
+      return;
+    }
+
     if (isModKey && e.key === '/') {
       e.preventDefault();
       openNativeSourceMode();
+      return;
     }
-    if (isOptionOnly && e.code === 'KeyQ') {
+    if (matchesToolbarShortcut(e, 'openSourceMode') || matchesToolbarShortcut(e, 'openWithEasyView')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       openNativeSourceMode();
+      return;
     }
-    if (isOptionOnly && e.code === 'KeyS') {
+    if (matchesToolbarShortcut(e, 'stageFile')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       editor.flushSync();
       vscode.postMessage({ type: 'stageFile' });
+      return;
     }
-    if (isOptionOnly && e.code === 'ArrowUp') {
+    if (matchesToolbarShortcut(e, 'scrollTop')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       scrollToEditorTop();
+      return;
     }
-    if (isOptionOnly && e.code === 'ArrowDown') {
+    if (matchesToolbarShortcut(e, 'scrollBottom')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       scrollToEditorBottom();
+      return;
     }
-    if (isOptionOnly && e.code === 'KeyA') {
+    if (matchesToolbarShortcut(e, 'toggleFullWidth')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const widthBtn = document.querySelector('.file-header-btn[title*="full width"]') as HTMLElement | null;
-      widthBtn?.click();
+      fileHeader.triggerWidthToggle();
+      return;
     }
-    if (isOptionOnly && e.code === 'KeyD') {
+    if (matchesToolbarShortcut(e, 'toggleTableWrap')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const wrapBtn = document.querySelector('.file-header-btn[title*="table word wrap"]') as HTMLElement | null;
-      wrapBtn?.click();
+      fileHeader.triggerTableWrapToggle();
+      return;
     }
-    if (isOptionOnly && e.code === 'KeyR') {
+    if (matchesToolbarShortcut(e, 'toggleExternalFollow')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const themeBtn = document.querySelector('.file-header-btn[title*="Switch to light mode"], .file-header-btn[title*="Switch to dark mode"]') as HTMLElement | null;
-      themeBtn?.click();
+      fileHeader.triggerExternalFollowToggle();
+      return;
+    }
+    if (matchesToolbarShortcut(e, 'toggleTheme')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      fileHeader.triggerThemeToggle();
+      return;
+    }
+    if (matchesToolbarShortcut(e, 'toggleToc')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      fileHeader.triggerTocToggle();
+      return;
     }
     if (isModKey && e.key === 's' && isSourceMode) {
       e.preventDefault();
@@ -1319,12 +1590,22 @@ function initEditor() {
       case 'init':
       case 'documentChanged': {
         const tMsg = message.type === 'init' ? performance.now() : 0;
+        const isInit = message.type === 'init';
+        const previousContent = currentContent;
         if (message.type === 'init') {
           console.log('[InLineMd perf] init message received');
           dualHistory.clear();
         }
         initReceived = true;
         const content = message.content || '';
+        const changedLine = !isInit
+          ? findFirstChangedLine(previousContent, content)
+          : null;
+        const changedTotalLines = Math.max(1, content.split('\n').length);
+        const shouldAutoFollowExternalChange = !isInit
+          && autoFollowExternalEdits
+          && !message.skipAutoScroll
+          && changedLine !== null;
 
         if (message.imagePathMap) {
           editor.setImagePathMap(message.imagePathMap);
@@ -1338,58 +1619,52 @@ function initEditor() {
           if (typeof message.fullWidth === 'boolean') {
             isFullWidth = message.fullWidth;
             document.getElementById('editor')?.classList.toggle('full-width', isFullWidth);
-            const widthBtn = document.querySelector('.file-header-btn[title*="full width"]') as HTMLElement;
-            if (widthBtn) {
-              widthBtn.classList.toggle('active', isFullWidth);
-              widthBtn.title = isFullWidth ? 'Exit full width (Option+A)' : 'Expand to full width (Option+A)';
-              widthBtn.innerHTML = isFullWidth
-                ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
-                : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
-            }
+            fileHeader.syncFullWidthState(isFullWidth);
           }
-          if (typeof message.tocVisible === 'boolean' && message.tocVisible) {
-            isTocVisible = true;
-            toc.open();
-            const tocBtnEl = document.querySelector('.file-header-btn[title*="Table of Contents"], .file-header-btn[title*="Hide Table"]') as HTMLElement;
-            if (tocBtnEl) {
-              tocBtnEl.classList.add('active');
-              tocBtnEl.title = 'Hide Table of Contents (Option+W)';
-            }
+          if (typeof message.tocVisible === 'boolean') {
+            isTocVisible = message.tocVisible;
+            if (isTocVisible) toc.open();
+            if (!isTocVisible) toc.close();
+            fileHeader.syncTocState(isTocVisible);
           }
-	          if (typeof message.tableWrap === 'boolean') {
-	            isTableWrap = message.tableWrap;
-	            document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
-            const wrapBtn = document.querySelector('.file-header-btn[title*="table word wrap"]') as HTMLElement;
-            if (wrapBtn) {
-              wrapBtn.classList.toggle('active', isTableWrap);
-	              wrapBtn.title = isTableWrap ? 'Disable table word wrap (Option+D)' : 'Enable table word wrap (Option+D)';
-	            }
-	          }
-	        }
+          if (typeof message.tableWrap === 'boolean') {
+            isTableWrap = message.tableWrap;
+            document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
+            fileHeader.syncTableWrapState(isTableWrap);
+          }
+        }
 
         if (content === currentContent && message.type !== 'init') return;
         currentContent = content;
 
         if (isSourceMode && sourceEditor) {
           sourceEditor.setContent(content);
+          if (shouldAutoFollowExternalChange && changedLine !== null) {
+            sourceEditor.scrollToLine(changedLine, 'smooth');
+          }
+          updateTocStatusBar();
           break;
         }
 
-        const isInit = message.type === 'init';
         const tSetContent = isInit ? performance.now() : 0;
         const scrollArea = document.getElementById('editor-scroll-area');
         const prevScrollRatio = !isInit && scrollArea && scrollArea.scrollHeight > scrollArea.clientHeight
           ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
           : 0;
         editor.setContent(content, isInit, isInit ? undefined : { scrollIntoView: false });
+        updateTocStatusBar();
         if (!isInit && scrollArea) {
-          const restoreScroll = () => {
-            const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
-            scrollArea.scrollTop = Math.round(maxScrollTop * prevScrollRatio);
-          };
-          restoreScroll();
-          requestAnimationFrame(restoreScroll);
-          setTimeout(restoreScroll, 60);
+          if (shouldAutoFollowExternalChange && changedLine !== null) {
+            scrollWysiwygToApproxLine(changedLine, changedTotalLines);
+          } else {
+            const restoreScroll = () => {
+              const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+              scrollArea.scrollTop = Math.round(maxScrollTop * prevScrollRatio);
+            };
+            restoreScroll();
+            requestAnimationFrame(restoreScroll);
+            setTimeout(restoreScroll, 60);
+          }
         }
         requestAnimationFrame(updateGitChangeRailOffset);
         setTimeout(updateGitChangeRailOffset, 60);
@@ -1437,9 +1712,14 @@ function initEditor() {
 
       case 'gitStatusChanged':
         if (view) {
+          const messageContent = typeof message.content === 'string' ? message.content : null;
+          // Drop stale Git updates computed from older content snapshots.
+          if (messageContent !== null && messageContent !== currentContent) {
+            break;
+          }
           view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
             lineRanges: Array.isArray(message.lineRanges) ? message.lineRanges : [],
-            content: currentContent,
+            content: messageContent ?? currentContent,
           }));
         }
         break;
@@ -1476,6 +1756,10 @@ function initEditor() {
 
       case 'requestExportPdf':
         triggerExportPdf(message.theme || 'light');
+        break;
+
+      case 'requestExportDocx':
+        triggerExportDocx();
         break;
 
       case 'imageSelected': {

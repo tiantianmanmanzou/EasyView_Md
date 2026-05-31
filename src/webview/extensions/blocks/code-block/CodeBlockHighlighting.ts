@@ -11,7 +11,7 @@ import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import refractor from "refractor/core";
 import { getLoaderForLanguage, getRefractorLangForLanguage } from "../../../editor/lib/CodeLanguages";
-import { isCode, isMermaid } from "../../../editor/lib/CodeDetection";
+import { isCode, isMermaid, isPlainTextCode } from "../../../editor/lib/CodeDetection";
 import { findBlockNodes } from "../../../editor/lib/NodeFinder";
 
 type ParsedNode = {
@@ -103,6 +103,7 @@ function getDecorations({
     const language = block.node.attrs.language;
     const lang = getRefractorLangForLanguage(language);
     const lineDecorations = [];
+    const showLineNumbers = !!lineNumbers && !isPlainTextCode(block.node);
 
     // Check if we need to recalculate:
     // - No cache
@@ -113,7 +114,7 @@ function getDecorations({
                         (lang && refractor.registered(lang) && !cache[block.pos].highlighted);
 
     if (needsRecalc) {
-      if (lineNumbers) {
+      if (showLineNumbers) {
         const lineCount =
           (block.node.textContent.match(/\n/g) || []).length + 1;
         const gutterWidth = String(lineCount).length;

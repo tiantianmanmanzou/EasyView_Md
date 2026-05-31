@@ -33,11 +33,13 @@ function decodeHtmlEntities(text: string): string {
  * (tags other than <br>), uses the <!--htmlcell--> marker so that
  * restoreHtmlCells() can parse them with ProseMirror DOMParser.
  */
-function emitCellContent(cellHtml: string, out: any[], Token: any): void {
+function emitCellContent(cellHtml: string, out: any[], Token: any, map?: [number, number]): void {
   // Check for complex HTML (tags other than <br>)
   const hasComplexHtml = /<(?!br\s*\/?\s*>|\/)([a-z])/i.test(cellHtml);
 
-  out.push(new Token('paragraph_open', 'p', 1));
+  const pOpen = new Token('paragraph_open', 'p', 1);
+  if (map) pOpen.map = map;
+  out.push(pOpen);
 
   const inline = new Token('inline', '', 0);
 
@@ -67,8 +69,11 @@ function emitCellContent(cellHtml: string, out: any[], Token: any): void {
     inline.content = contentParts.join('\n');
   }
 
+  if (map) inline.map = map;
   out.push(inline);
-  out.push(new Token('paragraph_close', 'p', -1));
+  const pClose = new Token('paragraph_close', 'p', -1);
+  if (map) pClose.map = map;
+  out.push(pClose);
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -166,6 +171,7 @@ export function applyTableRules(md: MarkdownIt): void {
 
         // Add paragraph_open
         const pOpen = new state.Token('paragraph_open', 'p', 1);
+        if (t.map) pOpen.map = t.map;
         pOpen.level = t.level + 1;
         newTokens.push(pOpen);
         continue;
@@ -173,6 +179,7 @@ export function applyTableRules(md: MarkdownIt): void {
       if ((t.type === 'th_close' || t.type === 'td_close')) {
         // Add paragraph_close before cell close
         const pClose = new state.Token('paragraph_close', 'p', -1);
+        if (t.map) pClose.map = t.map;
         pClose.level = t.level + 1;
         newTokens.push(pClose);
         newTokens.push(t);
@@ -229,15 +236,20 @@ export function applyTableRules(md: MarkdownIt): void {
                   if (cellOpenEndPos >= 0) {
                     const cellHtml = content.slice(cellOpenEndPos, tagStartPos).trim();
                     if (cellHtml) {
-                      emitCellContent(cellHtml, newTokens, state.Token);
+                      emitCellContent(cellHtml, newTokens, state.Token, cur.map as [number, number] | undefined);
                     } else {
                       // Empty cell — still needs a paragraph for schema compliance (block+)
-                      newTokens.push(new state.Token('paragraph_open', 'p', 1));
+                      const emptyOpen = new state.Token('paragraph_open', 'p', 1);
+                      if (cur.map) emptyOpen.map = cur.map;
+                      newTokens.push(emptyOpen);
                       const inline = new state.Token('inline', '', 0);
                       inline.children = [];
                       inline.content = '';
+                      if (cur.map) inline.map = cur.map;
                       newTokens.push(inline);
-                      newTokens.push(new state.Token('paragraph_close', 'p', -1));
+                      const emptyClose = new state.Token('paragraph_close', 'p', -1);
+                      if (cur.map) emptyClose.map = cur.map;
+                      newTokens.push(emptyClose);
                     }
                     cellOpenEndPos = -1;
                   }

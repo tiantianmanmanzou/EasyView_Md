@@ -14,6 +14,7 @@ esbuild.mjs
 package-lock.json
 *.md
 !readme.md
+协同评估流程设计.md
 CHANGELOG.md
 dist/**/*.map
 image/**

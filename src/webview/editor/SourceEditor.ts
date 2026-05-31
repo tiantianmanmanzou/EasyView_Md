@@ -394,6 +394,7 @@ function searchSourceText(
 export interface SourceEditorOptions {
   parent: HTMLElement;
   onChange: (content: string) => void;
+  onSelectionOrDocChange?: () => void;
   /** Called when native CM undo stack is exhausted — return true if cross-mode undo was handled */
   onUndoExhausted?: () => boolean;
   /** Called when native CM redo stack is exhausted — return true if cross-mode redo was handled */
@@ -625,6 +626,10 @@ export function createSourceEditor(options: SourceEditorOptions) {
   };
 
   const onChangeExtension = EditorView.updateListener.of((update) => {
+    if (update.docChanged || update.selectionSet) {
+      options.onSelectionOrDocChange?.();
+    }
+
     if (update.docChanged && !suppressChange) {
       options.onChange(update.state.doc.toString());
     }
@@ -707,8 +712,19 @@ export function createSourceEditor(options: SourceEditorOptions) {
       });
       suppressChange = false;
     },
-    scrollToLine: (line: number) => {
+    scrollToLine: (line: number, behavior: ScrollBehavior = 'auto') => {
       const cmLine = view.state.doc.line(line);
+      if (behavior === 'smooth') {
+        // Keep selection aligned with the followed line, then animate the scroll container.
+        view.dispatch({
+          selection: { anchor: cmLine.from },
+        });
+        const block = view.lineBlockAt(cmLine.from);
+        const targetTop = Math.max(0, block.top - 40);
+        view.scrollDOM.scrollTo({ top: targetTop, behavior: 'smooth' });
+        return;
+      }
+
       view.dispatch({
         selection: { anchor: cmLine.from },
         effects: EditorView.scrollIntoView(cmLine.from, { y: 'start', yMargin: 40 }),

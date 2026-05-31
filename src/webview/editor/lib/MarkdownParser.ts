@@ -43,6 +43,8 @@ function createMarkdownIt(options?: { linkify?: boolean }) {
   return md;
 }
 
+const lineMapMarkdownIt = createMarkdownIt({ linkify: false });
+
 // ─── Create parsers ─────────────────────────────────────────────────────────
 
 export function createParser() {
@@ -178,6 +180,42 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
     : [schema.nodes.paragraph.create()];
   const nodes = [frontmatterNode, ...bodyNodes];
   return schema.nodes.doc.create(null, nodes);
+}
+
+/**
+ * Extract line numbers (1-based) for each parsed textblock in document order.
+ * The resulting array index corresponds to textblock ordinal in ProseMirror traversal.
+ */
+export function extractTextblockLineMap(markdown: string): number[] {
+  const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(markdown);
+  const normalizedContent = normalizeTableColumns(content);
+  const tokens = lineMapMarkdownIt.parse(normalizedContent, {});
+
+  let frontmatterOffset = 0;
+  if (hasFrontmatter && rawYaml) {
+    const match = markdown.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (match) {
+      frontmatterOffset = Math.max(0, match[0].split(/\r?\n/).length - 1);
+    }
+  }
+
+  const textblockTokenTypes = new Set([
+    'paragraph_open',
+    'heading_open',
+    'fence',
+    'code_block',
+    'math_block',
+  ]);
+
+  const lines: number[] = [];
+  for (const token of tokens) {
+    if (!textblockTokenTypes.has(token.type)) continue;
+    if (!Array.isArray(token.map) || token.map.length < 1) continue;
+    const line = Math.max(1, token.map[0] + 1 + frontmatterOffset);
+    lines.push(line);
+  }
+
+  return lines;
 }
 
 // ─── Table column normalization ─────────────────────────────────────────────

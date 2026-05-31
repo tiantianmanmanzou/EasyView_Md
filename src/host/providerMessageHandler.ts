@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
+import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
 import * as http from 'http';
 import { execFile, spawn } from 'child_process';
+import { Document as DocxDocument, HeadingLevel, ImageRun, Packer, Paragraph, TextRun } from 'docx';
 import { SETTINGS_COMMENT_RE, type EditorSettings, computeMinimalDiff } from './providerUtils';
 import { buildImagePathMap } from './providerImageManager';
 import { downloadFile, ExportImage } from './providerExportHandler';
@@ -79,6 +81,452 @@ function getDocumentLineOffset(document: vscode.TextDocument): number {
     return 0;
   }
   return match[0].split(/\r?\n/).length - 1;
+}
+
+const EASYVIEW_MANAGED_KEYBINDING_START = '// EasyView_Md managed shortcuts start';
+const EASYVIEW_MANAGED_KEYBINDING_END = '// EasyView_Md managed shortcuts end';
+const OPEN_EDITOR_WHEN = 'editorTextFocus && (resourceLangId == markdown || resourceLangId == mdx)';
+const DEFAULT_OPEN_EDITOR_KEY = 'alt+e';
+
+function getUserKeybindingsFilePath(): string {
+  const home = os.homedir();
+  const appName = vscode.env.appName;
+
+  let productFolder = 'Code';
+  if (/Insiders/i.test(appName)) productFolder = 'Code - Insiders';
+  else if (/VSCodium/i.test(appName)) productFolder = 'VSCodium';
+  else if (/Code - OSS/i.test(appName)) productFolder = 'Code - OSS';
+
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', productFolder, 'User', 'keybindings.json');
+  }
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    return path.join(appData, productFolder, 'User', 'keybindings.json');
+  }
+  return path.join(home, '.config', productFolder, 'User', 'keybindings.json');
+}
+
+function normalizeShortcutForKeybinding(shortcut: string): string {
+  const parts = shortcut.split('+').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return '';
+  const mods = new Set<string>();
+  let key = '';
+  for (const partRaw of parts) {
+    const part = partRaw.toLowerCase();
+    if (part === 'ctrl' || part === 'control') { mods.add('ctrl'); continue; }
+    if (part === 'meta' || part === 'cmd' || part === 'command') { mods.add('cmd'); continue; }
+    if (part === 'alt' || part === 'option') { mods.add('alt'); continue; }
+    if (part === 'shift') { mods.add('shift'); continue; }
+    key = partRaw;
+  }
+  const normalizeKey = (value: string): string => {
+    const v = value.trim();
+    if (!v) return '';
+    const lower = v.toLowerCase();
+    const map: Record<string, string> = {
+      arrowup: 'up',
+      up: 'up',
+      arrowdown: 'down',
+      down: 'down',
+      arrowleft: 'left',
+      left: 'left',
+      arrowright: 'right',
+      right: 'right',
+      space: 'space',
+      escape: 'escape',
+      esc: 'escape',
+      enter: 'enter',
+      tab: 'tab',
+      backspace: 'backspace',
+      delete: 'delete',
+    };
+    if (map[lower]) return map[lower];
+    return lower;
+  };
+  const normalizedKey = normalizeKey(key);
+  if (!normalizedKey) return '';
+  const orderedMods = ['ctrl', 'cmd', 'alt', 'shift'].filter((mod) => mods.has(mod));
+  return [...orderedMods, normalizedKey].join('+');
+}
+
+async function syncOpenEditorShortcutToUserKeybindings(shortcut: string): Promise<void> {
+  const normalized = normalizeShortcutForKeybinding(shortcut);
+  if (!normalized) return;
+
+  const keybindingsPath = getUserKeybindingsFilePath();
+  const keybindingsUri = vscode.Uri.file(keybindingsPath);
+  const keybindingsDir = vscode.Uri.file(path.dirname(keybindingsPath));
+  await vscode.workspace.fs.createDirectory(keybindingsDir);
+
+  let text = '[]';
+  try {
+    const bytes = await vscode.workspace.fs.readFile(keybindingsUri);
+    text = Buffer.from(bytes).toString('utf8');
+    if (!text.trim()) text = '[]';
+  } catch {
+    text = '[]';
+  }
+
+  const escapedStart = EASYVIEW_MANAGED_KEYBINDING_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedEnd = EASYVIEW_MANAGED_KEYBINDING_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const managedBlockRe = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}\\n?`, 'g');
+  let stripped = text.replace(managedBlockRe, '').trimEnd();
+  if (!stripped.trim()) stripped = '[]';
+  if (!stripped.includes('[')) stripped = '[]';
+
+  const managedLines = [
+    EASYVIEW_MANAGED_KEYBINDING_START,
+    `  { "key": "${DEFAULT_OPEN_EDITOR_KEY}", "command": "-inlineMd.openEditor", "when": "${OPEN_EDITOR_WHEN}" },`,
+    `  { "key": "${normalized}", "command": "inlineMd.openEditor", "when": "${OPEN_EDITOR_WHEN}" }`,
+    EASYVIEW_MANAGED_KEYBINDING_END,
+  ];
+  const block = managedLines.join('\n');
+
+  const closeIndex = stripped.lastIndexOf(']');
+  if (closeIndex < 0) {
+    stripped = `[\n${block}\n]\n`;
+  } else {
+    const before = stripped.slice(0, closeIndex).trimEnd();
+    const needsComma = before.length > 1 && before !== '[' && !before.endsWith(',');
+    const appended = `${before}${needsComma ? ',' : ''}\n${block}\n]`;
+    stripped = `${appended}\n`;
+  }
+
+  await vscode.workspace.fs.writeFile(keybindingsUri, Buffer.from(stripped, 'utf8'));
+}
+
+function stripMarkdownInline(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .trim();
+}
+
+type DocxImageType = 'jpg' | 'png' | 'gif' | 'bmp';
+
+function inferDocxImageTypeByPath(imagePath: string): DocxImageType | null {
+  const ext = path.extname(imagePath).toLowerCase();
+  if (ext === '.png') return 'png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'jpg';
+  if (ext === '.gif') return 'gif';
+  if (ext === '.bmp') return 'bmp';
+  return null;
+}
+
+function inferDocxImageTypeByBytes(data: Uint8Array): DocxImageType | null {
+  if (data.length >= 8
+    && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47
+    && data[4] === 0x0D && data[5] === 0x0A && data[6] === 0x1A && data[7] === 0x0A) {
+    return 'png';
+  }
+  if (data.length >= 3 && data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) {
+    return 'jpg';
+  }
+  if (data.length >= 6) {
+    const h = String.fromCharCode(data[0], data[1], data[2], data[3], data[4], data[5]);
+    if (h === 'GIF87a' || h === 'GIF89a') return 'gif';
+  }
+  if (data.length >= 2 && data[0] === 0x42 && data[1] === 0x4D) {
+    return 'bmp';
+  }
+  return null;
+}
+
+function parseMarkdownImageTarget(rawTarget: string): string {
+  const target = rawTarget.trim();
+  if (!target) return '';
+  if (target.startsWith('<') && target.endsWith('>')) {
+    return target.slice(1, -1).trim();
+  }
+  const titleStart = target.match(/\s+["'][^"']*["']\s*$/);
+  if (titleStart) {
+    return target.slice(0, titleStart.index).trim();
+  }
+  return target;
+}
+
+async function resolveDocxImageData(imageSrcRaw: string, docDir: string): Promise<{ data: Buffer; type: DocxImageType } | null> {
+  const imageSrc = imageSrcRaw.trim();
+  if (!imageSrc) return null;
+
+  if (imageSrc.startsWith('data:image/')) {
+    const match = imageSrc.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) return null;
+    const mimeSubtype = match[1].toLowerCase();
+    const base64 = match[2].replace(/\s+/g, '');
+    const data = Buffer.from(base64, 'base64');
+    const typeMap: Record<string, DocxImageType> = {
+      'png': 'png',
+      'jpg': 'jpg',
+      'jpeg': 'jpg',
+      'gif': 'gif',
+      'bmp': 'bmp',
+    };
+    const type = typeMap[mimeSubtype] ?? inferDocxImageTypeByBytes(data);
+    if (!type) return null;
+    return { data, type };
+  }
+
+  if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
+    const raw = await downloadFile(imageSrc);
+    const data = Buffer.from(raw);
+    const type = inferDocxImageTypeByPath(imageSrc) ?? inferDocxImageTypeByBytes(data);
+    if (!type) return null;
+    return { data, type };
+  }
+
+  let decoded = imageSrc;
+  try {
+    decoded = decodeURIComponent(imageSrc);
+  } catch {
+    decoded = imageSrc;
+  }
+
+  const absolutePath = path.isAbsolute(decoded) ? decoded : path.resolve(docDir, decoded);
+  const fileData = await vscode.workspace.fs.readFile(vscode.Uri.file(absolutePath));
+  const data = Buffer.from(fileData);
+  const type = inferDocxImageTypeByPath(decoded) ?? inferDocxImageTypeByBytes(data);
+  if (!type) return null;
+  return { data, type };
+}
+
+function getImageDimensions(type: DocxImageType, data: Buffer): { width: number; height: number } | null {
+  try {
+    if (type === 'png' && data.length >= 24) {
+      return {
+        width: data.readUInt32BE(16),
+        height: data.readUInt32BE(20),
+      };
+    }
+    if (type === 'gif' && data.length >= 10) {
+      return {
+        width: data.readUInt16LE(6),
+        height: data.readUInt16LE(8),
+      };
+    }
+    if (type === 'bmp' && data.length >= 26) {
+      return {
+        width: Math.abs(data.readInt32LE(18)),
+        height: Math.abs(data.readInt32LE(22)),
+      };
+    }
+    if (type === 'jpg') {
+      let offset = 2;
+      while (offset + 9 < data.length) {
+        if (data[offset] !== 0xFF) {
+          offset++;
+          continue;
+        }
+        const marker = data[offset + 1];
+        offset += 2;
+        if (marker === 0xD8 || marker === 0xD9) continue;
+        if (offset + 1 >= data.length) break;
+        const length = data.readUInt16BE(offset);
+        if (length < 2 || offset + length > data.length) break;
+        const isSofMarker =
+          (marker >= 0xC0 && marker <= 0xC3)
+          || (marker >= 0xC5 && marker <= 0xC7)
+          || (marker >= 0xC9 && marker <= 0xCB)
+          || (marker >= 0xCD && marker <= 0xCF);
+        if (isSofMarker && length >= 7) {
+          return {
+            height: data.readUInt16BE(offset + 3),
+            width: data.readUInt16BE(offset + 5),
+          };
+        }
+        offset += length;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function fitImageIntoBounds(
+  width: number,
+  height: number,
+  maxWidth = 640,
+  maxHeight = 420
+): { width: number; height: number } {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return { width: 520, height: 300 };
+  }
+  const widthRatio = maxWidth / width;
+  const heightRatio = maxHeight / height;
+  const ratio = Math.min(widthRatio, heightRatio, 1);
+  return {
+    width: Math.max(1, Math.round(width * ratio)),
+    height: Math.max(1, Math.round(height * ratio)),
+  };
+}
+
+async function markdownToDocx(markdown: string, title: string, docDir: string): Promise<DocxDocument> {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const paragraphs: Paragraph[] = [];
+  const numberedReference = 'easyview-numbering';
+
+  paragraphs.push(new Paragraph({
+    heading: HeadingLevel.HEADING_1,
+    children: [new TextRun(title || 'Document')],
+    spacing: { after: 280 },
+  }));
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\t/g, '    ');
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      paragraphs.push(new Paragraph({ text: '' }));
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const text = stripMarkdownInline(headingMatch[2]);
+      const headingMap: Record<number, HeadingLevel> = {
+        1: HeadingLevel.HEADING_1,
+        2: HeadingLevel.HEADING_2,
+        3: HeadingLevel.HEADING_3,
+        4: HeadingLevel.HEADING_4,
+        5: HeadingLevel.HEADING_5,
+        6: HeadingLevel.HEADING_6,
+      };
+      paragraphs.push(new Paragraph({
+        heading: headingMap[level] ?? HeadingLevel.HEADING_3,
+        children: [new TextRun(text)],
+      }));
+      continue;
+    }
+
+    const bulletMatch = line.match(/^(\s*)([-*+])\s+(.*)$/);
+    if (bulletMatch) {
+      const level = Math.max(0, Math.floor((bulletMatch[1]?.length ?? 0) / 2));
+      paragraphs.push(new Paragraph({
+        bullet: { level: Math.min(level, 8) },
+        children: [new TextRun(stripMarkdownInline(bulletMatch[3]))],
+      }));
+      continue;
+    }
+
+    const orderedMatch = line.match(/^(\s*)\d+\.\s+(.*)$/);
+    if (orderedMatch) {
+      const level = Math.max(0, Math.floor((orderedMatch[1]?.length ?? 0) / 2));
+      paragraphs.push(new Paragraph({
+        numbering: {
+          reference: numberedReference,
+          level: Math.min(level, 8),
+        },
+        children: [new TextRun(stripMarkdownInline(orderedMatch[2]))],
+      }));
+      continue;
+    }
+
+    const quoteMatch = line.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+      paragraphs.push(new Paragraph({
+        indent: { left: 480 },
+        border: { left: { color: '999999', size: 6, space: 8, style: 'single' } },
+        children: [new TextRun(stripMarkdownInline(quoteMatch[1]))],
+      }));
+      continue;
+    }
+
+    if (/^---+$/.test(trimmed) || /^___+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
+      paragraphs.push(new Paragraph({
+        thematicBreak: true,
+      }));
+      continue;
+    }
+
+    // Support Pandoc-style image attributes like:
+    // ![alt](path){width=357}
+    // ![alt](path) { width=357 }
+    // so they are not emitted as plain text in DOCX.
+    const imageMatches = [...line.matchAll(/!\[([^\]]*)\]\(([^)]+)\)(?:\s*\{[^}]+\})?/g)];
+    if (imageMatches.length > 0) {
+      const children: (TextRun | ImageRun)[] = [];
+      let cursor = 0;
+      for (const match of imageMatches) {
+        const matchText = match[0];
+        const altText = (match[1] ?? '').trim();
+        const targetRaw = match[2] ?? '';
+        const imageSrc = parseMarkdownImageTarget(targetRaw);
+        const start = match.index ?? 0;
+        const end = start + matchText.length;
+
+        const before = line.slice(cursor, start);
+        if (before.trim()) {
+          children.push(new TextRun(stripMarkdownInline(before)));
+        }
+
+        try {
+          const imageResolved = await resolveDocxImageData(imageSrc, docDir);
+          if (imageResolved) {
+            const dimensions = getImageDimensions(imageResolved.type, imageResolved.data);
+            const fitted = fitImageIntoBounds(dimensions?.width ?? 520, dimensions?.height ?? 300);
+            children.push(new ImageRun({
+              type: imageResolved.type,
+              data: imageResolved.data,
+              transformation: {
+                width: fitted.width,
+                height: fitted.height,
+              },
+            }));
+          } else {
+            children.push(new TextRun(`[Image: ${altText || imageSrc}]`));
+          }
+        } catch {
+          children.push(new TextRun(`[Image: ${altText || imageSrc}]`));
+        }
+        cursor = end;
+      }
+      const after = line.slice(cursor);
+      if (after.trim()) {
+        children.push(new TextRun(stripMarkdownInline(after)));
+      }
+      if (children.length > 0) {
+        paragraphs.push(new Paragraph({ children }));
+      } else {
+        paragraphs.push(new Paragraph({ children: [new TextRun(stripMarkdownInline(trimmed))] }));
+      }
+      continue;
+    }
+
+    paragraphs.push(new Paragraph({
+      children: [new TextRun(stripMarkdownInline(trimmed))],
+    }));
+  }
+
+  return new DocxDocument({
+    numbering: {
+      config: [
+        {
+          reference: numberedReference,
+          levels: Array.from({ length: 9 }).map((_, idx) => ({
+            level: idx,
+            format: 'decimal',
+            text: `%${idx + 1}.`,
+            alignment: 'start',
+            style: {
+              paragraph: {
+                indent: { left: 720 + idx * 360, hanging: 260 },
+              },
+            },
+          })),
+        },
+      ],
+    },
+    sections: [{ children: paragraphs }],
+  });
 }
 
 async function ensureVisibleTextEditorForInlineCompletion(
@@ -813,6 +1261,7 @@ export async function handleWebviewMessage(
               content: contentWithoutComment,
               imagePathMap,
               isUndoRedo: true, // Not an external/AI change
+              skipAutoScroll: true,
             });
             setTimeout(() => { ctx.setIsUpdatingWebview(false); }, 100);
             await ctx.refreshGitChanges?.();
@@ -851,6 +1300,28 @@ export async function handleWebviewMessage(
       });
 
       ctx.setOperationQueue(newQueue);
+      break;
+    }
+
+    case 'syncOpenEditorShortcut': {
+      const shortcut = typeof message.shortcut === 'string' ? message.shortcut.trim() : '';
+      if (!shortcut) break;
+      try {
+        await syncOpenEditorShortcutToUserKeybindings(shortcut);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        console.warn('[InLineMd] Failed to sync keybindings shortcut:', messageText);
+      }
+      break;
+    }
+
+    case 'openWithEasyView': {
+      try {
+        await vscode.commands.executeCommand('inlineMd.openEditor', document.uri);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`Failed to open with EasyView_Md: ${messageText}`);
+      }
       break;
     }
 
@@ -1152,6 +1623,51 @@ export async function handleWebviewMessage(
           );
         } else {
           vscode.window.showErrorMessage(`PDF export failed: ${msg}`);
+        }
+      }
+      break;
+    }
+
+    case 'exportDocx': {
+      const markdown = typeof message.markdown === 'string' ? message.markdown : '';
+      if (!markdown.trim()) {
+        vscode.window.showInformationMessage('Nothing to export as DOCX.');
+        break;
+      }
+
+      const docxDocDir = path.dirname(document.uri.fsPath);
+      const defaultName = ctx.getFilename();
+      const title = typeof message.title === 'string' && message.title.trim()
+        ? message.title.trim()
+        : defaultName;
+
+      const docxSaveUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(path.join(docxDocDir, defaultName + '.docx')),
+        filters: { 'Word Document': ['docx'] },
+      });
+
+      if (!docxSaveUri) break;
+
+      try {
+        const docxFile = await markdownToDocx(markdown, title, docxDocDir);
+        const buffer = await Packer.toBuffer(docxFile);
+        await vscode.workspace.fs.writeFile(docxSaveUri, buffer);
+
+        const action = await vscode.window.showInformationMessage(
+          `DOCX exported to ${path.basename(docxSaveUri.fsPath)}`,
+          'Open File'
+        );
+        if (action === 'Open File') {
+          openWithDefaultApp(docxSaveUri.fsPath);
+        }
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        if (msg.includes('EBUSY') || msg.includes('resource busy')) {
+          vscode.window.showErrorMessage(
+            'Cannot save DOCX: the file is open in another program. Close it and try again.'
+          );
+        } else {
+          vscode.window.showErrorMessage(`DOCX export failed: ${msg}`);
         }
       }
       break;

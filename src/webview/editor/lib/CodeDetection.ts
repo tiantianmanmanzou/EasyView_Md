@@ -9,6 +9,20 @@ export function isCode(node: Node) {
   return node.type.name === "code_block" || node.type.name === "code_fence";
 }
 
+export function isPlainTextLanguage(language: unknown): boolean {
+  const normalized = String(language ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+  return (
+    normalized === '' ||
+    normalized === 'none' ||
+    normalized === 'plain' ||
+    normalized === 'plaintext' ||
+    normalized === 'text'
+  );
+}
+
 /**
  * Returns true if the node is a code block with Mermaid language (supports both "mermaid" and "mermaidjs").
  *
@@ -20,6 +34,10 @@ export function isMermaid(node: Node) {
     isCode(node) &&
     (node.attrs.language === "mermaid" || node.attrs.language === "mermaidjs")
   );
+}
+
+export function isPlainTextCode(node: Node) {
+  return isCode(node) && isPlainTextLanguage(node.attrs.language);
 }
 
 export function isPlantUml(node: Node) {

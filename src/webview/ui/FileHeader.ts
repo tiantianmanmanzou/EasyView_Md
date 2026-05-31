@@ -10,6 +10,234 @@ export interface FileHeaderDeps {
   onSettingsChange: () => void;
 }
 
+export type ToolbarShortcutAction =
+  | 'openWithEasyView'
+  | 'toggleToc'
+  | 'toggleFullWidth'
+  | 'toggleTableWrap'
+  | 'toggleExternalFollow'
+  | 'toggleTheme'
+  | 'openSourceMode'
+  | 'stageFile'
+  | 'scrollTop'
+  | 'scrollBottom';
+
+export type ToolbarShortcutConfig = Record<ToolbarShortcutAction, string>;
+
+const SHORTCUT_STORAGE_KEY = 'mdpre-toolbar-shortcuts';
+const EXTERNAL_FOLLOW_STORAGE_KEY = 'mdpre-external-follow-scroll';
+
+const DEFAULT_SHORTCUTS: ToolbarShortcutConfig = {
+  openWithEasyView: 'Alt+E',
+  toggleToc: 'Alt+W',
+  toggleFullWidth: 'Alt+A',
+  toggleTableWrap: 'Alt+D',
+  toggleExternalFollow: 'Alt+F',
+  toggleTheme: 'Alt+R',
+  openSourceMode: 'Alt+Q',
+  stageFile: 'Alt+S',
+  scrollTop: 'Alt+ArrowUp',
+  scrollBottom: 'Alt+ArrowDown',
+};
+
+const SHORTCUT_LABELS: Record<ToolbarShortcutAction, string> = {
+  openWithEasyView: 'Open with EasyView_Md',
+  toggleToc: 'Toggle TOC',
+  toggleFullWidth: 'Toggle full width',
+  toggleTableWrap: 'Toggle table wrap',
+  toggleExternalFollow: 'Toggle external follow scroll',
+  toggleTheme: 'Toggle light/dark theme',
+  openSourceMode: 'Open source mode',
+  stageFile: 'Stage current file',
+  scrollTop: 'Scroll to top',
+  scrollBottom: 'Scroll to bottom',
+};
+
+const LINKED_SHORTCUT_ACTIONS: ToolbarShortcutAction[] = ['openWithEasyView', 'openSourceMode'];
+
+const IS_MAC = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
+
+function toDisplayShortcut(shortcut: string): string {
+  const normalized = normalizeShortcut(shortcut);
+  if (!normalized) return '';
+  const parts = normalized.split('+');
+  const mapped = parts.map((part) => {
+    if (!IS_MAC) return part;
+    if (part === 'Alt') return 'Option';
+    if (part === 'Meta') return 'Command';
+    if (part === 'Ctrl') return 'Control';
+    return part;
+  });
+  return mapped.join('+');
+}
+
+function normalizeShortcut(shortcut: string): string {
+  const value = shortcut.trim();
+  if (!value) return '';
+  const parts = value.split('+').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return '';
+
+  const mods = new Set<string>();
+  let key = '';
+  for (const partRaw of parts) {
+    const part = partRaw.toLowerCase();
+    if (part === 'ctrl' || part === 'control') {
+      mods.add('Ctrl');
+      continue;
+    }
+    if (part === 'meta' || part === 'cmd' || part === 'command') {
+      mods.add('Meta');
+      continue;
+    }
+    if (part === 'alt' || part === 'option') {
+      mods.add('Alt');
+      continue;
+    }
+    if (part === 'shift') {
+      mods.add('Shift');
+      continue;
+    }
+    key = normalizeKeyLabel(partRaw);
+  }
+
+  const orderedMods = ['Ctrl', 'Meta', 'Alt', 'Shift'].filter((mod) => mods.has(mod));
+  if (!key) return orderedMods.join('+');
+  return [...orderedMods, key].join('+');
+}
+
+function normalizeKeyLabel(key: string): string {
+  const lower = key.trim().toLowerCase();
+  if (!lower) return '';
+
+  const special: Record<string, string> = {
+    up: 'ArrowUp',
+    arrowup: 'ArrowUp',
+    down: 'ArrowDown',
+    arrowdown: 'ArrowDown',
+    left: 'ArrowLeft',
+    arrowleft: 'ArrowLeft',
+    right: 'ArrowRight',
+    arrowright: 'ArrowRight',
+    space: 'Space',
+    ' ': 'Space',
+    '/': '/',
+  };
+
+  if (special[lower]) return special[lower];
+
+  if (/^f\d{1,2}$/i.test(lower)) return lower.toUpperCase();
+  if (lower.length === 1) return lower.toUpperCase();
+
+  return key.length ? key[0].toUpperCase() + key.slice(1).toLowerCase() : key;
+}
+
+function formatEventToShortcut(event: KeyboardEvent): string {
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('Ctrl');
+  if (event.metaKey) parts.push('Meta');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
+
+  let key = '';
+  const code = event.code || '';
+  const codeKeyMap: Record<string, string> = {
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    Backquote: '`',
+    Space: 'Space',
+    Tab: 'Tab',
+    Enter: 'Enter',
+    Escape: 'Escape',
+    Delete: 'Delete',
+    Backspace: 'Backspace',
+  };
+
+  if (code.startsWith('Key') && code.length === 4) {
+    key = code.slice(3).toUpperCase();
+  } else if (code.startsWith('Digit') && code.length === 6) {
+    key = code.slice(5);
+  } else if (code.startsWith('Numpad') && code.length > 6) {
+    const np = code.slice(6);
+    const npMap: Record<string, string> = {
+      Divide: '/',
+      Multiply: '*',
+      Subtract: '-',
+      Add: '+',
+      Decimal: '.',
+      Enter: 'Enter',
+    };
+    key = npMap[np] ?? (np.length === 1 ? np : `Numpad${np}`);
+  } else if (codeKeyMap[code]) {
+    key = codeKeyMap[code];
+  } else {
+    let fallback = event.key;
+    if (fallback === ' ') fallback = 'Space';
+    if (fallback === 'Esc') fallback = 'Escape';
+    if (fallback === 'OS') fallback = 'Meta';
+    if (fallback.length === 1) {
+      key = fallback.toUpperCase();
+    } else if (fallback.startsWith('Arrow')) {
+      key = fallback;
+    } else {
+      key = normalizeKeyLabel(fallback);
+    }
+  }
+
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
+    return parts.join('+');
+  }
+
+  parts.push(key);
+  return normalizeShortcut(parts.join('+'));
+}
+
+function readStoredShortcuts(): ToolbarShortcutConfig {
+  let overrides: Partial<ToolbarShortcutConfig> = {};
+  try {
+    const raw = localStorage.getItem(SHORTCUT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<ToolbarShortcutConfig>;
+      overrides = parsed ?? {};
+    }
+  } catch {
+    // Storage can be unavailable in restricted contexts.
+  }
+
+  const merged: ToolbarShortcutConfig = { ...DEFAULT_SHORTCUTS };
+  (Object.keys(DEFAULT_SHORTCUTS) as ToolbarShortcutAction[]).forEach((action) => {
+    const value = overrides[action];
+    if (typeof value === 'string') {
+      merged[action] = normalizeShortcut(value);
+    }
+  });
+  // Keep these two actions linked as one shared shortcut.
+  const linked = merged.openSourceMode || merged.openWithEasyView;
+  if (linked) {
+    merged.openSourceMode = linked;
+    merged.openWithEasyView = linked;
+  }
+  return merged;
+}
+
+function readStoredExternalFollowEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(EXTERNAL_FOLLOW_STORAGE_KEY);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // Storage can be unavailable in restricted contexts.
+  }
+  return true;
+}
+
 export interface FileHeader {
   el: HTMLElement;
   setName: (name: string) => void;
@@ -19,11 +247,23 @@ export interface FileHeader {
   setExportHtmlDarkHandler: (handler: () => void) => void;
   setExportPdfLightHandler: (handler: () => void) => void;
   setExportPdfDarkHandler: (handler: () => void) => void;
+  setExportDocxHandler: (handler: () => void) => void;
   setSourceHandler: (handler: () => void) => void;
   setScrollTopHandler: (handler: () => void) => void;
   setScrollBottomHandler: (handler: () => void) => void;
   setStageHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
+  setExternalFollowHandler: (handler: (enabled: boolean) => void) => void;
+  setShortcutChangeHandler: (handler: (config: ToolbarShortcutConfig) => void) => void;
+  getShortcutConfig: () => ToolbarShortcutConfig;
+  syncTocState: (visible: boolean) => void;
+  syncFullWidthState: (fullWidth: boolean) => void;
+  syncTableWrapState: (enabled: boolean) => void;
+  triggerTocToggle: () => void;
+  triggerWidthToggle: () => void;
+  triggerTableWrapToggle: () => void;
+  triggerExternalFollowToggle: () => void;
+  triggerThemeToggle: () => void;
   getSourceBtn: () => HTMLElement;
   getHistoryBtn: () => HTMLElement;
 }
@@ -71,6 +311,21 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const bar = document.createElement('div');
   bar.className = 'file-header-bar';
 
+  let shortcutConfig = readStoredShortcuts();
+  let shortcutChangeHandler: ((config: ToolbarShortcutConfig) => void) | null = null;
+  let externalFollowEnabled = readStoredExternalFollowEnabled();
+  let externalFollowHandler: ((enabled: boolean) => void) | null = null;
+
+  const setLinkedShortcut = (action: ToolbarShortcutAction, shortcut: string): void => {
+    if (LINKED_SHORTCUT_ACTIONS.includes(action)) {
+      for (const linkedAction of LINKED_SHORTCUT_ACTIONS) {
+        shortcutConfig[linkedAction] = shortcut;
+      }
+      return;
+    }
+    shortcutConfig[action] = shortcut;
+  };
+
   const postCurrentEdit = () => {
     const s = getState();
     postMessage({
@@ -102,13 +357,48 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     }
   });
 
+  const shortcutLabel = (action: ToolbarShortcutAction): string => {
+    const value = shortcutConfig[action];
+    return value ? toDisplayShortcut(value) : 'Unassigned';
+  };
+
+  const setTitleWithShortcut = (element: HTMLElement, text: string, action?: ToolbarShortcutAction): void => {
+    element.title = action ? `${text} (${shortcutLabel(action)})` : text;
+  };
+
+  const syncTocButton = (visible: boolean): void => {
+    tocBtn.classList.toggle('active', visible);
+    setTitleWithShortcut(tocBtn, visible ? 'Hide Table of Contents' : 'Toggle Table of Contents', 'toggleToc');
+  };
+
+  const syncWidthButton = (fullWidth: boolean): void => {
+    widthBtn.classList.toggle('active', fullWidth);
+    widthBtn.innerHTML = fullWidth
+      ? '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 14h6v6\"/><path d=\"M20 10h-6V4\"/><path d=\"M14 10l7-7\"/><path d=\"M3 21l7-7\"/></svg>'
+      : '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M15 3h6v6\"/><path d=\"M9 21H3v-6\"/><path d=\"M21 3l-7 7\"/><path d=\"M3 21l7-7\"/></svg>';
+    setTitleWithShortcut(widthBtn, fullWidth ? 'Exit full width' : 'Expand to full width', 'toggleFullWidth');
+  };
+
+  const syncTableWrapButton = (enabled: boolean): void => {
+    tableWrapBtn.classList.toggle('active', enabled);
+    setTitleWithShortcut(tableWrapBtn, enabled ? 'Disable table word wrap' : 'Enable table word wrap', 'toggleTableWrap');
+  };
+
+  const syncExternalFollowButton = (enabled: boolean): void => {
+    externalFollowBtn.classList.toggle('active', enabled);
+    setTitleWithShortcut(
+      externalFollowBtn,
+      enabled ? 'Disable external-edit auto-follow scroll' : 'Enable external-edit auto-follow scroll',
+      'toggleExternalFollow'
+    );
+  };
+
   // Left group (TOC, collapse, width buttons)
   const leftGroup = document.createElement('div');
   leftGroup.className = 'file-header-actions file-header-actions-left';
 
   const tocBtn = document.createElement('button');
   tocBtn.className = 'file-header-btn active';
-  tocBtn.title = 'Hide Table of Contents (Option+W)';
   tocBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="15" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="17" y2="18"/></svg>';
   leftGroup.appendChild(tocBtn);
 
@@ -121,34 +411,27 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const widthBtn = document.createElement('button');
   widthBtn.className = 'file-header-btn active';
-  widthBtn.title = 'Exit full width (Option+A)';
   widthBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>';
   widthBtn.addEventListener('click', () => {
     const state = getState();
     const newFullWidth = !state.isFullWidth;
     setState({ isFullWidth: newFullWidth });
     document.getElementById('editor')?.classList.toggle('full-width', newFullWidth);
-    widthBtn.classList.toggle('active', newFullWidth);
-    widthBtn.title = newFullWidth ? 'Exit full width (Option+A)' : 'Expand to full width (Option+A)';
-    widthBtn.innerHTML = newFullWidth
-      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
-      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+    syncWidthButton(newFullWidth);
     postCurrentEdit();
     onSettingsChange();
   });
   leftGroup.appendChild(widthBtn);
 
   const tableWrapBtn = document.createElement('button');
-  tableWrapBtn.className = 'file-header-btn'; // default: inactive (disabled)
-  tableWrapBtn.title = 'Enable table word wrap (Option+D)';
+  tableWrapBtn.className = 'file-header-btn';
   tableWrapBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="10" y2="18"/></svg>';
   tableWrapBtn.addEventListener('click', () => {
     const state = getState();
     const newTableWrap = !state.isTableWrap;
     setState({ isTableWrap: newTableWrap });
     document.getElementById('editor')?.classList.toggle('table-wrap', newTableWrap);
-    tableWrapBtn.classList.toggle('active', newTableWrap);
-    tableWrapBtn.title = newTableWrap ? 'Disable table word wrap (Option+D)' : 'Enable table word wrap (Option+D)';
+    syncTableWrapButton(newTableWrap);
     postCurrentEdit();
     onSettingsChange();
   });
@@ -199,19 +482,16 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const scrollTopBtn = document.createElement('button');
   scrollTopBtn.className = 'file-header-btn';
-  scrollTopBtn.title = 'Scroll to top (Option+↑)';
   scrollTopBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m17 14-5-5-5 5"/><path d="M5 3h14"/></svg>';
   rightGroup.appendChild(scrollTopBtn);
 
   const scrollBottomBtn = document.createElement('button');
   scrollBottomBtn.className = 'file-header-btn';
-  scrollBottomBtn.title = 'Scroll to bottom (Option+↓)';
   scrollBottomBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
   rightGroup.appendChild(scrollBottomBtn);
 
   const stageBtn = document.createElement('button');
   stageBtn.className = 'file-header-btn';
-  stageBtn.title = 'Stage current file (Option+S)';
   stageBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5c-1.1-1.1-2.6-1.7-4.5-1.7-2.8 0-4.8 1.3-4.8 3.5 0 1.9 1.5 2.9 4.4 3.5l1.2.3c2.6.6 3.8 1.4 3.8 3.2 0 2.4-2.1 3.8-5 3.8-2 0-3.7-.6-5-1.8"/></svg>';
   rightGroup.appendChild(stageBtn);
 
@@ -223,7 +503,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const sourceBtn = document.createElement('button');
   sourceBtn.className = 'file-header-btn';
-  sourceBtn.title = 'Open native source mode with inline suggestions (Ctrl+/, Option+Q)';
   sourceBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
   rightGroup.appendChild(sourceBtn);
 
@@ -255,10 +534,15 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   exportPdfDarkItem.className = 'file-header-dropdown-item';
   exportPdfDarkItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Export PDF (Dark)';
 
+  const exportDocxItem = document.createElement('button');
+  exportDocxItem.className = 'file-header-dropdown-item';
+  exportDocxItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Export DOCX';
+
   exportDropdown.appendChild(exportHtmlLightItem);
   exportDropdown.appendChild(exportHtmlDarkItem);
   exportDropdown.appendChild(exportPdfLightItem);
   exportDropdown.appendChild(exportPdfDarkItem);
+  exportDropdown.appendChild(exportDocxItem);
   exportWrapper.appendChild(exportDropdown);
   rightGroup.appendChild(exportWrapper);
 
@@ -275,7 +559,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       // Webview storage can be unavailable in restricted contexts.
     }
     themeToggleBtn.classList.toggle('active', mode === 'dark');
-    themeToggleBtn.title = mode === 'dark' ? 'Switch to light mode (Option+R)' : 'Switch to dark mode (Option+R)';
+    setTitleWithShortcut(themeToggleBtn, mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', 'toggleTheme');
     themeToggleBtn.innerHTML = mode === 'dark'
       ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>'
       : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/></svg>';
@@ -288,6 +572,22 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   });
   applyThemeMode(themeMode);
   rightGroup.appendChild(themeToggleBtn);
+
+  const externalFollowBtn = document.createElement('button');
+  externalFollowBtn.className = 'file-header-btn';
+  externalFollowBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 18 6-6-6-6"/><circle cx="6" cy="12" r="2"/></svg>';
+  externalFollowBtn.addEventListener('click', () => {
+    externalFollowEnabled = !externalFollowEnabled;
+    syncExternalFollowButton(externalFollowEnabled);
+    try {
+      localStorage.setItem(EXTERNAL_FOLLOW_STORAGE_KEY, String(externalFollowEnabled));
+    } catch {
+      // Storage can be unavailable in restricted contexts.
+    }
+    externalFollowHandler?.(externalFollowEnabled);
+  });
+  syncExternalFollowButton(externalFollowEnabled);
+  rightGroup.appendChild(externalFollowBtn);
 
   const accentSelect = document.createElement('select');
   accentSelect.className = 'file-header-accent-select';
@@ -313,6 +613,143 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   applyAccentTheme(readStoredAccentTheme());
   rightGroup.appendChild(accentSelect);
 
+  const settingsBtn = document.createElement('button');
+  settingsBtn.className = 'file-header-btn';
+  settingsBtn.title = 'Configure toolbar shortcuts';
+  settingsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.2.5.2 1.06 0 1.56.5.2 1.06.2 1.56 0H21a2 2 0 1 1 0 4h-.09c-.45 0-.88.18-1.2.44z"/></svg>';
+  rightGroup.appendChild(settingsBtn);
+
+  const shortcutsBackdrop = document.createElement('div');
+  shortcutsBackdrop.className = 'file-header-shortcuts-backdrop';
+  shortcutsBackdrop.innerHTML = `
+    <div class="file-header-shortcuts-modal" role="dialog" aria-modal="true" aria-label="Toolbar shortcuts">
+      <div class="file-header-shortcuts-title">Toolbar Shortcut Settings</div>
+      <div class="file-header-shortcuts-list"></div>
+      <div class="file-header-shortcuts-actions">
+        <button class="file-header-shortcuts-btn" data-action="reset">Restore Defaults</button>
+        <button class="file-header-shortcuts-btn primary" data-action="close">Done</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(shortcutsBackdrop);
+
+  const shortcutRows = new Map<ToolbarShortcutAction, HTMLInputElement>();
+  const shortcutsList = shortcutsBackdrop.querySelector('.file-header-shortcuts-list') as HTMLElement;
+
+  const createShortcutRow = (action: ToolbarShortcutAction): void => {
+    const row = document.createElement('div');
+    row.className = 'file-header-shortcuts-row';
+
+    const label = document.createElement('label');
+    label.className = 'file-header-shortcuts-label';
+    label.textContent = SHORTCUT_LABELS[action];
+
+    const input = document.createElement('input');
+    input.className = 'file-header-shortcuts-input';
+    input.type = 'text';
+    input.readOnly = true;
+    input.value = shortcutConfig[action] ? toDisplayShortcut(shortcutConfig[action]) : '';
+    input.placeholder = 'Press shortcut';
+    input.dataset.action = action;
+
+    input.addEventListener('keydown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === 'Escape') {
+        input.blur();
+        return;
+      }
+
+      if (event.key === 'Backspace' || event.key === 'Delete') {
+        setLinkedShortcut(action, '');
+        input.value = '';
+        persistShortcuts();
+        return;
+      }
+
+      const shortcut = formatEventToShortcut(event);
+      if (!shortcut) return;
+
+      setLinkedShortcut(action, shortcut);
+      input.value = toDisplayShortcut(shortcut);
+      persistShortcuts();
+    });
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'file-header-shortcuts-clear';
+    clearBtn.type = 'button';
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', () => {
+      setLinkedShortcut(action, '');
+      input.value = '';
+      persistShortcuts();
+    });
+
+    row.appendChild(label);
+    row.appendChild(input);
+    row.appendChild(clearBtn);
+    shortcutsList.appendChild(row);
+    shortcutRows.set(action, input);
+  };
+
+  (Object.keys(DEFAULT_SHORTCUTS) as ToolbarShortcutAction[]).forEach(createShortcutRow);
+
+  const persistShortcuts = (): void => {
+    try {
+      localStorage.setItem(SHORTCUT_STORAGE_KEY, JSON.stringify(shortcutConfig));
+    } catch {
+      // Storage can be unavailable in restricted contexts.
+    }
+    refreshShortcutAwareTitles();
+    shortcutRows.forEach((input, action) => {
+      input.value = shortcutConfig[action] ? toDisplayShortcut(shortcutConfig[action]) : '';
+    });
+    shortcutChangeHandler?.({ ...shortcutConfig });
+  };
+
+  const openShortcutModal = (): void => {
+    shortcutRows.forEach((input, action) => {
+      input.value = shortcutConfig[action] ? toDisplayShortcut(shortcutConfig[action]) : '';
+    });
+    shortcutsBackdrop.classList.add('open');
+  };
+
+  const closeShortcutModal = (): void => {
+    shortcutsBackdrop.classList.remove('open');
+  };
+
+  settingsBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openShortcutModal();
+  });
+
+  shortcutsBackdrop.addEventListener('click', (event) => {
+    if (event.target === shortcutsBackdrop) {
+      closeShortcutModal();
+    }
+  });
+
+  const modalResetBtn = shortcutsBackdrop.querySelector('[data-action="reset"]') as HTMLButtonElement;
+  const modalCloseBtn = shortcutsBackdrop.querySelector('[data-action="close"]') as HTMLButtonElement;
+
+  modalResetBtn.addEventListener('click', () => {
+    shortcutConfig = { ...DEFAULT_SHORTCUTS };
+    persistShortcuts();
+    shortcutRows.forEach((input, action) => {
+      input.value = shortcutConfig[action] ? toDisplayShortcut(shortcutConfig[action]) : '';
+    });
+  });
+
+  modalCloseBtn.addEventListener('click', () => closeShortcutModal());
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      exportDropdown.classList.remove('open');
+      closeShortcutModal();
+    }
+  });
+
   // Toggle dropdown on button click
   exportBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -324,10 +761,20 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     exportDropdown.classList.remove('open');
   });
 
-  // Close dropdown on Escape
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') exportDropdown.classList.remove('open');
-  });
+  const refreshShortcutAwareTitles = (): void => {
+    const state = getState();
+    syncTocButton(state.isTocVisible);
+    syncWidthButton(state.isFullWidth);
+    syncTableWrapButton(state.isTableWrap);
+    setTitleWithShortcut(scrollTopBtn, 'Scroll to top', 'scrollTop');
+    setTitleWithShortcut(scrollBottomBtn, 'Scroll to bottom', 'scrollBottom');
+    setTitleWithShortcut(stageBtn, 'Stage current file', 'stageFile');
+    setTitleWithShortcut(sourceBtn, 'Open native source mode with inline suggestions', 'openSourceMode');
+    syncExternalFollowButton(externalFollowEnabled);
+    setTitleWithShortcut(themeToggleBtn, themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', 'toggleTheme');
+  };
+
+  refreshShortcutAwareTitles();
 
   bar.appendChild(leftGroup);
   bar.appendChild(nameEl);
@@ -353,10 +800,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
         const state = getState();
         const newTocVisible = !state.isTocVisible;
         setState({ isTocVisible: newTocVisible });
-        tocBtn.classList.toggle('active', newTocVisible);
-        tocBtn.title = newTocVisible
-          ? 'Hide Table of Contents (Option+W)'
-          : 'Toggle Table of Contents (Option+W)';
+        syncTocButton(newTocVisible);
         postCurrentEdit();
         onSettingsChange();
       });
@@ -385,11 +829,52 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
         handler();
       });
     },
+    setExportDocxHandler(handler: () => void) {
+      exportDocxItem.addEventListener('click', () => {
+        exportDropdown.classList.remove('open');
+        handler();
+      });
+    },
     setSourceHandler(handler: () => void) { sourceBtn.addEventListener('click', handler); },
     setScrollTopHandler(handler: () => void) { scrollTopBtn.addEventListener('click', handler); },
     setScrollBottomHandler(handler: () => void) { scrollBottomBtn.addEventListener('click', handler); },
     setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
+    setExternalFollowHandler(handler: (enabled: boolean) => void) {
+      externalFollowHandler = handler;
+      externalFollowHandler?.(externalFollowEnabled);
+    },
+    setShortcutChangeHandler(handler: (config: ToolbarShortcutConfig) => void) {
+      shortcutChangeHandler = handler;
+      shortcutChangeHandler?.({ ...shortcutConfig });
+    },
+    getShortcutConfig() {
+      return { ...shortcutConfig };
+    },
+    syncTocState(visible: boolean) {
+      syncTocButton(visible);
+    },
+    syncFullWidthState(fullWidth: boolean) {
+      syncWidthButton(fullWidth);
+    },
+    syncTableWrapState(enabled: boolean) {
+      syncTableWrapButton(enabled);
+    },
+    triggerTocToggle() {
+      tocBtn.click();
+    },
+    triggerWidthToggle() {
+      widthBtn.click();
+    },
+    triggerTableWrapToggle() {
+      tableWrapBtn.click();
+    },
+    triggerExternalFollowToggle() {
+      externalFollowBtn.click();
+    },
+    triggerThemeToggle() {
+      themeToggleBtn.click();
+    },
     getSourceBtn() { return sourceBtn; },
     getHistoryBtn() { return historyBtn; },
   };

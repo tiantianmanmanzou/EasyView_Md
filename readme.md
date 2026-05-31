@@ -91,6 +91,7 @@ Six heading levels (`# H1` through `###### H6`) with:
 - Collapsible sections — click the arrow to collapse/expand
 - Collapse all — toggle from the file header bar
 - Anchor links — copy heading link for navigation
+- Drag handle level badge — heading rows show `H1`/`H2`/`H3`... beside the drag grip
 - Shortcuts: `Ctrl+Shift+1` through `Ctrl+Shift+4`
 
 ### Lists
@@ -119,7 +120,7 @@ Five callout types with colored left border and icon:
 
 - **70+ languages** with syntax highlighting (Refractor)
 - **Language dropdown** — select or auto-detect language from content
-- **Line numbers**
+- **Line numbers** (auto hidden for `Plain text` code blocks)
 - **Copy button** — one-click copy code to clipboard
 - Dark / light theme aware
 
@@ -191,6 +192,8 @@ Render Mermaid diagrams directly in the editor:
 - Auto-generated from document headings
 - Live updates as you type
 - Click to navigate to any section
+- Fixed status row — shows `Chars`, `Ln` (source markdown line), and `Sel` (selected characters)
+- Improved `Ln` mapping for complex blocks (including tables and special markdown structures)
 - Toggle with `Ctrl+Shift+T` or the header button
 
 ---

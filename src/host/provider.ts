@@ -145,9 +145,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // Sequential operation queue — prevents edit/save interleaving via await
     let operationQueue: Promise<void> = Promise.resolve();
     let lastGitLineRangesJson = '';
+    let latestGitRequestId = 0;
+
+    const normalizeForWebview = (content: string) =>
+      content.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
 
     const postGitChanges = async (contentOverride?: string) => {
+      const requestId = ++latestGitRequestId;
       const content = contentOverride ?? document.getText();
+      const normalizedContent = normalizeForWebview(content);
       let lineRanges: GitLineRange[] = [];
       try {
         lineRanges = await computeGitLineRanges(document.uri, content);
@@ -155,12 +161,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         console.warn('[InLineMd] Failed to compute Git changes:', error);
       }
 
-      const nextJson = JSON.stringify(lineRanges);
+      // Ignore stale async responses; only latest invocation may update UI.
+      if (requestId !== latestGitRequestId) return;
+
+      const nextJson = JSON.stringify({ lineRanges, content: normalizedContent });
       if (nextJson === lastGitLineRangesJson) return;
       lastGitLineRangesJson = nextJson;
       webviewPanel.webview.postMessage({
         type: 'gitStatusChanged',
         lineRanges,
+        content: normalizedContent,
       });
     };
 
@@ -279,7 +289,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       initialCursorCharacter,
       initialTotalLines: Math.max(1, document.lineCount),
     };
-    lastGitLineRangesJson = JSON.stringify(initialGitLineRanges);
+    lastGitLineRangesJson = JSON.stringify({
+      lineRanges: initialGitLineRanges,
+      content: contentWithoutComment,
+    });
 
     // Set HTML with embedded initial data — no postMessage needed for first load
     const t4 = performance.now();

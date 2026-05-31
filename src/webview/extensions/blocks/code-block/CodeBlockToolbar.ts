@@ -11,6 +11,7 @@ import type { EditorView } from 'prosemirror-view';
 import copyToClipboard from 'copy-to-clipboard';
 import padStart from 'lodash/padStart';
 import { codeLanguages } from '../../../editor/lib/CodeLanguages';
+import { isPlainTextCode } from '../../../editor/lib/CodeDetection';
 import { pluginKey as mermaidPluginKey } from '../mermaid/MermaidPlugin';
 import { openLanguageDropdown } from './CodeBlockLanguageDropdown';
 
@@ -20,6 +21,10 @@ export function createLineNumbersDecorations(
   isMermaid: boolean,
   mermaidState: any
 ): Decoration[] {
+  if (isPlainTextCode(node)) {
+    return [];
+  }
+
   const text = node.textContent;
 
   // Count lines correctly: empty text = 1 line, text with content = count newlines + 1

@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "EasyView_Md supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.151",
+  "version": "1.0.181",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "assets/logo.png",
@@ -61,7 +61,10 @@
         "command": "inlineMd.openEditor",
         "title": "Open with EasyView_Md",
         "category": "EasyView_Md",
-        "icon": "$(preview)"
+        "icon": {
+          "light": "assets/easyview-editor-light.svg",
+          "dark": "assets/easyview-editor-dark.svg"
+        }
       },
       {
         "command": "inlineMd.openNativeEditor",
@@ -98,8 +101,8 @@
       "editor/title": [
         {
           "command": "inlineMd.openEditor",
-          "when": "resourceLangId == markdown || resourceLangId == mdx || resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
-          "group": "navigation@1"
+          "when": "activeCustomEditorId != 'inlineMd.markdownEditor' && (resourceLangId == markdown || resourceLangId == mdx || resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx)",
+          "group": "navigation@-100"
         }
       ],
       "explorer/context": [
@@ -231,6 +234,9 @@
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.12",
     "@fontsource/roboto-mono": "^5.2.8",
+    "@types/pako": "^2.0.4",
+    "bpmn-auto-layout": "^1.3.0",
+    "bpmn-js": "^18.18.0",
     "codemirror": "^6.0.2",
     "copy-to-clipboard": "^3.3.3",
     "docx": "^9.5.1",
@@ -243,6 +249,7 @@
     "markdown-it-deflist": "^3.0.0",
     "markdown-it-footnote": "^4.0.0",
     "mermaid": "^11.12.1",
+    "pako": "^2.1.0",
     "pdf-lib": "^1.17.1",
     "pdfmake": "^0.3.4",
     "plantuml-encoder": "^1.4.0",

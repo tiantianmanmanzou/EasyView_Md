@@ -40,6 +40,14 @@ const BASE_NODES: Record<string, NodeSpec> = {
       return ['br'];
     },
   },
+  soft_break: {
+    inline: true,
+    group: 'inline',
+    selectable: false,
+    toDOM() {
+      return ['br'];
+    },
+  },
 };
 
 // ─── ExtensionManager ───────────────────────────────────────────────────────
@@ -66,7 +74,7 @@ export class ExtensionManager {
 
   /**
    * Build the ProseMirror Schema from all extensions' node and mark specs.
-   * Base nodes (doc, text, paragraph, hard_break) are always included.
+   * Base nodes (doc, text, paragraph, hard_break, soft_break) are always included.
    */
   buildSchema(): Schema {
     if (this._schema) return this._schema;
@@ -198,6 +206,9 @@ export class ExtensionManager {
       },
       hard_break(state: any) {
         state.write('\\\n');
+      },
+      soft_break(state: any) {
+        state.write('\n');
       },
     };
 

@@ -13,13 +13,59 @@ import padStart from 'lodash/padStart';
 import { codeLanguages } from '../../../editor/lib/CodeLanguages';
 import { isPlainTextCode } from '../../../editor/lib/CodeDetection';
 import { pluginKey as mermaidPluginKey } from '../mermaid/MermaidPlugin';
+import { pluginKey as plantumlPluginKey } from '../plantuml/PlantUmlPlugin';
+import { pluginKey as externalDiagramPluginKey } from '../external-diagram/ExternalDiagramPlugin';
 import { openLanguageDropdown } from './CodeBlockLanguageDropdown';
+
+type DiagramKind = 'mermaid' | 'plantuml' | 'externalDiagram';
+
+type DiagramToolbarConfig = {
+  kind: DiagramKind;
+  isEditing: boolean;
+  diagramId?: string;
+};
+
+function getDiagramToggleIcon(isEditing: boolean): string {
+  return isEditing
+    ? `
+      <svg fill="currentColor" width="18px" height="18px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 5c5.5 0 9.5 4.5 10.7 6-.9 1.4-4.8 8-10.7 8S2.5 12.4 1.3 11C2.5 9.5 6.5 5 12 5zm0 2C8 7 4.8 9.7 3.5 11 4.8 12.3 8 17 12 17s7.2-4.7 8.5-6C19.2 9.7 16 7 12 7zm0 2.5A3.5 3.5 0 1 1 12 16a3.5 3.5 0 0 1 0-7zm0 2A1.5 1.5 0 1 0 12 15a1.5 1.5 0 0 0 0-3z"/>
+      </svg>
+    `
+    : `
+      <svg fill="currentColor" width="18px" height="18px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+      </svg>
+    `;
+}
+
+function syncDiagramToggleButton(button: HTMLButtonElement, isEditing: boolean): void {
+  button.setAttribute('aria-label', isEditing ? 'Preview' : 'Edit');
+  button.innerHTML = getDiagramToggleIcon(isEditing);
+}
+
+function getDiagramPluginKey(kind: DiagramKind) {
+  if (kind === 'plantuml') return plantumlPluginKey;
+  if (kind === 'externalDiagram') return externalDiagramPluginKey;
+  return mermaidPluginKey;
+}
+
+function getDiagramWrapperClass(kind: DiagramKind): string {
+  if (kind === 'plantuml') return 'plantuml-diagram-wrapper';
+  if (kind === 'externalDiagram') return 'external-diagram-wrapper';
+  return 'mermaid-diagram-wrapper';
+}
+
+function getDiagramWrapperIdPrefix(kind: DiagramKind): string {
+  if (kind === 'plantuml') return 'plantuml-diagram-wrapper-';
+  if (kind === 'externalDiagram') return 'external-diagram-wrapper-';
+  return 'mermaid-diagram-wrapper-';
+}
 
 export function createLineNumbersDecorations(
   node: ProsemirrorNode,
   pos: number,
-  isMermaid: boolean,
-  mermaidState: any
+  diagram: DiagramToolbarConfig | null,
 ): Decoration[] {
   if (isPlainTextCode(node)) {
     return [];
@@ -48,17 +94,11 @@ export function createLineNumbersDecorations(
     .map((_, i) => padStart(`${i + 1}`, gutterWidth, ' '))
     .join('\n');
 
-  // For Mermaid diagrams, find diagramId from decorations
-  let diagramId: string | undefined;
-  if (isMermaid && mermaidState) {
-    const decorations = mermaidState.decorationSet.find(pos, pos + node.nodeSize);
-    const nodeDecoration = decorations.find((d: any) => d.spec?.diagramId && d.from === pos);
-    diagramId = nodeDecoration?.spec?.diagramId;
-  }
-
-  // Determine if code should be hidden (for Mermaid in preview mode)
-  const isEditing = isMermaid && diagramId && mermaidState?.editingId === diagramId;
-  const mermaidClass = isMermaid ? (isEditing ? 'mermaid-editing' : 'mermaid-preview') : '';
+  const diagramMode = diagram ? (diagram.isEditing ? `${diagram.kind}-editing` : `${diagram.kind}-preview`) : '';
+  const style = [
+    `--line-number-gutter-width: ${gutterWidth}`,
+    diagram ? `display:${diagram.isEditing ? 'block' : 'none'}` : '',
+  ].filter(Boolean).join(';');
 
   // Add node decoration to set attributes on the code block wrapper
   // Note: Don't use 'class' as it will overwrite existing classes from toDOM
@@ -66,8 +106,8 @@ export function createLineNumbersDecorations(
     Decoration.node(pos, pos + node.nodeSize, {
       'data-line-numbers': lineNumbers,
       'data-gutter-width': String(gutterWidth),
-      'data-mermaid-mode': mermaidClass || undefined,
-      style: `--line-number-gutter-width: ${gutterWidth}`,
+      'data-diagram-mode': diagramMode || undefined,
+      style,
     }),
   ];
 }
@@ -77,38 +117,16 @@ export function createToolbarDecoration(
   pos: number,
   codeBlockPos: number,
   view: EditorView | null,
-  isMermaid: boolean,
-  mermaidState: any
+  diagram: DiagramToolbarConfig | null,
 ): Decoration {
   const toolbar = document.createElement('div');
   toolbar.className = 'code-block-toolbar';
   toolbar.contentEditable = 'false';
 
-  // For Mermaid diagrams, add Edit button (always, works in both modes)
-  if (isMermaid && view) {
-    // Find diagramId from decorations
-    let diagramId: string | undefined;
-    if (mermaidState) {
-      const codeBlockPos = pos - 1; // toolbar is at pos+1, so code block is at pos-1
-      const decorations = mermaidState.decorationSet.find(codeBlockPos, codeBlockPos + node.nodeSize);
-      if (decorations) {
-        for (const dec of decorations) {
-          if (dec.spec && dec.spec.diagramId) {
-            diagramId = dec.spec.diagramId;
-            break;
-          }
-        }
-      }
-    }
-
+  if (diagram && view && diagram.diagramId) {
     const editButton = document.createElement('button');
     editButton.className = 'code-block-toolbar-button';
-    editButton.setAttribute('aria-label', 'Toggle Edit/Preview');
-    editButton.innerHTML = `
-      <svg fill="currentColor" width="18px" height="18px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-      </svg>
-    `;
+    syncDiagramToggleButton(editButton, diagram.isEditing);
 
     editButton.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -117,15 +135,15 @@ export function createToolbarDecoration(
     editButton.addEventListener('click', (e) => {
       e.stopPropagation();
 
-      if (!view || !diagramId) return;
+      if (!view) return;
 
-      // Check current state dynamically
-      const currentState = mermaidPluginKey.getState(view.state);
-      const isCurrentlyEditing = currentState?.editingId === diagramId;
+      const activePluginKey = getDiagramPluginKey(diagram.kind);
+      const currentState = activePluginKey.getState(view.state);
+      const isCurrentlyEditing = currentState?.editingId === diagram.diagramId;
 
-      // Toggle editing mode
-      const newEditingId = isCurrentlyEditing ? undefined : diagramId;
-      const tr = view.state.tr.setMeta(mermaidPluginKey, {
+      const newEditingId = isCurrentlyEditing ? undefined : diagram.diagramId;
+      syncDiagramToggleButton(editButton, !isCurrentlyEditing);
+      const tr = view.state.tr.setMeta(activePluginKey, {
         editingId: newEditingId
       });
 
@@ -230,8 +248,6 @@ export function createToolbarDecoration(
   toolbar.appendChild(languageButton);
 
   // Return widget decoration
-  // For Mermaid: pos is after code block (pos + nodeSize), place after diagram
-  // For normal code: pos is inside code block (pos + 1), place at start
   return Decoration.widget(pos, toolbar, {
     side: -1,
     stopEvent: () => true,
@@ -245,24 +261,16 @@ export function createMermaidContainerDecoration(
   node: ProsemirrorNode,
   pos: number,
   view: EditorView | null,
-  mermaidState: any
+  diagram: DiagramToolbarConfig,
 ): Decoration {
-  // Find diagramId from Mermaid decorations (same way as CodeBlockView)
-  let diagramId: string | undefined;
-  if (mermaidState && mermaidState.decorationSet) {
-    const decorations = mermaidState.decorationSet.find(pos, pos + node.nodeSize);
-    const nodeDecoration = decorations?.find((d: any) => d.spec.diagramId && d.from === pos);
-    diagramId = nodeDecoration?.spec.diagramId;
-  }
-  // Create toolbar
-  const toolbar = createMermaidToolbarElement(node, pos, view, mermaidState, diagramId || 'unknown');
+  const toolbar = createMermaidToolbarElement(node, pos, view, diagram);
   toolbar.className = 'code-block-toolbar mermaid-toolbar';
 
   /** Find the diagram wrapper for this toolbar */
   const findDiagram = (): HTMLElement | null => {
-    // Try to find diagram by ID first
-    if (diagramId && diagramId !== 'unknown') {
-      const el = document.getElementById(`mermaid-diagram-wrapper-${diagramId}`);
+    if (diagram.diagramId) {
+      const wrapperIdPrefix = getDiagramWrapperIdPrefix(diagram.kind);
+      const el = document.getElementById(`${wrapperIdPrefix}${diagram.diagramId}`);
       if (el) return el;
     }
 
@@ -290,7 +298,8 @@ export function createMermaidContainerDecoration(
 
     // Cache resolved diagramId on toolbar for edit button click handler
     if (diagram.id && toolbar.dataset.diagramId === 'unknown') {
-      toolbar.dataset.diagramId = diagram.id.replace('mermaid-diagram-wrapper-', '');
+      const wrapperIdPrefix = getDiagramWrapperIdPrefix(diagram.kind);
+      toolbar.dataset.diagramId = diagram.id.replace(wrapperIdPrefix, '');
     }
 
     const diagramHeight = diagram.offsetHeight;
@@ -368,25 +377,17 @@ function createMermaidToolbarElement(
   node: ProsemirrorNode,
   pos: number,
   view: EditorView | null,
-  mermaidState: any,
-  initialDiagramId: string
+  diagram: DiagramToolbarConfig,
 ): HTMLElement {
   const toolbar = document.createElement('div');
   toolbar.className = 'code-block-toolbar';
   toolbar.contentEditable = 'false';
-  toolbar.dataset.diagramId = initialDiagramId;
-
-  const isEditing = mermaidState?.editingId === initialDiagramId;
+  toolbar.dataset.diagramId = diagram.diagramId || 'unknown';
 
   // Edit button
   const editButton = document.createElement('button');
   editButton.className = 'code-block-toolbar-button';
-  editButton.setAttribute('aria-label', isEditing ? 'Preview' : 'Edit');
-  editButton.innerHTML = `
-    <svg fill="currentColor" width="18px" height="18px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-    </svg>
-  `;
+  syncDiagramToggleButton(editButton, diagram.isEditing);
 
   editButton.addEventListener('mousedown', (e) => {
     e.preventDefault();
@@ -398,14 +399,16 @@ function createMermaidToolbarElement(
     if (!view) return;
 
     let diagramId = toolbar.dataset.diagramId;
+    const wrapperClass = getDiagramWrapperClass(diagram.kind);
+    const wrapperIdPrefix = getDiagramWrapperIdPrefix(diagram.kind);
 
     // Walk backwards through siblings to find diagram wrapper
     // (drag handle widget may sit between toolbar and diagram)
     if (diagramId === 'unknown') {
       let el = toolbar.previousElementSibling;
       while (el) {
-        if (el.classList.contains('mermaid-diagram-wrapper') && el.id) {
-          diagramId = el.id.replace('mermaid-diagram-wrapper-', '');
+        if (el.classList.contains(wrapperClass) && el.id) {
+          diagramId = el.id.replace(wrapperIdPrefix, '');
           toolbar.dataset.diagramId = diagramId;
           break;
         }
@@ -415,12 +418,14 @@ function createMermaidToolbarElement(
 
     if (!diagramId || diagramId === 'unknown') return;
 
-    const currentState = mermaidPluginKey.getState(view.state);
+    const activePluginKey = getDiagramPluginKey(diagram.kind);
+    const currentState = activePluginKey.getState(view.state);
     const isCurrentlyEditing = currentState?.editingId === diagramId;
 
     // Toggle editing mode
     const newEditingId = isCurrentlyEditing ? undefined : diagramId;
-    const tr = view.state.tr.setMeta(mermaidPluginKey, {
+    syncDiagramToggleButton(editButton, !isCurrentlyEditing);
+    const tr = view.state.tr.setMeta(activePluginKey, {
       editingId: newEditingId
     });
 

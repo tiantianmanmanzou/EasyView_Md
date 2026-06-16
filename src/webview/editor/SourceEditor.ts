@@ -90,6 +90,50 @@ const vscodeHighlightStyle = HighlightStyle.define([
   { tag: tags.comment, color: '#6a9955', fontStyle: 'italic' },
 ]);
 
+const stickyNoteCompactHighlightStyle = HighlightStyle.define([
+  // Keep heading emphasis, but do not scale the font size in sticky note mode.
+  { tag: tags.heading, fontWeight: 'bold', color: 'var(--easyview-source-heading-color, var(--mdpre-accent-text, var(--vscode-editor-foreground)))' },
+  { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], fontSize: '1em', fontStyle: 'normal' },
+  { tag: tags.strong, fontWeight: 'bold' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strikethrough, textDecoration: 'line-through', opacity: '0.7' },
+  { tag: tags.link, color: 'var(--easyview-source-list-marker-color, var(--mdpre-accent, var(--vscode-textLink-foreground)))', textDecoration: 'underline' },
+  { tag: tags.url, color: 'var(--easyview-source-list-marker-color, var(--mdpre-accent, var(--vscode-textLink-foreground)))' },
+  { tag: tags.monospace, color: '#d19a66', fontFamily: 'var(--vscode-editor-font-family, Consolas, monospace)' },
+  { tag: tags.quote, color: 'var(--vscode-textBlockQuote-foreground, #98c379)', fontStyle: 'italic' },
+  { tag: tags.processingInstruction, color: '#6b7280' },
+  { tag: tags.meta, color: '#7f848e' },
+  { tag: tags.contentSeparator, color: '#abb2bf' },
+  { tag: tags.keyword, color: '#c586c0' },
+  { tag: tags.string, color: '#ce9178' },
+  { tag: tags.comment, color: '#6a9955', fontStyle: 'italic' },
+]);
+
+const stickyNoteCompactTheme = EditorView.theme({
+  '&': {
+    '--easyview-source-heading-color': 'var(--mdpre-accent-text, var(--vscode-editor-foreground))',
+    '--easyview-source-list-marker-color': 'var(--mdpre-accent, var(--vscode-editor-foreground))',
+  },
+  '.cm-line:not(.cm-activeLine) .cm-sticky-heading-marker': {
+    display: 'none',
+  },
+  '.cm-activeLine .cm-sticky-heading-marker': {
+    display: 'inline',
+  },
+  '.cm-sticky-heading-text': {
+    color: 'var(--easyview-source-heading-color)',
+    fontWeight: '700',
+  },
+  '.cm-sticky-list-marker': {
+    color: 'var(--easyview-source-list-marker-color)',
+    fontWeight: '400',
+  },
+  '.cm-sticky-list-marker, .cm-sticky-list-marker *': {
+    color: 'var(--easyview-source-list-marker-color) !important',
+    fontWeight: '400 !important',
+  },
+}, { dark: true });
+
 // ─── Custom markdown decorations (elements without CM tags) ──────────────
 
 const CALLOUT_RE = /^>\s*\[!(note|tip|warning|caution|important|info|success|danger|bug|example|quote|abstract|todo|faq|question|failure|error)\]/i;
@@ -112,6 +156,9 @@ const FOOTNOTE_RE = /\[\^[^\]]+\]/g;                   // [^1] or [^label]
 const TABLE_RE = /^\|(.+\|)+\s*$/;                     // | col | col |
 const CHECKBOX_CHECKED_RE = /^(\s*[-*+]\s+)\[x\]/i;   // - [x]
 const CHECKBOX_UNCHECKED_RE = /^(\s*[-*+]\s+)\[ \]/;   // - [ ]
+const HEADING_RE = /^(#{1,6})(\s+)(.*)$/;             // # heading
+const ORDERED_LIST_RE = /^(\s*)(\d+[.)])(\s+)/;       // 1. item / 1) item
+const BULLET_LIST_RE = /^(\s*)([-*+])(\s+)/;          // - item
 const TOC_RE = /^\[\[toc\]\]$/i;                       // [[toc]]
 const STRIKETHROUGH_RE = /~~[^~]+~~/g;                  // ~~strikethrough~~
 const UNDERLINE_RE = /(?<!\w)__(?!_)([^_]+)__(?!\w)/g;  // __underline__ (not ___bold italic___)
@@ -137,7 +184,7 @@ const deco = {
   htmlBracket: Decoration.mark({ attributes: { style: 'color: #abb2bf;' } }),        // < > / — grey
 };
 
-function buildMarkdownDecorations(view: EditorView): DecorationSet {
+function buildMarkdownDecorations(view: EditorView, visualMode: SourceEditorOptions['visualMode'] = 'default'): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const doc = view.state.doc;
 
@@ -260,6 +307,67 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
       })});
     }
 
+    if (visualMode === 'stickyNoteCompactMarkdown') {
+      const headingMatch = text.match(HEADING_RE);
+      if (headingMatch) {
+        const markerStart = line.from;
+        const markerEnd = line.from + headingMatch[1].length + headingMatch[2].length;
+        if (markerEnd > markerStart) {
+          marks.push({
+            from: markerStart,
+            to: markerEnd,
+            deco: Decoration.mark({
+              attributes: {
+                class: 'cm-sticky-heading-marker',
+              },
+            }),
+          });
+        }
+        if (headingMatch[3].length > 0) {
+          marks.push({
+            from: markerEnd,
+            to: line.to,
+            deco: Decoration.mark({
+              attributes: {
+                class: 'cm-sticky-heading-text',
+              },
+            }),
+          });
+        }
+      }
+
+      const orderedListMatch = text.match(ORDERED_LIST_RE);
+      if (orderedListMatch) {
+        const markerStart = line.from + orderedListMatch[1].length;
+        const markerEnd = markerStart + orderedListMatch[2].length;
+        marks.push({
+          from: markerStart,
+          to: markerEnd,
+          deco: Decoration.mark({
+            attributes: {
+              class: 'cm-sticky-list-marker',
+              style: 'font-variant-numeric: tabular-nums;',
+            },
+          }),
+        });
+      } else {
+        const bulletListMatch = text.match(BULLET_LIST_RE);
+        if (bulletListMatch) {
+          const markerStart = line.from + bulletListMatch[1].length;
+          const markerEnd = markerStart + bulletListMatch[2].length;
+          marks.push({
+            from: markerStart,
+            to: markerEnd,
+            deco: Decoration.mark({
+              attributes: {
+                class: 'cm-sticky-list-marker',
+              },
+            }),
+          });
+        }
+      }
+    }
+
     // ── HTML/XML tags ──
     HTML_TAG_RE.lastIndex = 0;
     let htmlM;
@@ -319,17 +427,19 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
   return builder.finish();
 }
 
-const markdownDecoPlugin = ViewPlugin.fromClass(class {
+function createMarkdownDecoPlugin(visualMode: SourceEditorOptions['visualMode'] = 'default') {
+  return ViewPlugin.fromClass(class {
   decorations: DecorationSet;
   constructor(view: EditorView) {
-    this.decorations = buildMarkdownDecorations(view);
+    this.decorations = buildMarkdownDecorations(view, visualMode);
   }
   update(update: ViewUpdate) {
     if (update.docChanged || update.viewportChanged) {
-      this.decorations = buildMarkdownDecorations(update.view);
+      this.decorations = buildMarkdownDecorations(update.view, visualMode);
     }
   }
 }, { decorations: (v) => v.decorations });
+}
 
 // ─── Source search state ──────────────────────────────────────────────────────
 
@@ -394,6 +504,7 @@ function searchSourceText(
 export interface SourceEditorOptions {
   parent: HTMLElement;
   onChange: (content: string) => void;
+  visualMode?: 'default' | 'stickyNoteCompactMarkdown';
   onSelectionOrDocChange?: () => void;
   /** Called when native CM undo stack is exhausted — return true if cross-mode undo was handled */
   onUndoExhausted?: () => boolean;
@@ -467,6 +578,14 @@ const ghostSuggestionField = StateField.define<SourceGhostSuggestion | null>({
 });
 
 export function createSourceEditor(options: SourceEditorOptions) {
+  const visualMode = options.visualMode ?? 'default';
+  const highlightStyle = visualMode === 'stickyNoteCompactMarkdown'
+    ? stickyNoteCompactHighlightStyle
+    : vscodeHighlightStyle;
+  const visualTheme = visualMode === 'stickyNoteCompactMarkdown'
+    ? stickyNoteCompactTheme
+    : [];
+  const markdownDecoPlugin = createMarkdownDecoPlugin(visualMode);
   let suppressChange = false;
   let tabCompletionInFlight = false;
   let previewRequestToken = 0;
@@ -656,7 +775,7 @@ export function createSourceEditor(options: SourceEditorOptions) {
         bracketMatching(),
         closeBrackets(),
         markdown({ codeLanguages: languages }),
-        syntaxHighlighting(vscodeHighlightStyle),
+        syntaxHighlighting(highlightStyle),
         keymap.of([
           { key: 'Tab', run: (cmView) => indentWithTab.run?.(cmView) ?? false },
           indentWithTab,
@@ -679,6 +798,7 @@ export function createSourceEditor(options: SourceEditorOptions) {
             whiteSpace: 'pre',
           },
         }),
+        visualTheme,
         markdownDecoPlugin,
         ghostSuggestionField,
         sourceSearchField,

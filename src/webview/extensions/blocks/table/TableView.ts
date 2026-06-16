@@ -7,7 +7,7 @@
 
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
-import { TableView as ProsemirrorTableView, TableMap } from 'prosemirror-tables';
+import { TableView as ProsemirrorTableView, TableMap, updateColumnsOnResize } from 'prosemirror-tables';
 import { TableStyleHelper } from './TableStyleHelper';
 import * as tableCommands from './TableCommands';
 import { getEditorView } from '../../../index';
@@ -20,6 +20,9 @@ export class TableView extends ProsemirrorTableView {
   private gripToolbar: TableGripToolbar | null = null;
   private toolbarRequest: { type: 'row' | 'column' | 'table', index: number } | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private readonly handleTableWrapLayoutChange = (): void => {
+    requestAnimationFrame(() => this.syncWrappedColumnWidths());
+  };
 
   constructor(node: ProsemirrorNode, cellMinWidth: number) {
     super(node, cellMinWidth);
@@ -63,6 +66,7 @@ export class TableView extends ProsemirrorTableView {
 
     // Create controls
     this.updateControls(node);
+    this.syncWrappedColumnWidths();
 
     // Listen to scroll to update shadows and controls
     this.scrollable.addEventListener(
@@ -76,12 +80,14 @@ export class TableView extends ProsemirrorTableView {
 
     // Initial update
     this.updateClassList(node);
+    window.addEventListener('easyview-table-wrap-layout-change', this.handleTableWrapLayoutChange);
 
     // Wait for DOM to render to ensure scroll shadows are correct
     setTimeout(() => {
       if (this.dom) {
         this.updateClassList(this.node);
         this.updateControls(this.node);
+        this.syncWrappedColumnWidths();
       }
     }, 100);
 
@@ -90,6 +96,7 @@ export class TableView extends ProsemirrorTableView {
       if (this.dom && this.node) {
         this.updateClassList(this.node);
         this.updateControls(this.node);
+        this.syncWrappedColumnWidths();
       }
     });
     this.resizeObserver.observe(this.table);
@@ -103,6 +110,7 @@ export class TableView extends ProsemirrorTableView {
         if (this.dom && this.node) {
           this.updateClassList(this.node);
           this.updateControls(this.node);
+          this.syncWrappedColumnWidths();
         }
       });
     }
@@ -411,6 +419,154 @@ export class TableView extends ProsemirrorTableView {
     this.dom.style.setProperty('--table-width', `${this.table.clientWidth + 12}px`);
   }
 
+  private isWrapMode(): boolean {
+    return document.getElementById('editor')?.classList.contains('table-wrap') ?? false;
+  }
+
+  private hasManualColumnWidths(node: ProsemirrorNode): boolean {
+    const map = TableMap.get(node);
+    const seen = new Set<number>();
+
+    for (const pos of map.map) {
+      if (seen.has(pos)) continue;
+      seen.add(pos);
+
+      const cell = node.nodeAt(pos);
+      const colwidth = cell?.attrs?.colwidth;
+      if (Array.isArray(colwidth) && colwidth.some((width) => typeof width === 'number' && width > 0)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private resetBalancedColumnWidths(): void {
+    if (!this.node || !this.colgroup || !this.table) return;
+
+    this.table.classList.remove('table-balanced-wrap');
+    updateColumnsOnResize(this.node, this.colgroup, this.table, this.defaultCellMinWidth);
+  }
+
+  private syncWrappedColumnWidths(): void {
+    if (!this.node || !this.table || !this.colgroup || this.node.type.name !== 'table') return;
+
+    if (!this.isWrapMode() || this.hasManualColumnWidths(this.node)) {
+      this.resetBalancedColumnWidths();
+      return;
+    }
+
+    const map = TableMap.get(this.node);
+    if (map.width <= 0) {
+      this.resetBalancedColumnWidths();
+      return;
+    }
+
+    const scores = new Array<number>(map.width).fill(0);
+    const counts = new Array<number>(map.width).fill(0);
+    const maxScores = new Array<number>(map.width).fill(0);
+    const seen = new Set<number>();
+
+    for (const pos of map.map) {
+      if (seen.has(pos)) continue;
+      seen.add(pos);
+
+      const cell = this.node.nodeAt(pos);
+      if (!cell) continue;
+
+      const rect = map.findCell(pos);
+      const colspan = Math.max(1, rect.right - rect.left);
+      const score = this.scoreCellContent(cell) / colspan;
+
+      for (let col = rect.left; col < rect.right; col++) {
+        scores[col] += score;
+        counts[col] += 1;
+        maxScores[col] = Math.max(maxScores[col], score);
+      }
+    }
+
+    const weights = scores.map((score, index) => {
+      const avg = score / Math.max(1, counts[index]);
+      const max = maxScores[index];
+      return Math.max(1, Math.sqrt(avg * 0.7 + max * 0.3));
+    });
+    const widths = this.normalizeColumnPercents(weights);
+
+    const cols = Array.from(this.colgroup.children) as HTMLTableColElement[];
+    widths.forEach((width, index) => {
+      const col = cols[index];
+      if (!col) return;
+      col.style.width = `${width.toFixed(2)}%`;
+    });
+
+    this.table.style.width = '100%';
+    this.table.style.minWidth = '';
+    this.table.classList.add('table-balanced-wrap');
+  }
+
+  private scoreCellContent(cell: ProsemirrorNode): number {
+    const text = cell.textContent.trim();
+    if (!text) return 2;
+
+    const chineseChars = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
+    const asciiRuns = text.match(/[A-Za-z0-9_./:@#?&=%+-]+/g) ?? [];
+    const asciiScore = asciiRuns.reduce((sum, word) => {
+      const longTokenPenalty = word.length > 18 ? word.length * 0.8 : word.length * 0.45;
+      return sum + longTokenPenalty;
+    }, 0);
+    const punctuationScore = Math.min(8, (text.match(/[，。；：、,.!?;:()（）[\]{}<>《》|]/g) ?? []).length * 0.35);
+    const codeBonus = this.hasCodeContent(cell) ? 8 : 0;
+
+    return Math.max(2, chineseChars * 1.25 + asciiScore + punctuationScore + codeBonus);
+  }
+
+  private hasCodeContent(node: ProsemirrorNode): boolean {
+    let found = node.type.name === 'code_block';
+    node.descendants((child) => {
+      if (found) return false;
+      if (child.type.name === 'code_block') {
+        found = true;
+        return false;
+      }
+      if (child.marks.some((mark) => mark.type.name === 'code')) {
+        found = true;
+        return false;
+      }
+      return true;
+    });
+    return found;
+  }
+
+  private normalizeColumnPercents(weights: number[]): number[] {
+    if (weights.length === 0) return [];
+
+    const minPercent = Math.min(14, Math.max(6, 56 / weights.length));
+    const maxPercent = Math.min(46, Math.max(22, 160 / weights.length));
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || weights.length;
+    let widths = weights.map((weight) => (weight / totalWeight) * 100);
+
+    for (let i = 0; i < 6; i++) {
+      widths = widths.map((width) => Math.min(maxPercent, Math.max(minPercent, width)));
+      const total = widths.reduce((sum, width) => sum + width, 0);
+      if (Math.abs(total - 100) < 0.01) break;
+
+      const adjustableIndexes = widths
+        .map((width, index) => ({ width, index }))
+        .filter(({ width }) => (total > 100 ? width > minPercent : width < maxPercent))
+        .map(({ index }) => index);
+
+      if (adjustableIndexes.length === 0) break;
+
+      const delta = (100 - total) / adjustableIndexes.length;
+      adjustableIndexes.forEach((index) => {
+        widths[index] += delta;
+      });
+    }
+
+    const total = widths.reduce((sum, width) => sum + width, 0) || 100;
+    return widths.map((width) => (width / total) * 100);
+  }
+
   override destroy(): void {
     // Clean up
     if (this.scrollable) {
@@ -433,6 +589,7 @@ export class TableView extends ProsemirrorTableView {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
+    window.removeEventListener('easyview-table-wrap-layout-change', this.handleTableWrapLayoutChange);
 
     super.destroy?.();
   }

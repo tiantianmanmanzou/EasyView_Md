@@ -123,7 +123,7 @@ export const tokenMapping: Record<string, any> = {
   // Safety: ignore footnote_anchor if cleanup rule misses it (prevents parser crash)
   footnote_anchor: { ignore: true },
   hardbreak: { node: 'hard_break' },
-  softbreak: { node: 'hard_break' },
+  softbreak: { node: 'soft_break' },
 
   // Inline marks
   em: { mark: 'em' },

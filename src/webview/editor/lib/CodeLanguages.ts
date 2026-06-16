@@ -65,6 +65,25 @@ export const codeLanguages: Record<string, CodeLanguage> = {
     label: "Docker",
     loader: () => import("refractor/lang/docker").then((m) => m.default),
   },
+  dot: {
+    lang: "dot",
+    label: "Graphviz DOT",
+    loader: () => import("refractor/lang/dot").then((m) => m.default),
+  },
+  graphviz: {
+    lang: "dot",
+    label: "Graphviz DOT",
+    loader: () => import("refractor/lang/dot").then((m) => m.default),
+  },
+  d2: {
+    lang: "",
+    label: "D2",
+  },
+  bpmn: {
+    lang: "xml",
+    label: "BPMN",
+    loader: () => import("refractor/lang/markup").then((m) => m.default),
+  },
   elixir: {
     lang: "elixir",
     label: "Elixir",
@@ -177,6 +196,14 @@ export const codeLanguages: Record<string, CodeLanguage> = {
     label: "Mermaid",
     // @ts-expect-error Mermaid is not in types but exists
     loader: () => import("refractor/lang/mermaid").then((m) => m.default),
+  },
+  plantuml: {
+    lang: "",
+    label: "PlantUML",
+  },
+  puml: {
+    lang: "",
+    label: "PlantUML",
   },
   nginx: {
     lang: "nginx",

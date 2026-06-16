@@ -1125,6 +1125,29 @@ async function syncWebviewContentToDocument(
   }
 }
 
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function enqueueOperation(
+  ctx: MessageHandlerContext,
+  operationName: string,
+  operation: () => Promise<void>,
+  onError?: (messageText: string) => void
+): void {
+  const queue = ctx.getOperationQueue()
+    .catch((error) => {
+      console.warn(`[InLineMd] Previous queued operation failed before ${operationName}: ${toErrorMessage(error)}`);
+    })
+    .then(operation)
+    .catch((error) => {
+      const messageText = toErrorMessage(error);
+      console.error(`[InLineMd] ${operationName} failed:`, error);
+      onError?.(messageText);
+    });
+  ctx.setOperationQueue(queue);
+}
+
 /**
  * Handle a single webview message. Extracted from resolveCustomTextEditor
  * to keep the main provider file focused on lifecycle management.
@@ -1144,10 +1167,9 @@ export async function handleWebviewMessage(
       const tocVisible = message.tocVisible ?? true;
       const tableWrap = message.tableWrap ?? false;
 
-      const newQueue = ctx.getOperationQueue().then(async () => {
+      enqueueOperation(ctx, 'webview edit sync', async () => {
         await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap });
       });
-      ctx.setOperationQueue(newQueue);
       break;
     }
 
@@ -1161,7 +1183,10 @@ export async function handleWebviewMessage(
       const requestedLine = typeof message.line === 'number' ? message.line : 0;
       const requestedCharacter = typeof message.character === 'number' ? message.character : 0;
 
-      const newQueue = ctx.getOperationQueue().then(async () => {
+      enqueueOperation(
+        ctx,
+        'open native source mode',
+        async () => {
         await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap });
         await ensureNativeMarkdownEditorFont(document);
 
@@ -1186,8 +1211,11 @@ export async function handleWebviewMessage(
         } catch {
           // Native inline suggestions remain available even if explicit triggering is unavailable.
         }
-      });
-      ctx.setOperationQueue(newQueue);
+        },
+        (messageText) => {
+          vscode.window.showErrorMessage(`Failed to open native source mode: ${messageText}`);
+        }
+      );
       break;
     }
 
@@ -1243,7 +1271,7 @@ export async function handleWebviewMessage(
     }
 
     case 'save': {
-      const newQueue = ctx.getOperationQueue().then(async () => {
+      enqueueOperation(ctx, 'save document', async () => {
         // Guard save with isUpdatingDocument to prevent formatter-triggered
         // onDidChangeTextDocument from being treated as external (AI) changes
         ctx.setIsUpdatingDocument(true);
@@ -1270,7 +1298,15 @@ export async function handleWebviewMessage(
           ctx.setIsUpdatingDocument(false);
         }
       });
-      ctx.setOperationQueue(newQueue);
+      break;
+    }
+
+    case 'webviewRuntimeError': {
+      const source = typeof message.source === 'string' ? message.source : 'unknown';
+      const messageText = typeof message.message === 'string' ? message.message : 'Unknown webview runtime error';
+      const stack = typeof message.stack === 'string' ? message.stack : '';
+      console.error(`[InLineMd][webview:${source}] ${messageText}${stack ? `\n${stack}` : ''}`);
+      vscode.window.showErrorMessage(`EasyView_Md webview error (${source}): ${messageText}`);
       break;
     }
 
@@ -1280,7 +1316,7 @@ export async function handleWebviewMessage(
         break;
       }
 
-      const newQueue = ctx.getOperationQueue().then(async () => {
+      enqueueOperation(ctx, 'stage markdown file', async () => {
         ctx.setIsUpdatingDocument(true);
         try {
           await document.save();
@@ -1298,8 +1334,6 @@ export async function handleWebviewMessage(
           vscode.window.showErrorMessage(`Failed to stage file: ${messageText}`);
         }
       });
-
-      ctx.setOperationQueue(newQueue);
       break;
     }
 

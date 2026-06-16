@@ -31,12 +31,12 @@ function collectSelectedParagraphs(state: EditorState): { node: ProsemirrorNode;
 /**
  * Extract markdown-like text from a paragraph node.
  * Preserves marks (bold, italic, etc.) by wrapping with markdown syntax,
- * and converts hard_break nodes to newlines.
+ * and converts break nodes to newlines.
  */
 function paragraphToText(node: ProsemirrorNode): string {
   let text = '';
   node.forEach((child) => {
-    if (child.type.name === 'hard_break') {
+    if (child.type.name === 'hard_break' || child.type.name === 'soft_break') {
       text += '\n';
     } else {
       let t = child.isText ? (child.text || '') : child.textContent;

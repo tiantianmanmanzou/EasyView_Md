@@ -7,12 +7,13 @@ import type { Transaction } from 'prosemirror-state';
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { isCode, isPlantUml } from '../../../editor/lib/CodeDetection';
-import { findBlockNodes, type NodeWithPos } from '../../../editor/lib/NodeFinder';
+import { findBlockNodes, type NodeWithPos, findParentNode } from '../../../editor/lib/NodeFinder';
 
 export const pluginKey = new PluginKey('plantuml');
 
 type PlantUmlState = {
   decorationSet: DecorationSet;
+  editingId?: string;
 };
 
 const PLANTUML_SERVER = 'https://www.plantuml.com/plantuml/svg/';
@@ -275,6 +276,7 @@ function getNewState(doc: Node, pluginState: PlantUmlState): PlantUmlState {
   });
 
   return {
+    ...pluginState,
     decorationSet: DecorationSet.create(doc, decorations),
   };
 }
@@ -285,16 +287,52 @@ export default function PlantUmlPlugin() {
     state: {
       init: (_, { doc }) => getNewState(doc, { decorationSet: DecorationSet.create(doc, []) }),
       apply(transaction: Transaction, pluginState: PlantUmlState) {
-        const nextState = {
+        const plantumlMeta = transaction.getMeta(pluginKey);
+        const nextState: PlantUmlState = {
+          ...pluginState,
+          editingId:
+            plantumlMeta && 'editingId' in plantumlMeta
+              ? plantumlMeta.editingId
+              : pluginState.editingId,
           decorationSet: pluginState.decorationSet.map(transaction.mapping, transaction.doc),
         };
 
-        if (transaction.docChanged) {
+        if (transaction.selectionSet && nextState.editingId && !plantumlMeta) {
+          const codeBlock = findParentNode(isCode)(transaction.selection);
+          let isEditing = codeBlock && isPlantUml(codeBlock.node);
+
+          if (isEditing && codeBlock && !transaction.docChanged) {
+            const decorations = nextState.decorationSet.find(
+              codeBlock.pos,
+              codeBlock.pos + codeBlock.node.nodeSize,
+            );
+            const nodeDecoration = decorations.find(
+              (d) => d.spec.diagramId && d.from === codeBlock.pos,
+            );
+            if (nodeDecoration?.spec.diagramId !== nextState.editingId) {
+              isEditing = false;
+            }
+          }
+
+          if (!isEditing) {
+            nextState.editingId = undefined;
+          }
+        }
+
+        if (transaction.docChanged || plantumlMeta) {
           return getNewState(transaction.doc, nextState);
         }
 
         return nextState;
       },
+    },
+    view: (view) => {
+      try {
+        view.dispatch(view.state.tr.setMeta(pluginKey, { loaded: true }));
+      } catch {
+        // View might be destroyed during initialization.
+      }
+      return {};
     },
     props: {
       decorations(state) {

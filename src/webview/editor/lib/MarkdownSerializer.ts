@@ -242,19 +242,21 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
   }
 
   // Serialize inline content of a node to clean HTML
-  function serializeInlineHtml(node: ProsemirrorNode): string {
-    let html = '';
-    node.forEach((child) => {
-      if (child.isText) {
-        html += serializeMarksOpen(child.marks);
-        html += escHtml(child.text || '');
-        html += serializeMarksClose(child.marks);
-      } else if (child.type.name === 'hard_break') {
-        html += '<br>';
-      } else if (child.type.name === 'image') {
-        const { src, originalSrc, alt, title } = child.attrs;
-        const u = originalSrc || src || '';
-        html += `<img src="${escHtml(u)}"${alt ? ` alt="${escHtml(alt)}"` : ''}${title ? ` title="${escHtml(title)}"` : ''}>`;
+function serializeInlineHtml(node: ProsemirrorNode): string {
+  let html = '';
+  node.forEach((child) => {
+    if (child.isText) {
+      html += serializeMarksOpen(child.marks);
+      html += escHtml(child.text || '');
+      html += serializeMarksClose(child.marks);
+    } else if (child.type.name === 'hard_break') {
+      html += '<br>';
+    } else if (child.type.name === 'soft_break') {
+      html += '\n';
+    } else if (child.type.name === 'image') {
+      const { src, originalSrc, alt, title } = child.attrs;
+      const u = originalSrc || src || '';
+      html += `<img src="${escHtml(u)}"${alt ? ` alt="${escHtml(alt)}"` : ''}${title ? ` title="${escHtml(title)}"` : ''}>`;
       } else if (child.type.name === 'html_inline') {
         html += child.attrs.html || '';
       }
@@ -354,6 +356,7 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
         paragraph(s, n) { s.renderInline(n); },
         text(s, n) { s.text(n.text || ''); },
         hard_break(s) { s.write(' '); },
+        soft_break(s) { s.write(' '); },
         image(s, n) { s.write(`![${n.attrs.alt || ''}](${formatUrl(n.attrs.originalSrc || n.attrs.src || '')})`); },
         html_inline(s, n) { s.text(n.attrs.html, false); },
         footnote_ref(s, n) { s.write(`[^${n.attrs.label || '1'}]`); },
@@ -428,6 +431,10 @@ function serializeHtmlInline(state: MarkdownSerializerState, node: ProsemirrorNo
 
 function serializeHardBreak(state: MarkdownSerializerState) {
   state.write('<br>\n');
+}
+
+function serializeSoftBreak(state: MarkdownSerializerState) {
+  state.write('\n');
 }
 
 function serializeFrontmatter(state: MarkdownSerializerState, node: ProsemirrorNode) {
@@ -596,6 +603,7 @@ export const serializer = new MarkdownSerializer(
     html_block: serializeHtmlBlock,
     html_inline: serializeHtmlInline,
     hard_break: serializeHardBreak,
+    soft_break: serializeSoftBreak,
     text(state, node) {
       state.text(node.text || '');
     },

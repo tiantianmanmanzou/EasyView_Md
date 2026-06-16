@@ -11,17 +11,25 @@ export class ImageToolbar {
   private urlInput: HTMLInputElement;
   private urlRow: HTMLDivElement;
   private srcRow: HTMLDivElement;
+  private previewBtn: HTMLButtonElement;
   private replaceUrlBtn: HTMLButtonElement;
   private browseBtn: HTMLButtonElement;
   private deleteBtn: HTMLButtonElement;
   private applyUrlBtn: HTMLButtonElement;
+  private previewOverlay: HTMLDivElement | null = null;
+  private previewImage: HTMLImageElement | null = null;
+  private previewCaption: HTMLDivElement | null = null;
   private view: EditorView | null = null;
   private isVisible = false;
   private currentPos = -1;
+  private currentPreviewSrc = '';
+  private currentPreviewAlt = '';
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
   private activeDom: HTMLElement | null = null;
 
   constructor() {
+    ensureImagePreviewStyles();
+
     this.el = document.createElement('div');
     this.el.className = 'image-toolbar';
 
@@ -31,6 +39,17 @@ export class ImageToolbar {
 
     this.srcDisplay = document.createElement('span');
     this.srcDisplay.className = 'image-toolbar-src';
+
+    // Preview large image button
+    this.previewBtn = document.createElement('button');
+    this.previewBtn.className = 'link-edit-btn';
+    this.previewBtn.title = 'View image';
+    this.previewBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+    this.previewBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openPreview();
+    });
 
     // Replace with URL button
     this.replaceUrlBtn = document.createElement('button');
@@ -63,6 +82,7 @@ export class ImageToolbar {
     });
 
     this.srcRow.appendChild(this.srcDisplay);
+    this.srcRow.appendChild(this.previewBtn);
     this.srcRow.appendChild(this.replaceUrlBtn);
     this.srcRow.appendChild(this.browseBtn);
     this.srcRow.appendChild(this.deleteBtn);
@@ -140,6 +160,9 @@ export class ImageToolbar {
 
     // Populate from node attrs
     const src = node.attrs.originalSrc || node.attrs.src || '';
+    const img = dom.querySelector('img') as HTMLImageElement | null;
+    this.currentPreviewSrc = img?.currentSrc || img?.src || node.attrs.src || src;
+    this.currentPreviewAlt = node.attrs.alt || '';
     this.srcDisplay.textContent = this.truncate(src);
     this.srcDisplay.title = src;
     this.altInput.value = node.attrs.alt || '';
@@ -188,18 +211,25 @@ export class ImageToolbar {
 
   get visible() { return this.isVisible; }
 
+  preview(src: string, alt = '', caption = '') {
+    this.openPreview(src, alt, caption);
+  }
+
   private updatePosition(dom: HTMLElement) {
     const rect = dom.getBoundingClientRect();
     const popupWidth = this.el.offsetWidth;
-    const centerX = rect.left + rect.width / 2;
-    let left = centerX - popupWidth / 2;
-    let top = rect.bottom + 8;
+    const popupHeight = this.el.offsetHeight;
+    let left = rect.right - popupWidth;
+    let top = rect.top - popupHeight - 8;
 
-    // Keep within viewport
-    left = Math.max(8, Math.min(left, window.innerWidth - popupWidth - 8));
-    if (top + this.el.offsetHeight > window.innerHeight - 8) {
-      top = rect.top - this.el.offsetHeight - 8;
+    // Prefer top-right. If there is no room above, overlay near the image's top-right.
+    if (top < 8) {
+      top = rect.top + 8;
     }
+
+    // Keep within viewport.
+    left = Math.max(8, Math.min(left, window.innerWidth - popupWidth - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - popupHeight - 8));
 
     this.el.style.left = `${left}px`;
     this.el.style.top = `${top}px`;
@@ -273,12 +303,165 @@ export class ImageToolbar {
     }));
   }
 
+  private ensurePreviewModal() {
+    if (this.previewOverlay && this.previewImage && this.previewCaption) return;
+
+    this.previewOverlay = document.createElement('div');
+    this.previewOverlay.className = 'image-preview-modal';
+    this.previewOverlay.addEventListener('mousedown', (e) => {
+      if (e.target === this.previewOverlay) {
+        e.preventDefault();
+        this.closePreview();
+      }
+    });
+
+    const dialog = document.createElement('div');
+    dialog.className = 'image-preview-dialog';
+    dialog.addEventListener('mousedown', (e) => e.stopPropagation());
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'image-preview-close';
+    closeBtn.type = 'button';
+    closeBtn.title = 'Close';
+    closeBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+    closeBtn.addEventListener('click', () => this.closePreview());
+
+    this.previewImage = document.createElement('img');
+    this.previewImage.className = 'image-preview-img';
+    this.previewImage.draggable = false;
+
+    this.previewCaption = document.createElement('div');
+    this.previewCaption.className = 'image-preview-caption';
+
+    dialog.appendChild(closeBtn);
+    dialog.appendChild(this.previewImage);
+    dialog.appendChild(this.previewCaption);
+    this.previewOverlay.appendChild(dialog);
+    document.body.appendChild(this.previewOverlay);
+  }
+
+  private openPreview(src = this.currentPreviewSrc, alt = this.currentPreviewAlt, caption = this.srcDisplay.title) {
+    if (!src) return;
+
+    this.ensurePreviewModal();
+    if (!this.previewOverlay || !this.previewImage || !this.previewCaption) return;
+
+    this.previewImage.src = src;
+    this.previewImage.alt = alt || '';
+    this.previewCaption.textContent = alt || caption || src;
+    this.previewOverlay.classList.add('open');
+
+    const existingHandler = (this.previewOverlay as any).__imagePreviewKeydown as ((event: KeyboardEvent) => void) | undefined;
+    if (existingHandler) {
+      document.removeEventListener('keydown', existingHandler);
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      this.closePreview();
+    };
+    this.previewOverlay.dataset.keyHandlerBound = 'true';
+    (this.previewOverlay as any).__imagePreviewKeydown = onKeyDown;
+    document.addEventListener('keydown', onKeyDown);
+  }
+
+  private closePreview() {
+    if (!this.previewOverlay) return;
+    this.previewOverlay.classList.remove('open');
+    const handler = (this.previewOverlay as any).__imagePreviewKeydown as ((event: KeyboardEvent) => void) | undefined;
+    if (handler) {
+      document.removeEventListener('keydown', handler);
+      delete (this.previewOverlay as any).__imagePreviewKeydown;
+    }
+  }
+
   destroy() {
+    this.closePreview();
     if (this.outsideClickHandler) {
       document.removeEventListener('mousedown', this.outsideClickHandler);
     }
+    this.previewOverlay?.remove();
     this.el.remove();
   }
 }
 
 export const imageToolbar = new ImageToolbar();
+
+function ensureImagePreviewStyles() {
+  const styleId = 'easyview-image-preview-styles';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .image-preview-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(2px);
+    }
+    .image-preview-modal.open {
+      display: flex;
+    }
+    .image-preview-dialog {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      max-width: min(96vw, 1800px);
+      max-height: 94vh;
+      padding: 14px;
+      border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.32));
+      border-radius: 10px;
+      background: var(--vscode-editorWidget-background, #252526);
+      box-shadow: 0 18px 56px rgba(0, 0, 0, 0.55);
+    }
+    .image-preview-img {
+      display: block;
+      max-width: calc(96vw - 64px);
+      max-height: calc(94vh - 96px);
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 6px;
+      background: var(--vscode-editor-background, #1e1e1e);
+    }
+    .image-preview-caption {
+      max-width: calc(96vw - 64px);
+      margin-top: 10px;
+      color: var(--vscode-descriptionForeground, #9d9d9d);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .image-preview-close {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+      border-radius: 999px;
+      background: var(--vscode-editorWidget-background, #252526);
+      color: var(--vscode-icon-foreground, #c5c5c5);
+      cursor: pointer;
+    }
+    .image-preview-close:hover {
+      background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.12));
+      color: var(--vscode-editor-foreground, #fff);
+    }
+  `;
+  document.head.appendChild(style);
+}

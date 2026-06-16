@@ -330,12 +330,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   private getHtmlForWebview(webview: vscode.Webview, initialData?: any): string {
+    const assetVersion = `${Date.now()}`;
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
-    );
+    ).with({ query: `v=${assetVersion}` });
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.css')
-    );
+    ).with({ query: `v=${assetVersion}` });
     const nonce = getNonce();
 
     // Get CSV delimiter setting from configuration

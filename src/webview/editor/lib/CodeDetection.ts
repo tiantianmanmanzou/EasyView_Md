@@ -30,9 +30,10 @@ export function isPlainTextLanguage(language: unknown): boolean {
  * @returns true if the node is a Mermaid code block.
  */
 export function isMermaid(node: Node) {
+  const language = normalizeDiagramLanguage(node.attrs.language);
   return (
     isCode(node) &&
-    (node.attrs.language === "mermaid" || node.attrs.language === "mermaidjs")
+    (language === "mermaid" || language === "mermaidjs")
   );
 }
 
@@ -41,8 +42,29 @@ export function isPlainTextCode(node: Node) {
 }
 
 export function isPlantUml(node: Node) {
+  const language = normalizeDiagramLanguage(node.attrs.language);
   return (
     isCode(node) &&
-    (node.attrs.language === 'plantuml' || node.attrs.language === 'puml')
+    (language === 'plantuml' || language === 'puml')
   );
+}
+
+function normalizeDiagramLanguage(language: unknown): string {
+  return String(language ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+export function getExternalDiagramType(node: Node): 'graphviz' | 'd2' | 'bpmn' | null {
+  if (!isCode(node)) return null;
+
+  const language = normalizeDiagramLanguage(node.attrs.language);
+  if (language === 'dot' || language === 'graphviz') return 'graphviz';
+  if (language === 'd2') return 'd2';
+  if (language === 'bpmn') return 'bpmn';
+  if (language === 'xml' && isBpmnXml(node.textContent)) return 'bpmn';
+  return null;
+}
+
+export function isBpmnXml(source: string): boolean {
+  return /<(?:\w+:)?definitions\b/i.test(source) &&
+    /xmlns(?::\w+)?=["']http:\/\/www\.omg\.org\/spec\/BPMN\/20100524\/MODEL["']/i.test(source);
 }

@@ -47,6 +47,7 @@ export class TableOfContents {
   private sourceScrollEl: HTMLElement | null = null;
   private sourceScrollHandler: (() => void) | null = null;
   private sourceGetActivePos: (() => number) | null = null;
+  private visibleHeadingPosSet = new Set<number>();
 
   constructor(view: EditorView) {
     this.view = view;
@@ -180,6 +181,7 @@ export class TableOfContents {
     });
 
     const visibleByTree = this.computeVisibleHeadings();
+    this.visibleHeadingPosSet = new Set(visibleByTree.map((h) => h.pos));
     // Filter headings by search text
     const filtered = this.filterText
       ? visibleByTree.filter((h) => h.text.toLowerCase().includes(this.filterText))
@@ -382,12 +384,10 @@ export class TableOfContents {
 
   private findVisibleAncestorPos(pos: number): number {
     if (pos < 0 || this.headings.length === 0) return -1;
-    const visibleByTree = this.computeVisibleHeadings();
-    const visiblePosSet = new Set(visibleByTree.map((h) => h.pos));
     let candidate = -1;
     for (const heading of this.headings) {
       if (heading.pos > pos) break;
-      if (visiblePosSet.has(heading.pos)) {
+      if (this.visibleHeadingPosSet.has(heading.pos)) {
         candidate = heading.pos;
       }
     }
@@ -462,6 +462,16 @@ export class TableOfContents {
         behavior: 'smooth',
       });
     }
+  }
+
+  private findActiveHeadingPosBySelectionPos(selectionPos: number): number {
+    if (this.headings.length === 0) return -1;
+    let candidate = -1;
+    for (const heading of this.headings) {
+      if (heading.pos > selectionPos) break;
+      candidate = heading.pos;
+    }
+    return this.findVisibleAncestorPos(candidate);
   }
 
   // ─── Scroll to Heading ───────────────────────────────────────────────
@@ -555,7 +565,7 @@ export class TableOfContents {
   // ─── Public API ──────────────────────────────────────────────────────
 
   /** Called from dispatchTransaction on every state change */
-  public update(view: EditorView): void {
+  public update(view: EditorView, transaction?: { docChanged?: boolean; selectionSet?: boolean }): void {
     this.view = view;
     if (!this.isVisible) return;
 
@@ -564,6 +574,17 @@ export class TableOfContents {
     if (this.headingsChanged(this.headings, newHeadings)) {
       this.headings = newHeadings;
       this.renderList();
+      return;
+    }
+
+    // Fast path for large documents: when only cursor/selection moves,
+    // compute active heading from document position instead of scanning DOM.
+    if (transaction?.selectionSet || transaction?.docChanged) {
+      const activePos = this.findActiveHeadingPosBySelectionPos(view.state.selection.from);
+      if (activePos !== this.activeIndex) {
+        this.activeIndex = activePos;
+        this.applyActiveClass(activePos);
+      }
     } else {
       this.highlightActiveHeading();
     }

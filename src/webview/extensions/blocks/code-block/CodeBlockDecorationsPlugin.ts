@@ -7,11 +7,15 @@
  */
 
 import { Plugin, PluginKey } from 'prosemirror-state';
+import type { EditorState } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { _isMouseDragging } from '../../../editor/EditorCore';
+import { getExternalDiagramType, isMermaid, isPlantUml } from '../../../editor/lib/CodeDetection';
 import { pluginKey as mermaidPluginKey } from '../mermaid/MermaidPlugin';
+import { pluginKey as plantumlPluginKey } from '../plantuml/PlantUmlPlugin';
+import { pluginKey as externalDiagramPluginKey } from '../external-diagram/ExternalDiagramPlugin';
 import { createLineNumbersDecorations, createToolbarDecoration, createMermaidContainerDecoration } from './CodeBlockToolbar';
 
 export const codeBlockDecorationsKey = new PluginKey('codeBlockDecorations');
@@ -76,14 +80,15 @@ export function codeBlockDecorationsPlugin() {
       apply: (tr, decorationSet, oldState, newState) => {
         // Check if Mermaid state changed (editingId or loaded)
         const mermaidMeta = tr.getMeta(mermaidPluginKey);
+        const plantumlMeta = tr.getMeta(plantumlPluginKey);
+        const externalDiagramMeta = tr.getMeta(externalDiagramPluginKey);
         const mermaidStateChanged = !!mermaidMeta;
+        const plantumlStateChanged = !!plantumlMeta;
+        const externalDiagramStateChanged = !!externalDiagramMeta;
 
         // Recreate decorations only on document change or Mermaid state change.
         // Selection changes are handled via CSS :focus-within and the view plugin below.
-        if (tr.docChanged || mermaidStateChanged) {
-          // Build effective mermaid state: use oldState (always available) + apply meta changes.
-          // We can't use mermaidPluginKey.getState(newState) because the mermaid plugin
-          // may not have processed this transaction yet (plugin ordering).
+        if (tr.docChanged || mermaidStateChanged || plantumlStateChanged || externalDiagramStateChanged) {
           const baseMermaidState = mermaidPluginKey.getState(oldState);
           let effectiveMermaidState = baseMermaidState;
           if (baseMermaidState) {
@@ -97,7 +102,46 @@ export function codeBlockDecorationsPlugin() {
                 : baseMermaidState.decorationSet,
             };
           }
-          return DecorationSet.create(newState.doc, createCodeBlockDecorations(newState.doc, newState, editorView, effectiveMermaidState));
+
+          const basePlantUmlState = plantumlPluginKey.getState(oldState);
+          let effectivePlantUmlState = basePlantUmlState;
+          if (basePlantUmlState) {
+            effectivePlantUmlState = {
+              ...basePlantUmlState,
+              editingId: plantumlMeta && 'editingId' in plantumlMeta
+                ? plantumlMeta.editingId
+                : basePlantUmlState.editingId,
+              decorationSet: tr.docChanged
+                ? basePlantUmlState.decorationSet.map(tr.mapping, tr.doc)
+                : basePlantUmlState.decorationSet,
+            };
+          }
+
+          const baseExternalDiagramState = externalDiagramPluginKey.getState(oldState);
+          let effectiveExternalDiagramState = baseExternalDiagramState;
+          if (baseExternalDiagramState) {
+            effectiveExternalDiagramState = {
+              ...baseExternalDiagramState,
+              editingId: externalDiagramMeta && 'editingId' in externalDiagramMeta
+                ? externalDiagramMeta.editingId
+                : baseExternalDiagramState.editingId,
+              decorationSet: tr.docChanged
+                ? baseExternalDiagramState.decorationSet.map(tr.mapping, tr.doc)
+                : baseExternalDiagramState.decorationSet,
+            };
+          }
+
+          return DecorationSet.create(
+            newState.doc,
+            createCodeBlockDecorations(
+              newState.doc,
+              newState,
+              editorView,
+              effectiveMermaidState,
+              effectivePlantUmlState,
+              effectiveExternalDiagramState,
+            ),
+          );
         }
         // Map existing decorations if no doc change
         return decorationSet.map(tr.mapping, tr.doc);
@@ -111,12 +155,19 @@ export function codeBlockDecorationsPlugin() {
   });
 }
 
-function createCodeBlockDecorations(doc: ProsemirrorNode, state: EditorState, view: EditorView | null, overrideMermaidState?: any): Decoration[] {
+function createCodeBlockDecorations(
+  doc: ProsemirrorNode,
+  state: EditorState,
+  view: EditorView | null,
+  overrideMermaidState?: any,
+  overridePlantUmlState?: any,
+  overrideExternalDiagramState?: any,
+): Decoration[] {
   const decorations: Decoration[] = [];
 
-  // Get Mermaid plugin state to check editingId
-  // Use override if provided (from apply, where newState may not have mermaid state yet)
   const mermaidState = overrideMermaidState ?? mermaidPluginKey.getState(state);
+  const plantumlState = overridePlantUmlState ?? plantumlPluginKey.getState(state);
+  const externalDiagramState = overrideExternalDiagramState ?? externalDiagramPluginKey.getState(state);
 
   doc.descendants((node, pos) => {
     if (node.type.name === 'code_block') {
@@ -124,39 +175,49 @@ function createCodeBlockDecorations(doc: ProsemirrorNode, state: EditorState, vi
       // instead of decoration rebuild, to avoid massive DOM churn on selection changes.
 
       // Check if this is a Mermaid diagram
-      const language = node.attrs.language || '';
-      const isMermaid = language === 'mermaid' || language === 'mermaidjs';
+      const isMermaidDiagram = isMermaid(node);
+      const isPlantUmlDiagram = isPlantUml(node);
+      const externalDiagramType = getExternalDiagramType(node);
+
+      let diagram: { kind: 'mermaid' | 'plantuml' | 'externalDiagram'; isEditing: boolean; diagramId?: string } | null = null;
+      if (isMermaidDiagram && mermaidState) {
+        const diagramDecorations = mermaidState.decorationSet.find(pos, pos + node.nodeSize);
+        const diagramId = diagramDecorations.find((d: any) => d.spec?.diagramId && d.from === pos)?.spec?.diagramId;
+        diagram = {
+          kind: 'mermaid',
+          diagramId,
+          isEditing: !!(diagramId && mermaidState.editingId === diagramId),
+        };
+      } else if (isPlantUmlDiagram && plantumlState) {
+        const diagramDecorations = plantumlState.decorationSet.find(pos, pos + node.nodeSize);
+        const diagramId = diagramDecorations.find((d: any) => d.spec?.diagramId && d.from === pos)?.spec?.diagramId;
+        diagram = {
+          kind: 'plantuml',
+          diagramId,
+          isEditing: !!(diagramId && plantumlState.editingId === diagramId),
+        };
+      } else if (externalDiagramType && externalDiagramState) {
+        const diagramDecorations = externalDiagramState.decorationSet.find(pos, pos + node.nodeSize);
+        const diagramId = diagramDecorations.find((d: any) => d.spec?.diagramId && d.from === pos)?.spec?.diagramId;
+        diagram = {
+          kind: 'externalDiagram',
+          diagramId,
+          isEditing: !!(diagramId && externalDiagramState.editingId === diagramId),
+        };
+      }
 
       // Add line numbers decoration
-      decorations.push(...createLineNumbersDecorations(node, pos, isMermaid, mermaidState));
+      decorations.push(...createLineNumbersDecorations(node, pos, diagram));
 
       // Add toolbar decoration
-      if (isMermaid) {
-        // Check if in editing mode
-        let diagramId: string | undefined;
-        if (mermaidState) {
-          const decorations = mermaidState.decorationSet.find(pos, pos + node.nodeSize);
-          if (decorations && decorations.length > 0) {
-            for (const dec of decorations) {
-              if (dec.spec && dec.spec.diagramId) {
-                diagramId = dec.spec.diagramId;
-                break;
-              }
-            }
-          }
-        }
-        const isEditing = diagramId && mermaidState?.editingId === diagramId;
-
-        if (isEditing) {
-          // Editing mode: normal toolbar inside code block (with Edit button)
-          decorations.push(createToolbarDecoration(node, pos + 1, pos, view, isMermaid, mermaidState));
+      if (diagram) {
+        if (diagram.isEditing) {
+          decorations.push(createToolbarDecoration(node, pos + 1, pos, view, diagram));
         } else {
-          // Preview mode: toolbar over diagram
-          decorations.push(createMermaidContainerDecoration(node, pos, view, mermaidState));
+          decorations.push(createMermaidContainerDecoration(node, pos, view, diagram));
         }
       } else {
-        // For normal code: create toolbar inside code block
-        decorations.push(createToolbarDecoration(node, pos + 1, pos, view, isMermaid, mermaidState));
+        decorations.push(createToolbarDecoration(node, pos + 1, pos, view, null));
       }
     }
   });

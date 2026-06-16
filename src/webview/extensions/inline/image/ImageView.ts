@@ -12,6 +12,7 @@
 
 import type { Node } from 'prosemirror-model';
 import type { EditorView, NodeView } from 'prosemirror-view';
+import { imageToolbar } from './ImageToolbar';
 
 type HandlePosition = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -24,6 +25,15 @@ export class ImageView implements NodeView {
   private handles: HTMLElement[] = [];
   private isSelected = false;
   private resizing = false;
+  private readonly onImageDoubleClick = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const src = this.img.currentSrc || this.img.src || String(this.node.attrs.src || '');
+    const originalSrc = String(this.node.attrs.originalSrc || '');
+    const alt = String(this.node.attrs.alt || '');
+    imageToolbar.preview(src, alt, originalSrc || src);
+  };
   private readonly onImageError = () => {
     const currentSrc = String(this.node.attrs.src || '');
     const originalSrc = String(this.node.attrs.originalSrc || currentSrc || '');
@@ -59,6 +69,7 @@ export class ImageView implements NodeView {
     this.img = document.createElement('img');
     this.img.referrerPolicy = 'no-referrer';
     this.img.loading = 'lazy';
+    this.img.addEventListener('dblclick', this.onImageDoubleClick);
     this.img.addEventListener('error', this.onImageError);
     this.syncAttrs();
     this.dom.appendChild(this.img);
@@ -80,9 +91,11 @@ export class ImageView implements NodeView {
     if (width) {
       this.img.style.width = typeof width === 'number' || /^\d+$/.test(width)
         ? `${width}px` : width;
+      this.img.style.maxWidth = '';
       this.img.removeAttribute('width');
     } else {
       this.img.style.width = '';
+      this.img.style.maxWidth = '300px';
       this.img.removeAttribute('width');
     }
     if (height) {
@@ -203,6 +216,7 @@ export class ImageView implements NodeView {
   }
 
   destroy() {
+    this.img.removeEventListener('dblclick', this.onImageDoubleClick);
     this.img.removeEventListener('error', this.onImageError);
   }
 }

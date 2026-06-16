@@ -17,6 +17,7 @@ export type ToolbarShortcutAction =
   | 'toggleTableWrap'
   | 'toggleExternalFollow'
   | 'toggleTheme'
+  | 'toggleStickyNote'
   | 'openSourceMode'
   | 'stageFile'
   | 'scrollTop'
@@ -34,6 +35,7 @@ const DEFAULT_SHORTCUTS: ToolbarShortcutConfig = {
   toggleTableWrap: 'Alt+D',
   toggleExternalFollow: 'Alt+F',
   toggleTheme: 'Alt+R',
+  toggleStickyNote: 'Alt+N',
   openSourceMode: 'Alt+Q',
   stageFile: 'Alt+S',
   scrollTop: 'Alt+ArrowUp',
@@ -47,6 +49,7 @@ const SHORTCUT_LABELS: Record<ToolbarShortcutAction, string> = {
   toggleTableWrap: 'Toggle table wrap',
   toggleExternalFollow: 'Toggle external follow scroll',
   toggleTheme: 'Toggle light/dark theme',
+  toggleStickyNote: 'Toggle sticky note',
   openSourceMode: 'Open source mode',
   stageFile: 'Stage current file',
   scrollTop: 'Scroll to top',
@@ -253,12 +256,14 @@ export interface FileHeader {
   setScrollBottomHandler: (handler: () => void) => void;
   setStageHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
+  setStickyNoteHandler: (handler: () => void) => void;
   setExternalFollowHandler: (handler: (enabled: boolean) => void) => void;
   setShortcutChangeHandler: (handler: (config: ToolbarShortcutConfig) => void) => void;
   getShortcutConfig: () => ToolbarShortcutConfig;
   syncTocState: (visible: boolean) => void;
   syncFullWidthState: (fullWidth: boolean) => void;
   syncTableWrapState: (enabled: boolean) => void;
+  syncStickyNoteState: (open: boolean) => void;
   triggerTocToggle: () => void;
   triggerWidthToggle: () => void;
   triggerTableWrapToggle: () => void;
@@ -431,6 +436,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     const newTableWrap = !state.isTableWrap;
     setState({ isTableWrap: newTableWrap });
     document.getElementById('editor')?.classList.toggle('table-wrap', newTableWrap);
+    window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
     syncTableWrapButton(newTableWrap);
     postCurrentEdit();
     onSettingsChange();
@@ -500,6 +506,12 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   historyBtn.title = 'Toggle history panel';
   historyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
   rightGroup.appendChild(historyBtn);
+
+  const stickyNoteBtn = document.createElement('button');
+  stickyNoteBtn.className = 'file-header-btn';
+  stickyNoteBtn.title = 'Toggle sticky note editor';
+  stickyNoteBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>';
+  rightGroup.appendChild(stickyNoteBtn);
 
   const sourceBtn = document.createElement('button');
   sourceBtn.className = 'file-header-btn';
@@ -769,6 +781,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setTitleWithShortcut(scrollTopBtn, 'Scroll to top', 'scrollTop');
     setTitleWithShortcut(scrollBottomBtn, 'Scroll to bottom', 'scrollBottom');
     setTitleWithShortcut(stageBtn, 'Stage current file', 'stageFile');
+    setTitleWithShortcut(stickyNoteBtn, 'Toggle sticky note editor', 'toggleStickyNote');
     setTitleWithShortcut(sourceBtn, 'Open native source mode with inline suggestions', 'openSourceMode');
     syncExternalFollowButton(externalFollowEnabled);
     setTitleWithShortcut(themeToggleBtn, themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', 'toggleTheme');
@@ -840,6 +853,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setScrollBottomHandler(handler: () => void) { scrollBottomBtn.addEventListener('click', handler); },
     setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
+    setStickyNoteHandler(handler: () => void) { stickyNoteBtn.addEventListener('click', handler); },
     setExternalFollowHandler(handler: (enabled: boolean) => void) {
       externalFollowHandler = handler;
       externalFollowHandler?.(externalFollowEnabled);
@@ -859,6 +873,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     },
     syncTableWrapState(enabled: boolean) {
       syncTableWrapButton(enabled);
+    },
+    syncStickyNoteState(open: boolean) {
+      stickyNoteBtn.classList.toggle('active', open);
     },
     triggerTocToggle() {
       tocBtn.click();

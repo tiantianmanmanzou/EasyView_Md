@@ -26,6 +26,7 @@ import { TableExtension } from './extensions/blocks/table/TableExtension';
 import { ImageExtension } from './extensions/inline/image/ImageExtension';
 import { MermaidExtension } from './extensions/blocks/mermaid/MermaidExtension';
 import { PlantUmlExtension } from './extensions/blocks/plantuml/PlantUmlExtension';
+import { ExternalDiagramExtension } from './extensions/blocks/external-diagram/ExternalDiagramExtension';
 import { FrontmatterExtension } from './extensions/blocks/frontmatter/FrontmatterExtension';
 import { DetailsExtension } from './extensions/blocks/details/DetailsExtension';
 import { HtmlBlockExtension } from './extensions/blocks/html-block/HtmlBlockExtension';
@@ -61,6 +62,7 @@ import { createSourceEditor } from './editor/SourceEditor';
 import { DualModeHistory } from './editor/DualModeHistory';
 import { createFileHeader, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
 import { HistoryPanel } from './ui/HistoryPanel';
+import { createStickyNoteModal } from './ui/StickyNoteModal';
 
 // ─── VS Code API ────────────────────────────────────────────────────────────
 
@@ -98,11 +100,32 @@ let toolbarShortcuts: ToolbarShortcutConfig = {
   toggleTableWrap: 'Alt+D',
   toggleExternalFollow: 'Alt+F',
   toggleTheme: 'Alt+R',
+  toggleStickyNote: 'Alt+N',
   openSourceMode: 'Alt+Q',
   stageFile: 'Alt+S',
   scrollTop: 'Alt+ArrowUp',
   scrollBottom: 'Alt+ArrowDown',
 };
+
+interface StickyNoteFacade {
+  open: () => void;
+  close: () => void;
+  toggle: () => void;
+  setDocumentContent: (content: string) => void;
+  isOpen: () => boolean;
+  destroy: () => void;
+}
+
+function createNoopStickyNote(): StickyNoteFacade {
+  return {
+    open() {},
+    close() {},
+    toggle() {},
+    setDocumentContent() {},
+    isOpen() { return false; },
+    destroy() {},
+  };
+}
 
 function normalizeShortcutKeyLabel(value: string): string {
   const lower = value.trim().toLowerCase();
@@ -543,9 +566,11 @@ function initEditor() {
   let runWysiwygTabCompletion: ((pmView: EditorView) => boolean) | null = null;
   let cachedLineMapMarkdown = '';
   let cachedTextblockLineMap: number[] = [];
+  let cachedMarkdownLines: string[] = [];
 
   // Apply default table-wrap class (enabled by default)
   editorElement.classList.add('table-wrap');
+  window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
 
   const isDark = isDarkTheme();
 
@@ -565,6 +590,7 @@ function initEditor() {
     new ImageExtension(),
     new MermaidExtension(isDark),
     new PlantUmlExtension(),
+    new ExternalDiagramExtension(),
     new FrontmatterExtension(),
     new DetailsExtension(),
     new HtmlBlockExtension(),
@@ -621,6 +647,7 @@ function initEditor() {
   }
   const toolbar = new FloatingToolbar();
   console.log(`[InLineMd perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
+  let stickyNote: StickyNoteFacade = createNoopStickyNote();
 
   const runNativeWysiwygTab = (pmView: EditorView, backwards = false): boolean => {
     if (goToNextCell(backwards ? -1 : 1)(pmView.state, pmView.dispatch)) {
@@ -657,7 +684,10 @@ function initEditor() {
       if (!(sel instanceof NodeSelection) || sel.node.type.name !== 'image') {
         if (imageToolbar.visible) imageToolbar.hide();
       }
-      toc.update(view);
+      toc.update(view, {
+        docChanged: tr.docChanged,
+        selectionSet: tr.selectionSet,
+      });
       updateTocStatusBar();
       if (tr.docChanged || tr.selectionSet) {
         hideWysiwygGhost();
@@ -723,6 +753,43 @@ function initEditor() {
   });
 
   console.log(`[InLineMd perf] new EditorCore(): ${(performance.now() - tCore).toFixed(1)}ms`);
+
+  try {
+    stickyNote = createStickyNoteModal({
+      getDocumentContent: () => (isSourceMode && sourceEditor
+        ? stripSettingsComment(sourceEditor.getContent())
+        : (currentContent || editor.getMarkdown())),
+      commitDocumentContent: (content, options) => {
+        currentContent = content;
+        if (isSourceMode && sourceEditor) {
+          sourceEditor.setContent(content);
+          updateTocStatusBar();
+        } else {
+          editor.setContent(content, false, { scrollIntoView: false });
+          updateTocStatusBar();
+        }
+        postEdit(content);
+        if (options?.save) {
+          vscode.postMessage({ type: 'save' });
+        }
+      },
+      requestTabCompletion({ line, character, wordPrefix }) {
+        return requestTabCompletionFromHost(line, character, wordPrefix);
+      },
+      onVisibilityChange: (visible) => {
+        fileHeader.syncStickyNoteState(visible);
+      },
+    });
+  } catch (error) {
+    console.error('[InLineMd] Sticky note initialization failed:', error);
+    vscode.postMessage({
+      type: 'webviewRuntimeError',
+      source: 'sticky-note-init',
+      message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      stack: error instanceof Error ? error.stack ?? '' : '',
+    });
+    stickyNote = createNoopStickyNote();
+  }
 
   // 4. Initialize editor
   const tEditorInit = performance.now();
@@ -967,12 +1034,13 @@ function initEditor() {
     const lineText = blockLines[currentLineIndex] ?? fullBlockText;
     const wordPrefixMatch = textBeforeLine.match(/[\p{L}\p{N}_-]+$/u);
     const wordPrefix = wordPrefixMatch?.[0] ?? '';
-    const markdown = editor.getMarkdown();
+    const markdown = currentContent || editor.getMarkdown();
     const approx = findApproximateMarkdownPosition(markdown, lineText, textBeforeLine, wordPrefix);
 
     if (cachedLineMapMarkdown !== markdown) {
       cachedLineMapMarkdown = markdown;
       cachedTextblockLineMap = extractTextblockLineMap(markdown);
+      cachedMarkdownLines = markdown.split('\n');
     }
 
     let textblockOrdinal = 0;
@@ -990,7 +1058,7 @@ function initEditor() {
 
     if (targetOrdinal >= 0 && targetOrdinal < cachedTextblockLineMap.length) {
       const mappedLine1Based = cachedTextblockLineMap[targetOrdinal];
-      const rawLine = markdown.split('\n')[Math.max(0, mappedLine1Based - 1)] ?? '';
+      const rawLine = cachedMarkdownLines[Math.max(0, mappedLine1Based - 1)] ?? '';
       const beforeIdx = textBeforeLine ? rawLine.indexOf(textBeforeLine) : -1;
       const character = beforeIdx >= 0
         ? beforeIdx + textBeforeLine.length
@@ -1007,7 +1075,7 @@ function initEditor() {
   updateTocStatusBar = () => {
     const markdown = isSourceMode && sourceEditor
       ? stripSettingsComment(sourceEditor.getContent())
-      : editor.getMarkdown();
+      : (currentContent || editor.getMarkdown());
 
     if (isSourceMode && sourceEditor) {
       const sourceSelection = sourceEditor.view.state.selection.main;
@@ -1404,6 +1472,7 @@ function initEditor() {
 
       document.getElementById('editor')?.classList.toggle('full-width', isFullWidth);
       document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
+      window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
       if (isTocVisible && !toc.visible) toc.open();
       if (!isTocVisible && toc.visible) toc.close();
 
@@ -1438,6 +1507,9 @@ function initEditor() {
   }
 
   fileHeader.setSourceHandler(() => openNativeSourceMode());
+  fileHeader.setStickyNoteHandler(() => {
+    stickyNote.toggle();
+  });
 
   // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {
@@ -1522,6 +1594,13 @@ function initEditor() {
       e.stopPropagation();
       e.stopImmediatePropagation();
       fileHeader.triggerThemeToggle();
+      return;
+    }
+    if (matchesToolbarShortcut(e, 'toggleStickyNote')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      stickyNote.toggle();
       return;
     }
     if (matchesToolbarShortcut(e, 'toggleToc')) {
@@ -1630,12 +1709,14 @@ function initEditor() {
           if (typeof message.tableWrap === 'boolean') {
             isTableWrap = message.tableWrap;
             document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
+            window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
             fileHeader.syncTableWrapState(isTableWrap);
           }
         }
 
         if (content === currentContent && message.type !== 'init') return;
         currentContent = content;
+        stickyNote.setDocumentContent(content);
 
         if (isSourceMode && sourceEditor) {
           sourceEditor.setContent(content);
@@ -1781,6 +1862,25 @@ function initEditor() {
         break;
       }
     }
+  });
+
+  window.addEventListener('error', (event) => {
+    vscode.postMessage({
+      type: 'webviewRuntimeError',
+      source: 'window-error',
+      message: event.message,
+      stack: event.error?.stack ?? '',
+    });
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    vscode.postMessage({
+      type: 'webviewRuntimeError',
+      source: 'unhandled-rejection',
+      message: reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason),
+      stack: reason instanceof Error ? reason.stack ?? '' : '',
+    });
   });
 
   // 10. Bootstrap

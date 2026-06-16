@@ -6,6 +6,7 @@
 
 import katex from 'katex';
 import * as plantumlEncoder from 'plantuml-encoder';
+import { deflate } from 'pako';
 
 export interface TocEntry {
   id: string;
@@ -87,6 +88,53 @@ export function processPlantUmlBlocks(container: HTMLElement): boolean {
 
 function encodePlantUmlSource(source: string): string {
   return plantumlEncoder.encode(source);
+}
+
+type ExternalDiagramType = 'graphviz' | 'd2' | 'bpmn';
+
+export function processExternalDiagramBlocks(container: HTMLElement): boolean {
+  let hasExternalDiagram = false;
+
+  const preElements = container.querySelectorAll('pre');
+  preElements.forEach((pre) => {
+    const code = pre.querySelector('code');
+    const className = `${code?.className || ''} ${pre.className || ''}`;
+    const diagramType = getExternalDiagramTypeFromClassName(className);
+    if (!diagramType) return;
+
+    const source = (code?.textContent || pre.textContent || '').trim();
+    if (!source) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'plantuml-export-block external-diagram-export-block';
+
+    const image = document.createElement('img');
+    image.className = 'plantuml-export-image external-diagram-export-image';
+    image.alt = `${diagramType} diagram`;
+    image.src = `https://kroki.io/${diagramType}/svg/${encodeKrokiSource(source)}`;
+
+    wrapper.appendChild(image);
+    pre.replaceWith(wrapper);
+    hasExternalDiagram = true;
+  });
+
+  return hasExternalDiagram;
+}
+
+function getExternalDiagramTypeFromClassName(className: string): ExternalDiagramType | null {
+  if (/\blanguage-(dot|graphviz)\b/.test(className)) return 'graphviz';
+  if (/\blanguage-d2\b/.test(className)) return 'd2';
+  if (/\blanguage-bpmn\b/.test(className)) return 'bpmn';
+  return null;
+}
+
+function encodeKrokiSource(source: string): string {
+  const compressed = deflate(new TextEncoder().encode(source), { level: 9 });
+  let binary = '';
+  for (let i = 0; i < compressed.length; i++) {
+    binary += String.fromCharCode(compressed[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 /**

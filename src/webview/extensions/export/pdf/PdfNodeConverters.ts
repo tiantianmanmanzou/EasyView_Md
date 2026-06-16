@@ -90,6 +90,7 @@ export async function convertNode(node: ProsemirrorNode, ctx: ConvertContext): P
     case 'drawio':
       return convertDrawio(node, ctx);
     case 'hard_break':
+    case 'soft_break':
       return '\n';
     default:
       if (node.isBlock && node.content.size > 0) {
@@ -1412,6 +1413,7 @@ export function convertInlineContent(node: ProsemirrorNode, ctx: ConvertContext)
 function convertInlineNode(node: ProsemirrorNode, ctx: ConvertContext): any {
   switch (node.type.name) {
     case 'hard_break':
+    case 'soft_break':
       return '\n';
 
     case 'footnote_ref':

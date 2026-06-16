@@ -196,6 +196,15 @@ const hard_break: NodeSpec = {
   },
 };
 
+const soft_break: NodeSpec = {
+  inline: true,
+  group: 'inline',
+  selectable: false,
+  toDOM() {
+    return ['br'];
+  },
+};
+
 const text: NodeSpec = {
   group: 'inline',
 };
@@ -209,5 +218,6 @@ export const inlineNodes: Record<string, NodeSpec> = {
   html_inline,
   footnote_ref,
   hard_break,
+  soft_break,
   text,
 };

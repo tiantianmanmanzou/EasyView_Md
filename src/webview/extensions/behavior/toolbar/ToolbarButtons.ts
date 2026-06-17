@@ -383,6 +383,24 @@ export const buttons: ToolbarButton[] = [
     },
   },
   {
+    id: 'horizontal-rule',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="12" x2="20" y2="12"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="17" x2="16" y2="17"/></svg>',
+    title: 'Insert Divider',
+    command: (state, dispatch, view) => {
+      if (!dispatch) return true;
+      const { from, to } = state.selection;
+      const tr = state.tr.replaceWith(from, to, [
+        schema.nodes.horizontal_rule.create(),
+        schema.nodes.paragraph.create(),
+      ]);
+      const newPos = from + 2;
+      tr.setSelection(TextSelection.create(tr.doc, newPos));
+      dispatch(tr.scrollIntoView());
+      view?.focus();
+      return true;
+    },
+  },
+  {
     id: 'separator-6',
     icon: '',
     title: '',

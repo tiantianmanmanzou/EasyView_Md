@@ -24,13 +24,21 @@ export class LinkEditPopup {
 
     this.input = document.createElement('input');
     this.input.className = 'link-edit-input';
-    this.input.type = 'url';
+    this.input.type = 'text';
+    this.input.inputMode = 'url';
     this.input.placeholder = 'Enter URL...';
     this.input.spellcheck = false;
+    this.input.autocapitalize = 'off';
+    this.input.autocomplete = 'off';
 
     // Prevent ProseMirror from stealing keystrokes
     this.input.addEventListener('keydown', (e) => {
       e.stopPropagation();
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        this.readClipboardIntoInput();
+        return;
+      }
       if (e.key === 'Enter') {
         e.preventDefault();
         this.apply();
@@ -39,6 +47,19 @@ export class LinkEditPopup {
         e.preventDefault();
         this.hide();
       }
+    });
+    this.input.addEventListener('paste', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      if (!text) return;
+      this.insertTextIntoInput(text);
+    });
+    this.input.addEventListener('beforeinput', (e) => {
+      e.stopPropagation();
+    });
+    this.input.addEventListener('input', (e) => {
+      e.stopPropagation();
     });
 
     // Apply button (checkmark)
@@ -184,6 +205,26 @@ export class LinkEditPopup {
     if (!href) return;
     // Dispatch custom event — index.ts listens and forwards to extension host
     window.dispatchEvent(new CustomEvent('inlinemd:openLink', { detail: { url: href } }));
+  }
+
+  private insertTextIntoInput(text: string): void {
+    const start = this.input.selectionStart ?? this.input.value.length;
+    const end = this.input.selectionEnd ?? start;
+    const nextValue = this.input.value.slice(0, start) + text + this.input.value.slice(end);
+    const nextCursor = start + text.length;
+
+    this.input.value = nextValue;
+    this.input.setSelectionRange(nextCursor, nextCursor);
+    this.input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }));
+  }
+
+  private async readClipboardIntoInput(): Promise<void> {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) this.insertTextIntoInput(text);
+    } catch {
+      // If the WebView denies clipboard API access, keep native paste as the only fallback.
+    }
   }
 
   private updatePosition(view: EditorView) {

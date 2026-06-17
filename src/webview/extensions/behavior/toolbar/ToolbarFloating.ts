@@ -175,6 +175,7 @@ export class FloatingToolbar {
     'blockquote',
     'checkbox-list', 'bullet-list', 'ordered-list',
     'notice-note', 'notice-tip', 'notice-important', 'notice-caution', 'notice-warning',
+    'horizontal-rule',
   ]);
 
   /** Show only block-level buttons when image is selected */

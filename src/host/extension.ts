@@ -7,6 +7,8 @@ import { ensureNativeMarkdownEditorFont } from './nativeEditorFont';
 import { NativeMermaidRenderer } from './nativeMermaidRenderer';
 import { suppressConflictingMarkdownInlineDecorations } from './conflictingExtensions';
 import { setPendingCursorForUri } from './openCursorContext';
+import { setPendingDocumentContentForUri } from './openDocumentSnapshot';
+import { logOpenWithDebug } from './openWithDebug';
 import { registerNativeMarkdownImagePaste } from './nativeImagePaste';
 
 function execGit(args: string[], cwd: string): Promise<void> {
@@ -63,6 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
       const targetUri = uri ?? activeEditor?.document.uri;
 
       if (targetUri && /\.(md|markdown|mdx)$/i.test(targetUri.fsPath)) {
+        const hadExistingPanels = MarkdownEditorProvider.hasPanelsForDocument(targetUri);
         const sourceEditor = activeEditor?.document.uri.toString() === targetUri.toString()
           ? activeEditor
           : vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === targetUri.toString());
@@ -73,11 +76,42 @@ export function activate(context: vscode.ExtensionContext) {
             character: selection.character,
           });
         }
+        if (sourceEditor) {
+          const snapshot = sourceEditor.document.getText();
+          setPendingDocumentContentForUri(targetUri, snapshot);
+          logOpenWithDebug('openEditor.snapshotCaptured', {
+            path: targetUri.fsPath,
+            snapshotLength: snapshot.length,
+            isDirty: sourceEditor.document.isDirty,
+            visibleEditors: vscode.window.visibleTextEditors
+              .filter((editor) => editor.document.uri.toString() === targetUri.toString())
+              .length,
+          });
+        }
+        logOpenWithDebug('openEditor.executeOpenWith', {
+          path: targetUri.fsPath,
+          viewColumn: sourceEditor?.viewColumn ?? 'unknown',
+        });
         await vscode.commands.executeCommand(
           'vscode.openWith',
           targetUri,
-          'inlineMd.markdownEditor'
+          'inlineMd.markdownEditor',
+          sourceEditor?.viewColumn
         );
+        const reloaded = hadExistingPanels
+          ? await MarkdownEditorProvider.reloadPanelsForDocument(
+            targetUri,
+            sourceEditor?.document.getText()
+          )
+          : false;
+        logOpenWithDebug('openEditor.reloadExistingPanels', {
+          path: targetUri.fsPath,
+          hadExistingPanels,
+          reloaded,
+        });
+        logOpenWithDebug('openEditor.openWithCompleted', {
+          path: targetUri.fsPath,
+        });
         if (selection) {
           await vscode.commands.executeCommand(
             'inlineMd.revealCursorInEasyView',
@@ -90,6 +124,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       vscode.window.showInformationMessage('Select a Markdown file first.');
+      logOpenWithDebug('openEditor.noMarkdownTarget');
       return undefined;
     })
   );

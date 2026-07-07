@@ -1,6 +1,12 @@
 .git/**
 .github/**
 node_modules/**
+!node_modules/node-pty/**
+!node_modules/node-pty/prebuilds/**
+!node_modules/node-pty/lib/**
+!node_modules/node-pty/package.json
+!node_modules/node-pty/LICENSE
+!node_modules/node-pty/node_modules/node-addon-api/**
 src/**
 e2e/**
 *.vsix
@@ -20,3 +26,11 @@ dist/**/*.map
 image/**
 image.png
 image-1.png
+*.mp4
+*.mov
+*.avi
+*.mkv
+Sample.assets/**
+Sample.md
+H
+Ha

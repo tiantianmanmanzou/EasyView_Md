@@ -12,6 +12,7 @@ import { TableStyleHelper } from './TableStyleHelper';
 import * as tableCommands from './TableCommands';
 import { getEditorView } from '../../../index';
 import { TableGripToolbar } from './TableGripToolbar';
+import { isColumnSelection, isRowSelection, isTableSelected } from './TableQueries';
 
 export class TableView extends ProsemirrorTableView {
   private scrollable: HTMLDivElement | null = null;
@@ -24,7 +25,7 @@ export class TableView extends ProsemirrorTableView {
     requestAnimationFrame(() => this.syncWrappedColumnWidths());
   };
 
-  constructor(node: ProsemirrorNode, cellMinWidth: number) {
+  constructor(node: ProsemirrorNode, cellMinWidth: number, _view?: EditorView) {
     super(node, cellMinWidth);
 
     // Remove table from default dom and wrap in scrollable container
@@ -65,8 +66,8 @@ export class TableView extends ProsemirrorTableView {
     });
 
     // Create controls
-    this.updateControls(node);
     this.syncWrappedColumnWidths();
+    this.updateControls(node);
 
     // Listen to scroll to update shadows and controls
     this.scrollable.addEventListener(
@@ -84,19 +85,19 @@ export class TableView extends ProsemirrorTableView {
 
     // Wait for DOM to render to ensure scroll shadows are correct
     setTimeout(() => {
-      if (this.dom) {
+        if (this.dom) {
+        this.syncWrappedColumnWidths();
         this.updateClassList(this.node);
         this.updateControls(this.node);
-        this.syncWrappedColumnWidths();
       }
     }, 100);
 
     // ResizeObserver: update grips when table dimensions change (e.g. column resize)
     this.resizeObserver = new ResizeObserver(() => {
       if (this.dom && this.node) {
+        this.syncWrappedColumnWidths();
         this.updateClassList(this.node);
         this.updateControls(this.node);
-        this.syncWrappedColumnWidths();
       }
     });
     this.resizeObserver.observe(this.table);
@@ -108,9 +109,9 @@ export class TableView extends ProsemirrorTableView {
       // Defer both updates to avoid interfering with resize
       requestAnimationFrame(() => {
         if (this.dom && this.node) {
+          this.syncWrappedColumnWidths();
           this.updateClassList(this.node);
           this.updateControls(this.node);
-          this.syncWrappedColumnWidths();
         }
       });
     }
@@ -121,7 +122,7 @@ export class TableView extends ProsemirrorTableView {
    * Create and position control elements (grips and add buttons)
    */
   private updateControls(node: ProsemirrorNode): void {
-    if (!this.controlsContainer || !this.columnControlsContainer || !this.table || !getEditorView()) return;
+    if (!this.controlsContainer || !this.columnControlsContainer || !this.scrollable || !this.table || !getEditorView()) return;
 
     // Check if we have a toolbar request from grip click, otherwise save current state
     let toolbarToShow: { type: 'row' | 'column' | 'table', index: number } | null = null;
@@ -146,37 +147,86 @@ export class TableView extends ProsemirrorTableView {
       return;
     }
 
+    const view = getEditorView();
+    const selectedRows = new Set<number>();
+    const selectedColumns = new Set<number>();
+    let showTableGrip = false;
+
+    try {
+      const activeRect = tableCommands.selectedRect(view.state);
+      const activeTableDom = view.nodeDOM(activeRect.tableStart - 1) as HTMLElement | null;
+      const activeWrapper = activeTableDom?.closest('.table-wrapper');
+      const isActiveTable = activeWrapper === this.dom;
+
+      if (isActiveTable) {
+        if (isTableSelected(view.state)) {
+          showTableGrip = true;
+        } else {
+          for (let row = activeRect.top; row < activeRect.bottom; row++) {
+            selectedRows.add(row);
+          }
+          for (let col = activeRect.left; col < activeRect.right; col++) {
+            selectedColumns.add(col);
+          }
+
+          if (selectedRows.size === 0 && !isColumnSelection(view.state.selection)) {
+            selectedRows.add(activeRect.top);
+          }
+          if (selectedColumns.size === 0 && !isRowSelection(view.state.selection)) {
+            selectedColumns.add(activeRect.left);
+          }
+        }
+      }
+    } catch {
+      // Ignore non-table selections; controls stay hidden until a table selection exists.
+    }
+
     const map = TableMap.get(node);
     const rows = this.table.querySelectorAll('tr');
     const firstRow = rows[0];
 
     if (!firstRow) return;
 
-    // Column grips and add buttons (inside scrollable)
-    const cells = firstRow.querySelectorAll('td, th');
-    const paddingLeft = 20; // padding-left of .table-scrollable
+    const wrapperRect = this.dom.getBoundingClientRect();
+    const tableRect = this.table.getBoundingClientRect();
+    const tableTopOffset = tableRect.top - wrapperRect.top;
+    const tableLeftOffset = tableRect.left - wrapperRect.left;
+    this.controlsContainer.style.top = `${tableTopOffset}px`;
+    this.controlsContainer.style.height = `${tableRect.height}px`;
+    this.controlsContainer.style.overflow = 'visible';
+    this.controlsContainer.style.setProperty('--table-row-control-bg-left', `${tableLeftOffset - 20}px`);
 
-    cells.forEach((cell, colIndex) => {
-      const rect = cell.getBoundingClientRect();
-      const containerRect = this.table.getBoundingClientRect();
+    // Column grips and add buttons (inside scrollable)
+    const columnSegments = this.getRenderedColumnSegments(node, map, tableRect);
+    this.columnControlsContainer.style.left = `${this.table.offsetLeft}px`;
+    this.columnControlsContainer.style.width = `${this.table.offsetWidth}px`;
+    this.columnControlsContainer.style.top = '0px';
+    this.columnControlsContainer.style.height = '8px';
+
+    columnSegments.forEach((segment, colIndex) => {
+      const left = segment.left;
+      const right = segment.right;
 
       // Column grip (with gap for table border)
       const colGrip = document.createElement('div');
       colGrip.className = TableStyleHelper.tableGripColumn;
       colGrip.dataset.index = String(colIndex);
       colGrip.style.position = 'absolute';
-      colGrip.style.left = `${rect.left - containerRect.left + paddingLeft + 0.5}px`;
-      colGrip.style.top = '0px'; // Keep grip in the top control band, avoid overlapping header text
-      colGrip.style.width = `${rect.width - 1}px`;
-      colGrip.style.height = '8px';
+      colGrip.style.left = `${left + 0.5}px`;
+      colGrip.style.top = '2px'; // Keep grip in the top control band, avoid overlapping header text
+      colGrip.style.width = `${Math.max(0, right - left - 1)}px`;
+      colGrip.style.height = '4px';
       if (colIndex === 0) {
         colGrip.classList.add(TableStyleHelper.first);
-        colGrip.style.left = `${rect.left - containerRect.left + paddingLeft}px`;
-        colGrip.style.width = `${rect.width - 0.5}px`;
+        colGrip.style.left = `${left}px`;
+        colGrip.style.width = `${Math.max(0, right - left - 0.5)}px`;
       }
-      if (colIndex === cells.length - 1) {
+      if (colIndex === columnSegments.length - 1) {
         colGrip.classList.add(TableStyleHelper.last);
-        colGrip.style.width = `${rect.width - 0.5}px`;
+        colGrip.style.width = `${Math.max(0, right - left - 0.5)}px`;
+      }
+      if (selectedColumns.has(colIndex)) {
+        colGrip.classList.add(TableStyleHelper.selected);
       }
       colGrip.addEventListener('mousedown', (e) => {
         e.preventDefault();
@@ -201,7 +251,7 @@ export class TableView extends ProsemirrorTableView {
       addCol.className = TableStyleHelper.tableAddColumn;
       addCol.dataset.index = String(colIndex + 1);
       addCol.style.position = 'absolute';
-      addCol.style.left = `${rect.right - containerRect.left + paddingLeft - 10}px`;
+      addCol.style.left = `${right - 10}px`;
       addCol.style.top = '0px'; // Keep add handle anchored in the top control band
       addCol.addEventListener('mousedown', (e) => {
         e.preventDefault();
@@ -220,7 +270,7 @@ export class TableView extends ProsemirrorTableView {
         addColBefore.className = TableStyleHelper.tableAddColumn;
         addColBefore.dataset.index = '0';
         addColBefore.style.position = 'absolute';
-        addColBefore.style.left = `${rect.left - containerRect.left + paddingLeft - 10}px`;
+        addColBefore.style.left = `${left - 10}px`;
         addColBefore.style.top = '0px'; // Keep add handle anchored in the top control band
         addColBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
@@ -234,15 +284,14 @@ export class TableView extends ProsemirrorTableView {
     });
 
     // Row grips and add buttons
-    const paddingLeftOffset = 20; // Compensate for .table-scrollable padding-left
+    const rowGripLeft = tableLeftOffset - 16; // Align to the actual rendered table, not the wrapper padding.
 
     rows.forEach((row, rowIndex) => {
       const firstCell = row.querySelector('td, th');
       if (!firstCell) return;
 
-      const rect = firstCell.getBoundingClientRect();
-      const containerRect = this.dom.getBoundingClientRect();
       const rowRect = row.getBoundingClientRect();
+      const rowTop = rowRect.top - tableRect.top;
 
       // Check if this row is a header (contains th elements)
       const isHeaderRow = row.querySelector('th') !== null;
@@ -255,18 +304,21 @@ export class TableView extends ProsemirrorTableView {
       }
       rowGrip.dataset.index = String(rowIndex);
       rowGrip.style.position = 'absolute';
-      rowGrip.style.left = `${paddingLeftOffset - 16}px`; // 20px padding - 16px offset
-      rowGrip.style.top = `${rowRect.top - containerRect.top + 0.5}px`;
+      rowGrip.style.left = `${rowGripLeft}px`;
+      rowGrip.style.top = `${rowTop + 0.5}px`;
       rowGrip.style.width = '12px';
       rowGrip.style.height = `${rowRect.height - 1}px`;
       if (rowIndex === 0) {
         rowGrip.classList.add(TableStyleHelper.first);
-        rowGrip.style.top = `${rowRect.top - containerRect.top}px`;
+        rowGrip.style.top = `${rowTop}px`;
         rowGrip.style.height = `${rowRect.height - 0.5}px`;
       }
       if (rowIndex === rows.length - 1) {
         rowGrip.classList.add(TableStyleHelper.last);
         rowGrip.style.height = `${rowRect.height - 0.5}px`;
+      }
+      if (selectedRows.has(rowIndex)) {
+        rowGrip.classList.add(TableStyleHelper.selected);
       }
       rowGrip.addEventListener('mousedown', (e) => {
         e.preventDefault();
@@ -279,7 +331,7 @@ export class TableView extends ProsemirrorTableView {
 
         // Select row and mark as grip selection
         // This will trigger update() -> updateControls() which will show toolbar on new grip
-        tableCommands.selectRow(rowIndex)(view.state, (tr) => {
+        tableCommands.selectRow(rowIndex, e.shiftKey)(view.state, (tr) => {
           tr.setMeta('gripSelection', true);
           view.dispatch(tr);
         });
@@ -292,8 +344,8 @@ export class TableView extends ProsemirrorTableView {
       addRow.className = TableStyleHelper.tableAddRow;
       addRow.dataset.index = String(rowIndex + 1);
       addRow.style.position = 'absolute';
-      addRow.style.left = `${paddingLeftOffset - 32}px`; // 20px padding - 32px offset
-      addRow.style.top = `${rowRect.bottom - containerRect.top - 10}px`;
+      addRow.style.left = `${tableLeftOffset - 32}px`;
+      addRow.style.top = `${rowRect.bottom - tableRect.top - 10}px`;
       addRow.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -310,8 +362,8 @@ export class TableView extends ProsemirrorTableView {
         addRowBefore.className = TableStyleHelper.tableAddRow;
         addRowBefore.dataset.index = '0';
         addRowBefore.style.position = 'absolute';
-        addRowBefore.style.left = `${paddingLeftOffset - 32}px`; // 20px padding - 32px offset
-        addRowBefore.style.top = `${rowRect.top - containerRect.top - 10}px`;
+        addRowBefore.style.left = `${tableLeftOffset - 32}px`;
+        addRowBefore.style.top = `${rowTop - 10}px`;
         addRowBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -324,13 +376,14 @@ export class TableView extends ProsemirrorTableView {
     });
 
     // Table grip (corner)
-    const firstRowRect = firstRow.getBoundingClientRect();
-    const tableTopOffset = firstRowRect.top - this.dom.getBoundingClientRect().top;
     const tableGrip = document.createElement('div');
     tableGrip.className = TableStyleHelper.tableGrip;
+    if (showTableGrip) {
+      tableGrip.classList.add(TableStyleHelper.selected);
+    }
     tableGrip.style.position = 'absolute';
-    tableGrip.style.left = `${paddingLeftOffset - 16}px`; // 20px padding - 16px offset
-    tableGrip.style.top = `${tableTopOffset - 16}px`; // Anchor to actual table top-left corner
+    tableGrip.style.left = `${tableLeftOffset - 16}px`;
+    tableGrip.style.top = '-14px'; // Anchor close to the actual table top-left corner.
     tableGrip.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -371,6 +424,68 @@ export class TableView extends ProsemirrorTableView {
         }
       });
     }
+  }
+
+  private getRenderedColumnSegments(
+    node: ProsemirrorNode,
+    map: TableMap,
+    tableRect: DOMRect
+  ): Array<{ left: number; right: number }> {
+    const edges: Array<number | null> = new Array(map.width + 1).fill(null);
+    const rows = Array.from(this.table.querySelectorAll('tr'));
+    let rowStart = 0;
+
+    for (let rowIndex = 0; rowIndex < Math.min(node.childCount, rows.length); rowIndex++) {
+      const rowNode = node.child(rowIndex);
+      const cells = Array.from(rows[rowIndex].querySelectorAll('td, th')) as HTMLTableCellElement[];
+      let cellPos = rowStart + 1;
+
+      for (let cellIndex = 0; cellIndex < Math.min(rowNode.childCount, cells.length); cellIndex++) {
+        const cellNode = rowNode.child(cellIndex);
+        const cellRect = cells[cellIndex].getBoundingClientRect();
+        const mapped = map.findCell(cellPos);
+        const span = Math.max(1, mapped.right - mapped.left);
+        const left = cellRect.left - tableRect.left;
+        const right = cellRect.right - tableRect.left;
+
+        if (span === 1) {
+          edges[mapped.left] ??= left;
+          edges[mapped.right] ??= right;
+        } else {
+          const step = (right - left) / span;
+          for (let col = mapped.left; col <= mapped.right; col++) {
+            edges[col] ??= left + step * (col - mapped.left);
+          }
+        }
+
+        cellPos += cellNode.nodeSize;
+      }
+
+      rowStart += rowNode.nodeSize;
+    }
+
+    edges[0] ??= 0;
+    edges[map.width] ??= tableRect.width;
+    for (let index = 1; index < edges.length - 1; index++) {
+      if (edges[index] != null) continue;
+
+      let leftIndex = index - 1;
+      while (leftIndex >= 0 && edges[leftIndex] == null) leftIndex--;
+      let rightIndex = index + 1;
+      while (rightIndex < edges.length && edges[rightIndex] == null) rightIndex++;
+
+      if (leftIndex >= 0 && rightIndex < edges.length && edges[leftIndex] != null && edges[rightIndex] != null) {
+        const ratio = (index - leftIndex) / (rightIndex - leftIndex);
+        edges[index] = edges[leftIndex]! + (edges[rightIndex]! - edges[leftIndex]!) * ratio;
+      }
+    }
+
+    const fallbackWidth = tableRect.width / Math.max(1, map.width);
+    return Array.from({ length: map.width }, (_, index) => {
+      const left = edges[index] ?? fallbackWidth * index;
+      const right = edges[index + 1] ?? fallbackWidth * (index + 1);
+      return { left, right };
+    });
   }
 
   override ignoreMutation(record: MutationRecord): boolean {
@@ -444,15 +559,33 @@ export class TableView extends ProsemirrorTableView {
   private resetBalancedColumnWidths(): void {
     if (!this.node || !this.colgroup || !this.table) return;
 
-    this.table.classList.remove('table-balanced-wrap');
+    this.table.classList.remove(TableStyleHelper.tableBalancedWrap);
+    this.table.classList.remove(TableStyleHelper.tableManualWidth);
     updateColumnsOnResize(this.node, this.colgroup, this.table, this.defaultCellMinWidth);
+    this.table.style.width = '';
+    this.table.style.minWidth = '';
+  }
+
+  private applyManualWrappedColumnWidths(): void {
+    if (!this.node || !this.colgroup || !this.table) return;
+
+    updateColumnsOnResize(this.node, this.colgroup, this.table, this.defaultCellMinWidth);
+    this.table.classList.remove(TableStyleHelper.tableBalancedWrap);
+    this.table.classList.add(TableStyleHelper.tableManualWidth);
+    this.table.style.width = 'max-content';
+    this.table.style.minWidth = '100%';
   }
 
   private syncWrappedColumnWidths(): void {
-    if (!this.node || !this.table || !this.colgroup || this.node.type.name !== 'table') return;
+    if (!this.node || !this.table || !this.colgroup || !this.scrollable || this.node.type.name !== 'table') return;
 
-    if (!this.isWrapMode() || this.hasManualColumnWidths(this.node)) {
+    if (!this.isWrapMode()) {
       this.resetBalancedColumnWidths();
+      return;
+    }
+
+    if (this.hasManualColumnWidths(this.node)) {
+      this.applyManualWrappedColumnWidths();
       return;
     }
 
@@ -462,35 +595,46 @@ export class TableView extends ProsemirrorTableView {
       return;
     }
 
-    const scores = new Array<number>(map.width).fill(0);
-    const counts = new Array<number>(map.width).fill(0);
-    const maxScores = new Array<number>(map.width).fill(0);
+    const desiredWidths = new Array<number>(map.width).fill(40);
+    const softMinWidths = new Array<number>(map.width).fill(40);
     const seen = new Set<number>();
+    const tableRows = Array.from(this.table.querySelectorAll('tr'));
 
-    for (const pos of map.map) {
-      if (seen.has(pos)) continue;
-      seen.add(pos);
+    for (let rowIndex = 0; rowIndex < map.height; rowIndex++) {
+      const row = tableRows[rowIndex];
+      if (!row) continue;
+      const domCells = Array.from(row.children).filter(
+        (cell): cell is HTMLTableCellElement => cell instanceof HTMLTableCellElement
+      );
+      let domCellIndex = 0;
 
-      const cell = this.node.nodeAt(pos);
-      if (!cell) continue;
+      for (let colIndex = 0; colIndex < map.width; colIndex++) {
+        const mapIndex = rowIndex * map.width + colIndex;
+        const pos = map.map[mapIndex];
+        if (seen.has(pos)) continue;
+        seen.add(pos);
 
-      const rect = map.findCell(pos);
-      const colspan = Math.max(1, rect.right - rect.left);
-      const score = this.scoreCellContent(cell) / colspan;
+        const cell = this.node.nodeAt(pos);
+        if (!cell) continue;
 
-      for (let col = rect.left; col < rect.right; col++) {
-        scores[col] += score;
-        counts[col] += 1;
-        maxScores[col] = Math.max(maxScores[col], score);
+        const rect = map.findCell(pos);
+        const colspan = Math.max(1, rect.right - rect.left);
+        const domCell = domCells[domCellIndex] ?? null;
+        domCellIndex += 1;
+
+        const desiredWidth = this.measureCellDesiredWidth(cell, domCell);
+        const softMinWidth = this.getColumnSoftMinWidth(cell, desiredWidth);
+        const perColumnWidth = desiredWidth / colspan;
+        const perColumnSoftMinWidth = softMinWidth / colspan;
+        for (let col = rect.left; col < rect.right; col++) {
+          desiredWidths[col] = Math.max(desiredWidths[col], perColumnWidth);
+          softMinWidths[col] = Math.max(softMinWidths[col], perColumnSoftMinWidth);
+        }
       }
     }
 
-    const weights = scores.map((score, index) => {
-      const avg = score / Math.max(1, counts[index]);
-      const max = maxScores[index];
-      return Math.max(1, Math.sqrt(avg * 0.7 + max * 0.3));
-    });
-    const widths = this.normalizeColumnPercents(weights);
+    const availableWidth = Math.max(240, this.scrollable.clientWidth - 40);
+    const widths = this.allocateWrappedColumnPercents(desiredWidths, softMinWidths, availableWidth);
 
     const cols = Array.from(this.colgroup.children) as HTMLTableColElement[];
     widths.forEach((width, index) => {
@@ -501,23 +645,29 @@ export class TableView extends ProsemirrorTableView {
 
     this.table.style.width = '100%';
     this.table.style.minWidth = '';
-    this.table.classList.add('table-balanced-wrap');
+    this.table.classList.remove(TableStyleHelper.tableManualWidth);
+    this.table.classList.add(TableStyleHelper.tableBalancedWrap);
   }
 
-  private scoreCellContent(cell: ProsemirrorNode): number {
-    const text = cell.textContent.trim();
-    if (!text) return 2;
+  private measureCellDesiredWidth(cell: ProsemirrorNode, domCell: HTMLTableCellElement | null): number {
+    const text = this.normalizeCellText(cell.textContent);
+    const cellPadding = 28;
+    const maxWidth = this.hasCodeContent(cell) ? 280 : 420;
+    const compactBlankWidth = 36;
 
-    const chineseChars = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
-    const asciiRuns = text.match(/[A-Za-z0-9_./:@#?&=%+-]+/g) ?? [];
-    const asciiScore = asciiRuns.reduce((sum, word) => {
-      const longTokenPenalty = word.length > 18 ? word.length * 0.8 : word.length * 0.45;
-      return sum + longTokenPenalty;
-    }, 0);
-    const punctuationScore = Math.min(8, (text.match(/[，。；：、,.!?;:()（）[\]{}<>《》|]/g) ?? []).length * 0.35);
-    const codeBonus = this.hasCodeContent(cell) ? 8 : 0;
+    if (!text) return compactBlankWidth;
 
-    return Math.max(2, chineseChars * 1.25 + asciiScore + punctuationScore + codeBonus);
+    const measured = domCell ? this.measureTextWithCellFont(domCell, text) : this.estimateTextWidth(text);
+    const longTokenWidth = this.estimateLongestTokenWidth(text, domCell);
+    const contentWidth = Math.max(measured, longTokenWidth);
+
+    return Math.max(compactBlankWidth, Math.min(maxWidth, contentWidth + cellPadding));
+  }
+
+  private getColumnSoftMinWidth(cell: ProsemirrorNode, desiredWidth: number): number {
+    const defaultShortColumnMinWidth = cell.type.name === 'table_header' ? 86 : 68;
+    const absoluteFloor = 36;
+    return Math.max(absoluteFloor, Math.min(defaultShortColumnMinWidth, desiredWidth));
   }
 
   private hasCodeContent(node: ProsemirrorNode): boolean {
@@ -537,34 +687,99 @@ export class TableView extends ProsemirrorTableView {
     return found;
   }
 
-  private normalizeColumnPercents(weights: number[]): number[] {
-    if (weights.length === 0) return [];
+  private normalizeCellText(text: string): string {
+    return text
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
-    const minPercent = Math.min(14, Math.max(6, 56 / weights.length));
-    const maxPercent = Math.min(46, Math.max(22, 160 / weights.length));
-    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || weights.length;
-    let widths = weights.map((weight) => (weight / totalWeight) * 100);
+  private measureTextWithCellFont(cell: HTMLTableCellElement, text: string): number {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return this.estimateTextWidth(text);
 
-    for (let i = 0; i < 6; i++) {
-      widths = widths.map((width) => Math.min(maxPercent, Math.max(minPercent, width)));
-      const total = widths.reduce((sum, width) => sum + width, 0);
-      if (Math.abs(total - 100) < 0.01) break;
+    const style = window.getComputedStyle(cell);
+    const fontStyle = style.fontStyle || 'normal';
+    const fontVariant = style.fontVariant || 'normal';
+    const fontWeight = style.fontWeight || '400';
+    const fontSize = style.fontSize || '14px';
+    const fontFamily = style.fontFamily || 'sans-serif';
+    ctx.font = `${fontStyle} ${fontVariant} ${fontWeight} ${fontSize} ${fontFamily}`;
+    return Math.ceil(ctx.measureText(text).width);
+  }
 
-      const adjustableIndexes = widths
-        .map((width, index) => ({ width, index }))
-        .filter(({ width }) => (total > 100 ? width > minPercent : width < maxPercent))
-        .map(({ index }) => index);
+  private estimateTextWidth(text: string): number {
+    const chineseChars = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
+    const asciiChars = (text.match(/[A-Za-z0-9]/g) ?? []).length;
+    const spaces = (text.match(/\s/g) ?? []).length;
+    const punctuation = Math.max(0, text.length - chineseChars - asciiChars - spaces);
+    return Math.ceil(chineseChars * 13.5 + asciiChars * 7.4 + punctuation * 6.4 + spaces * 4.2);
+  }
 
-      if (adjustableIndexes.length === 0) break;
+  private estimateLongestTokenWidth(text: string, cell: HTMLTableCellElement | null): number {
+    const tokens = text.split(/\s+/).filter(Boolean);
+    if (!tokens.length) return 0;
+    const longest = tokens.reduce((max, token) => (token.length > max.length ? token : max), '');
+    if (!longest) return 0;
+    const measured = cell ? this.measureTextWithCellFont(cell, longest) : this.estimateTextWidth(longest);
+    return Math.min(240, measured + 12);
+  }
 
-      const delta = (100 - total) / adjustableIndexes.length;
-      adjustableIndexes.forEach((index) => {
-        widths[index] += delta;
-      });
+  private allocateWrappedColumnPercents(
+    desiredWidths: number[],
+    softMinWidths: number[],
+    availableWidth: number
+  ): number[] {
+    if (!desiredWidths.length) return [];
+
+    const baseWidths = desiredWidths.map((width, index) => Math.max(softMinWidths[index] ?? 36, width));
+    const totalBase = baseWidths.reduce((sum, width) => sum + width, 0);
+    let finalWidths = [...baseWidths];
+
+    if (totalBase < availableWidth) {
+      const extra = availableWidth - totalBase;
+      const flexWeights = baseWidths.map((width, index) => Math.max(0, width - (softMinWidths[index] ?? 36)) ** 1.15);
+      const totalFlex = flexWeights.reduce((sum, width) => sum + width, 0);
+      if (totalFlex > 0) {
+        finalWidths = finalWidths.map((width, index) => width + (extra * flexWeights[index]) / totalFlex);
+      } else {
+        const shared = extra / finalWidths.length;
+        finalWidths = finalWidths.map((width) => width + shared);
+      }
+    } else if (totalBase > availableWidth) {
+      finalWidths = this.shrinkWidthsToFit(baseWidths, softMinWidths, availableWidth);
     }
 
-    const total = widths.reduce((sum, width) => sum + width, 0) || 100;
-    return widths.map((width) => (width / total) * 100);
+    const total = finalWidths.reduce((sum, width) => sum + width, 0) || 1;
+    return finalWidths.map((width) => (width / total) * 100);
+  }
+
+  private shrinkWidthsToFit(widths: number[], softMinWidths: number[], targetTotal: number): number[] {
+    let result = [...widths];
+    const floors = widths.map((width, index) => {
+      const softMin = softMinWidths[index] ?? 36;
+      return Math.max(36, Math.min(width, softMin));
+    });
+    let overflow = result.reduce((sum, width) => sum + width, 0) - targetTotal;
+
+    while (overflow > 0.5) {
+      const shrinkable = result
+        .map((width, index) => ({ index, capacity: width - floors[index] }))
+        .filter(({ capacity }) => capacity > 0.5);
+
+      if (!shrinkable.length) break;
+
+      const totalCapacity = shrinkable.reduce((sum, item) => sum + item.capacity, 0);
+      shrinkable.forEach(({ index, capacity }) => {
+        const shrink = Math.min(capacity, (overflow * capacity) / totalCapacity);
+        result[index] -= shrink;
+      });
+
+      overflow = result.reduce((sum, width) => sum + width, 0) - targetTotal;
+    }
+
+    return result;
   }
 
   override destroy(): void {

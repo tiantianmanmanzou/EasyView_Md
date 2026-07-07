@@ -61,13 +61,25 @@ export const tokenMapping: Record<string, any> = {
   th: {
     block: 'table_header',
     getAttrs(token: any) {
-      return { alignment: token.attrGet('style')?.match(/text-align:(\w+)/)?.[1] || null };
+      const colwidth = token.attrGet('data-colwidth');
+      const style = token.attrGet('style') || '';
+      return {
+        alignment: style.match(/text-align:\s*([\w-]+)/)?.[1] || null,
+        verticalAlignment: style.match(/vertical-align:\s*([\w-]+)/)?.[1] || null,
+        colwidth: colwidth && /^\d+(,\d+)*$/.test(colwidth) ? colwidth.split(',').map((s: string) => Number(s)) : null,
+      };
     },
   },
   td: {
     block: 'table_cell',
     getAttrs(token: any) {
-      return { alignment: token.attrGet('style')?.match(/text-align:(\w+)/)?.[1] || null };
+      const colwidth = token.attrGet('data-colwidth');
+      const style = token.attrGet('style') || '';
+      return {
+        alignment: style.match(/text-align:\s*([\w-]+)/)?.[1] || null,
+        verticalAlignment: style.match(/vertical-align:\s*([\w-]+)/)?.[1] || null,
+        colwidth: colwidth && /^\d+(,\d+)*$/.test(colwidth) ? colwidth.split(',').map((s: string) => Number(s)) : null,
+      };
     },
   },
   image: {

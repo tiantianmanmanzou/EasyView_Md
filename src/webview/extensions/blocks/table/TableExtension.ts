@@ -9,7 +9,7 @@ import { Plugin, PluginKey } from 'prosemirror-state';
 import type { NodeSpec, Schema } from 'prosemirror-model';
 import type { NodeViewConstructor } from 'prosemirror-view';
 import { Decoration, DecorationSet } from 'prosemirror-view';
-import { tableEditing } from 'prosemirror-tables';
+import { columnResizing, tableEditing } from 'prosemirror-tables';
 import {
   Extension,
   type SerializerNodeHandler,
@@ -49,7 +49,9 @@ export class TableExtension extends Extension {
         attrs: {
           colspan: { default: 1, validate: 'number' },
           rowspan: { default: 1, validate: 'number' },
+          colwidth: { default: null },
           alignment: { default: null },
+          verticalAlignment: { default: null },
         },
         content: 'block+',
         tableRole: 'cell',
@@ -58,10 +60,16 @@ export class TableExtension extends Extension {
           {
             tag: 'td',
             getAttrs(dom: HTMLTableCellElement) {
+              const widthAttr = dom.getAttribute('data-colwidth');
+              const widths = widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
+                ? widthAttr.split(',').map((s) => Number(s))
+                : null;
               return {
                 colspan: dom.colSpan,
                 rowspan: dom.rowSpan,
+                colwidth: widths && widths.length === dom.colSpan ? widths : null,
                 alignment: dom.style.textAlign || null,
+                verticalAlignment: dom.style.verticalAlign || null,
               };
             },
           },
@@ -70,7 +78,11 @@ export class TableExtension extends Extension {
           const attrs: Record<string, any> = {};
           if (node.attrs.colspan !== 1) attrs.colspan = node.attrs.colspan;
           if (node.attrs.rowspan !== 1) attrs.rowspan = node.attrs.rowspan;
-          if (node.attrs.alignment) attrs.style = `text-align: ${node.attrs.alignment}`;
+          if (node.attrs.colwidth) attrs['data-colwidth'] = node.attrs.colwidth.join(',');
+          const styles: string[] = [];
+          if (node.attrs.alignment) styles.push(`text-align: ${node.attrs.alignment}`);
+          if (node.attrs.verticalAlignment) styles.push(`vertical-align: ${node.attrs.verticalAlignment}`);
+          if (styles.length) attrs.style = styles.join('; ');
           return ['td', attrs, 0];
         },
       },
@@ -78,7 +90,9 @@ export class TableExtension extends Extension {
         attrs: {
           colspan: { default: 1, validate: 'number' },
           rowspan: { default: 1, validate: 'number' },
+          colwidth: { default: null },
           alignment: { default: null },
+          verticalAlignment: { default: null },
         },
         content: 'block+',
         tableRole: 'header_cell',
@@ -87,10 +101,16 @@ export class TableExtension extends Extension {
           {
             tag: 'th',
             getAttrs(dom: HTMLTableCellElement) {
+              const widthAttr = dom.getAttribute('data-colwidth');
+              const widths = widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
+                ? widthAttr.split(',').map((s) => Number(s))
+                : null;
               return {
                 colspan: dom.colSpan,
                 rowspan: dom.rowSpan,
+                colwidth: widths && widths.length === dom.colSpan ? widths : null,
                 alignment: dom.style.textAlign || null,
+                verticalAlignment: dom.style.verticalAlign || null,
               };
             },
           },
@@ -99,7 +119,11 @@ export class TableExtension extends Extension {
           const attrs: Record<string, any> = {};
           if (node.attrs.colspan !== 1) attrs.colspan = node.attrs.colspan;
           if (node.attrs.rowspan !== 1) attrs.rowspan = node.attrs.rowspan;
-          if (node.attrs.alignment) attrs.style = `text-align: ${node.attrs.alignment}`;
+          if (node.attrs.colwidth) attrs['data-colwidth'] = node.attrs.colwidth.join(',');
+          const styles: string[] = [];
+          if (node.attrs.alignment) styles.push(`text-align: ${node.attrs.alignment}`);
+          if (node.attrs.verticalAlignment) styles.push(`vertical-align: ${node.attrs.verticalAlignment}`);
+          if (styles.length) attrs.style = styles.join('; ');
           return ['th', attrs, 0];
         },
       },
@@ -125,6 +149,13 @@ export class TableExtension extends Extension {
 
   plugins(_schema: Schema): Plugin[] {
     return [
+      columnResizing({
+        handleWidth: 8,
+        cellMinWidth: 48,
+        defaultCellMinWidth: 25,
+        lastColumnResizable: true,
+        View: TableView,
+      }),
       tableEditing(),
       this.tableFocusPlugin(),
       gripSelectionPlugin(),

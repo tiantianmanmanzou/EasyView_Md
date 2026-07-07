@@ -19,6 +19,19 @@ import { linkEditPopup } from './ToolbarLinkPopup';
 import { htmlTagDropdown } from './ToolbarHtmlDropdown';
 import { hasMarkdownPatterns, interpretAsMarkdown } from './ToolbarMarkdownInterpreter';
 
+function invokeWindowAction(action: 'copyOutlinePath' | 'copyFullPath'): boolean {
+  const win = window as Window & {
+    __easyviewCopyOutlinePath?: () => void;
+    __easyviewCopyFullPath?: () => void;
+  };
+  if (action === 'copyOutlinePath') {
+    win.__easyviewCopyOutlinePath?.();
+    return true;
+  }
+  win.__easyviewCopyFullPath?.();
+  return true;
+}
+
 // ─── Button Definitions ──────────────────────────────────────────────────────
 
 export const buttons: ToolbarButton[] = [
@@ -353,6 +366,18 @@ export const buttons: ToolbarButton[] = [
       return true;
     },
     isActive: (state) => isMarkActive(state, schema.marks.link),
+  },
+  {
+    id: 'copy-outline-path',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h5"/><path d="M8 12h5"/><path d="M12 18h8"/><path d="M14 6l3 3-3 3"/><path d="M18 12l3 3-3 3"/></svg>',
+    title: 'Copy outline path',
+    command: () => invokeWindowAction('copyOutlinePath'),
+  },
+  {
+    id: 'copy-full-path',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M8 13h8"/><path d="M8 17h6"/></svg>',
+    title: 'Copy file and outline path',
+    command: () => invokeWindowAction('copyFullPath'),
   },
   {
     id: 'separator-5',

@@ -5,13 +5,15 @@ import * as https from 'https';
 import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { Document as DocxDocument, HeadingLevel, ImageRun, Packer, Paragraph, TextRun } from 'docx';
-import { SETTINGS_COMMENT_RE, type EditorSettings, computeMinimalDiff } from './providerUtils';
+import { SETTINGS_COMMENT_RE, type EditorSettings, computeMinimalDiff, repairSerializedMarkdownContent } from './providerUtils';
 import { buildImagePathMap } from './providerImageManager';
 import { downloadFile, ExportImage } from './providerExportHandler';
 import { roundPdfCorners } from './pdfRoundCorners';
 import { ensureNativeMarkdownEditorFont } from './nativeEditorFont';
 import { suppressConflictingMarkdownInlineDecorations } from './conflictingExtensions';
 import { consumePendingCursorForUri } from './openCursorContext';
+import { logOpenWithDebug } from './openWithDebug';
+import { disposeTerminalForPanel, openTerminalForPanel, resizeTerminalForPanel, writeTerminalInput } from './terminalSessionManager';
 
 const inlineSuggestOutput = vscode.window.createOutputChannel('MdPre Inline Suggest');
 
@@ -87,6 +89,29 @@ const EASYVIEW_MANAGED_KEYBINDING_START = '// EasyView_Md managed shortcuts star
 const EASYVIEW_MANAGED_KEYBINDING_END = '// EasyView_Md managed shortcuts end';
 const OPEN_EDITOR_WHEN = 'editorTextFocus && (resourceLangId == markdown || resourceLangId == mdx)';
 const DEFAULT_OPEN_EDITOR_KEY = 'alt+e';
+
+function getDefaultTerminalFontFamily(): string {
+  if (process.platform === 'darwin') {
+    return 'Menlo, Monaco, "Courier New", monospace';
+  }
+  if (process.platform === 'win32') {
+    return 'Cascadia Mono, Consolas, "Courier New", monospace';
+  }
+  return '"DejaVu Sans Mono", "Liberation Mono", monospace';
+}
+
+function readTerminalAppearance(): { fontFamily: string; fontSize: number; lineHeight: number; fontWeight: string; fontWeightBold: string; letterSpacing: number } {
+  const terminalConfig = vscode.workspace.getConfiguration('terminal.integrated');
+  const terminalFontFamily = terminalConfig.get<string>('fontFamily', '').trim();
+  return {
+    fontFamily: terminalFontFamily || getDefaultTerminalFontFamily(),
+    fontSize: terminalConfig.get<number>('fontSize', 13),
+    lineHeight: terminalConfig.get<number>('lineHeight', 1),
+    fontWeight: terminalConfig.get<string>('fontWeight', 'normal'),
+    fontWeightBold: terminalConfig.get<string>('fontWeightBold', 'bold'),
+    letterSpacing: terminalConfig.get<number>('letterSpacing', 0),
+  };
+}
 
 function getUserKeybindingsFilePath(): string {
   const home = os.homedir();
@@ -1068,6 +1093,261 @@ function execGit(args: string[], cwd: string): Promise<void> {
   });
 }
 
+function execGitOutput(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        const stderrText = typeof stderr === 'string' ? stderr.trim() : '';
+        reject(new Error(stderrText || error.message));
+        return;
+      }
+      resolve(typeof stdout === 'string' ? stdout : String(stdout ?? ''));
+    });
+  });
+}
+
+function sanitizeCommitMessage(value: string): string {
+  const cleaned = value
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-zA-Z-]*\n?|\n?```/g, ''))
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^["'`]+|["'`]+$/g, '').trimEnd())
+    .filter((line, index, lines) => line.trim() || (index > 0 && index < lines.length - 1))
+    .join('\n')
+    .trim()
+    .replace(/^commit message:\s*/i, '')
+    .trim();
+  return cleaned.split(/\r?\n/).slice(0, 8).join('\n').trim();
+}
+
+function hasCjkText(value: string): boolean {
+  return /[\u3400-\u9fff]/.test(value);
+}
+
+function commitMessageSubject(fileName: string, status: string, diff: string): string {
+  const baseName = path.basename(fileName);
+  const lower = baseName.toLowerCase();
+  const scope = /\.(md|markdown|mdx)$/i.test(baseName) || lower === 'readme' ? 'docs' : 'chore';
+  const additions = (diff.match(/^\+/gm) ?? []).length;
+  const deletions = (diff.match(/^-/gm) ?? []).length;
+
+  if (status.startsWith('??') || (/^A/.test(status))) {
+    return `${scope}: add ${baseName}`;
+  }
+  if (status.includes('D')) {
+    return `${scope}: remove ${baseName}`;
+  }
+  if (additions > 0 && deletions === 0) {
+    return `${scope}: expand ${baseName}`;
+  }
+  return `${scope}: update ${baseName}`;
+}
+
+function commitMessageChineseBody(fileName: string, status: string, diff: string): string[] {
+  const baseName = path.basename(fileName);
+  const additions = (diff.match(/^\+/gm) ?? []).length;
+  const deletions = (diff.match(/^-/gm) ?? []).length;
+
+  if (status.startsWith('??') || (/^A/.test(status))) {
+    return [
+      '主要改动:',
+      `- 新增 ${baseName}，将当前文件纳入版本管理。`,
+      '- 补充当前文件的初始内容，便于后续维护。',
+    ];
+  }
+  if (status.includes('D')) {
+    return [
+      '主要改动:',
+      `- 删除 ${baseName}，清理不再使用的文件内容。`,
+      '- 保持提交范围仅限当前文件。',
+    ];
+  }
+  if (additions > 0 && deletions > 0) {
+    return [
+      '主要改动:',
+      `- 更新 ${baseName} 的内容，调整已有说明或实现。`,
+      `- 本次变更包含 ${additions} 行新增和 ${deletions} 行删除。`,
+    ];
+  }
+  if (additions > 0) {
+    return [
+      '主要改动:',
+      `- 扩充 ${baseName} 的内容，补充新的说明或实现。`,
+      `- 本次变更新增约 ${additions} 行内容。`,
+    ];
+  }
+  return [
+    '主要改动:',
+    `- 更新 ${baseName} 的内容，保持文件与当前需求一致。`,
+    '- 保持提交范围仅限当前文件。',
+  ];
+}
+
+function ensureBilingualCommitMessageFormat(message: string, fileName: string, status: string, diff: string): string {
+  const sanitized = sanitizeCommitMessage(message);
+  const lines = sanitized.split(/\r?\n/);
+  const firstNonEmptyIndex = lines.findIndex((line) => line.trim());
+  const candidateSubject = firstNonEmptyIndex >= 0 ? lines[firstNonEmptyIndex].trim() : '';
+  const subject = candidateSubject && !hasCjkText(candidateSubject)
+    ? candidateSubject
+    : commitMessageSubject(fileName, status, diff);
+  const body = firstNonEmptyIndex >= 0
+    ? lines.slice(firstNonEmptyIndex + 1).map((line) => line.trimEnd()).filter((line, index, arr) => (
+      line.trim() || (index > 0 && index < arr.length - 1)
+    ))
+    : [];
+  const hasChineseBody = body.some((line) => hasCjkText(line));
+  const finalBody = hasChineseBody ? body : commitMessageChineseBody(fileName, status, diff);
+  return [subject, '', ...finalBody].join('\n').trim();
+}
+
+async function resolveGitFileContext(document: vscode.TextDocument): Promise<{
+  root: string;
+  relativePath: string;
+  status: string;
+  diff: string;
+}> {
+  const cwd = path.dirname(document.uri.fsPath);
+  const root = (await execGitOutput(['rev-parse', '--show-toplevel'], cwd)).trim();
+  const relativePath = path.relative(root, document.uri.fsPath).replace(/\\/g, '/');
+  const status = (await execGitOutput(['status', '--porcelain=v1', '--', relativePath], root)).trim();
+  let diff = '';
+  try {
+    diff = await execGitOutput(['diff', '--', relativePath], root);
+  } catch {
+    diff = '';
+  }
+  if (!diff.trim()) {
+    try {
+      diff = await execGitOutput(['diff', '--cached', '--', relativePath], root);
+    } catch {
+      diff = '';
+    }
+  }
+  if (!diff.trim() && status.startsWith('??')) {
+    const content = document.getText();
+    diff = [
+      `diff --git a/${relativePath} b/${relativePath}`,
+      'new file mode 100644',
+      `--- /dev/null`,
+      `+++ b/${relativePath}`,
+      '@@',
+      ...content.split(/\r?\n/).slice(0, 400).map((line) => `+${line}`),
+    ].join('\n');
+  }
+  return { root, relativePath, status, diff };
+}
+
+function truncateForPrompt(value: string, maxChars = 12000): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n\n[Diff truncated for commit message generation]`;
+}
+
+async function generateCommitMessageWithVsCodeLm(fileName: string, status: string, diff: string): Promise<string | null> {
+  const lm = (vscode as any).lm;
+  const ChatMessage = (vscode as any).LanguageModelChatMessage;
+  if (!lm?.selectChatModels || !ChatMessage?.User) return null;
+
+  const models = [
+    ...(await lm.selectChatModels({ vendor: 'copilot' }).catch(() => [])),
+    ...(await lm.selectChatModels().catch(() => [])),
+  ];
+  const model = models[0];
+  if (!model?.sendRequest) return null;
+
+  const prompt = [
+    'Generate a Git commit message for the current file only.',
+    'Format requirements:',
+    '1. The first line must be English only and use Conventional Commit style, for example "fix(ui): update backend server information display".',
+    '2. Add one blank line after the first line.',
+    '3. The remaining lines must be Chinese and summarize the main changes.',
+    '4. Prefer this body style:',
+    '主要改动:',
+    '- 中文改动说明一。',
+    '- 中文改动说明二。',
+    'Return only the commit message text. Do not include Markdown fences or explanations.',
+    '',
+    `File: ${fileName}`,
+    `Git status: ${status || 'modified'}`,
+    '',
+    'Diff:',
+    truncateForPrompt(diff),
+  ].join('\n');
+
+  const response = await model.sendRequest([ChatMessage.User(prompt)]);
+  let text = '';
+  for await (const fragment of response.text) {
+    text += fragment;
+  }
+  return ensureBilingualCommitMessageFormat(text, fileName, status, diff) || null;
+}
+
+async function getGitApi(): Promise<any | null> {
+  const extension = vscode.extensions.getExtension('vscode.git');
+  if (!extension) return null;
+  const gitExtension = extension.isActive ? extension.exports : (await extension.activate());
+  return gitExtension?.getAPI?.(1) ?? null;
+}
+
+async function generateCommitMessageWithScmCommand(document: vscode.TextDocument): Promise<string | null> {
+  const api = await getGitApi();
+  const repo = api?.getRepository?.(document.uri);
+  if (!repo?.rootUri) return null;
+
+  const previous = typeof repo.inputBox?.value === 'string' ? repo.inputBox.value.trim() : '';
+  await vscode.commands.executeCommand('github.copilot.git.generateCommitMessage', repo.rootUri);
+
+  const start = Date.now();
+  while (Date.now() - start < 30000) {
+    const current = typeof repo.inputBox?.value === 'string' ? repo.inputBox.value.trim() : '';
+    if (current && current !== previous) {
+      return ensureBilingualCommitMessageFormat(current, path.basename(document.uri.fsPath), '', '') || null;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  const current = typeof repo.inputBox?.value === 'string' ? repo.inputBox.value.trim() : '';
+  return current ? ensureBilingualCommitMessageFormat(current, path.basename(document.uri.fsPath), '', '') || null : null;
+}
+
+function heuristicCommitMessage(fileName: string, status: string, diff: string): string {
+  return [
+    commitMessageSubject(fileName, status, diff),
+    '',
+    ...commitMessageChineseBody(fileName, status, diff),
+  ].join('\n');
+}
+
+async function generateCommitMessageForCurrentFile(document: vscode.TextDocument): Promise<{ message: string; source: string }> {
+  const context = await resolveGitFileContext(document);
+  if (!context.status) {
+    throw new Error('Current file has no Git changes to commit.');
+  }
+
+  const fileName = path.basename(document.uri.fsPath);
+  try {
+    const aiMessage = await generateCommitMessageWithVsCodeLm(fileName, context.status, context.diff);
+    if (aiMessage) {
+      return { message: aiMessage, source: 'Generated by VS Code AI' };
+    }
+  } catch (error) {
+    console.warn('[InLineMd] VS Code language model commit message generation failed:', toErrorMessage(error));
+  }
+
+  try {
+    const scmMessage = await generateCommitMessageWithScmCommand(document);
+    if (scmMessage) {
+      return { message: scmMessage, source: 'Generated by VS Code SCM AI' };
+    }
+  } catch (error) {
+    console.warn('[InLineMd] VS Code SCM commit message generation failed:', toErrorMessage(error));
+  }
+
+  return {
+    message: heuristicCommitMessage(fileName, context.status, context.diff),
+    source: 'Generated from current file diff',
+  };
+}
+
 /**
  * Context object passed to the message handler, containing all
  * references needed by message processing (webview panel, document, state, etc.).
@@ -1097,7 +1377,7 @@ async function syncWebviewContentToDocument(
   const document = ctx.document;
 
   await ctx.updateEditorSettings(settings);
-  let newContent = editContent.replace(SETTINGS_COMMENT_RE, '');
+  let newContent = repairSerializedMarkdownContent(editContent.replace(SETTINGS_COMMENT_RE, ''));
 
   const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
   if (eol === '\r\n') {
@@ -1163,6 +1443,11 @@ export async function handleWebviewMessage(
       if (ctx.getIsUpdatingWebview()) return;
 
       const editContent = message.content;
+      logOpenWithDebug('providerMessage.editReceived', {
+        path: document.uri.fsPath,
+        editLength: typeof editContent === 'string' ? editContent.length : -1,
+        lastKnownLength: ctx.getLastKnownContent().length,
+      });
       const fullWidth = message.fullWidth ?? true;
       const tocVisible = message.tocVisible ?? true;
       const tableWrap = message.tableWrap ?? false;
@@ -1239,7 +1524,12 @@ export async function handleWebviewMessage(
     }
 
     case 'ready': {
-      const rawContent = document.getText();
+      const rawContent = ctx.getLastKnownContent();
+      logOpenWithDebug('providerMessage.ready', {
+        path: document.uri.fsPath,
+        rawLength: rawContent.length,
+        isDirty: document.isDirty,
+      });
       const settings = ctx.getEditorSettings();
       const pendingCursor = consumePendingCursorForUri(document.uri);
       const activeEditor = vscode.window.activeTextEditor;
@@ -1250,7 +1540,7 @@ export async function handleWebviewMessage(
       const initialCursorCharacter = pendingCursor?.character ?? fallbackEditor?.selection.active.character ?? 0;
 
       // Remove settings comment and normalize to LF before sending to webview
-      const contentWithoutComment = rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
+      const contentWithoutComment = repairSerializedMarkdownContent(rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
 
       // Build image path mapping
       const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
@@ -1259,13 +1549,74 @@ export async function handleWebviewMessage(
         type: 'init',
         content: contentWithoutComment,
         filename: ctx.getFilename(),
+        filePath: document.uri.fsPath,
         fullWidth: settings.fullWidth,
         tocVisible: settings.tocVisible,
         tableWrap: settings.tableWrap,
         initialCursorLine,
         initialCursorCharacter,
         initialTotalLines: Math.max(1, document.lineCount),
+        terminalAppearance: readTerminalAppearance(),
         imagePathMap: imagePathMap,
+      });
+      logOpenWithDebug('providerMessage.initPosted', {
+        path: document.uri.fsPath,
+        initLength: contentWithoutComment.length,
+      });
+      break;
+    }
+
+    case 'copyTextToClipboard': {
+      const text = typeof message.text === 'string' ? message.text : '';
+      const successMessage = typeof message.successMessage === 'string' ? message.successMessage : 'Copied';
+      if (!text) {
+        webviewPanel.webview.postMessage({ type: 'clipboardCopyFailed', message: 'Nothing to copy.' });
+        break;
+      }
+      try {
+        await vscode.env.clipboard.writeText(text);
+        webviewPanel.webview.postMessage({ type: 'clipboardCopyCompleted', message: successMessage });
+      } catch (error) {
+        webviewPanel.webview.postMessage({ type: 'clipboardCopyFailed', message: toErrorMessage(error) });
+      }
+      break;
+    }
+
+    case 'openTerminal': {
+      if (document.uri.scheme !== 'file') {
+        webviewPanel.webview.postMessage({
+          type: 'terminalError',
+          message: 'Only files on disk support the embedded terminal.',
+        });
+        break;
+      }
+      openTerminalForPanel(webviewPanel, path.dirname(document.uri.fsPath));
+      break;
+    }
+
+    case 'terminalInput': {
+      writeTerminalInput(webviewPanel, typeof message.data === 'string' ? message.data : '');
+      break;
+    }
+
+    case 'terminalResize': {
+      const cols = typeof message.cols === 'number' ? message.cols : 0;
+      const rows = typeof message.rows === 'number' ? message.rows : 0;
+      resizeTerminalForPanel(webviewPanel, cols, rows);
+      break;
+    }
+
+    case 'terminalClose': {
+      disposeTerminalForPanel(webviewPanel);
+      break;
+    }
+
+    case 'openWithDebugLog': {
+      const stage = typeof message.stage === 'string' ? message.stage : 'webview.unknown';
+      const meta = typeof message.meta === 'object' && message.meta ? message.meta : {};
+      logOpenWithDebug(`webview.${stage}`, {
+        path: document.uri.fsPath,
+        ...(meta as Record<string, unknown>),
       });
       break;
     }
@@ -1281,7 +1632,7 @@ export async function handleWebviewMessage(
           const newContent = document.getText();
           if (newContent !== ctx.getLastKnownContent()) {
             ctx.setLastKnownContent(newContent);
-            const contentWithoutComment = newContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
+            const contentWithoutComment = repairSerializedMarkdownContent(newContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
             const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
             ctx.setIsUpdatingWebview(true);
             webviewPanel.webview.postMessage({
@@ -1332,6 +1683,99 @@ export async function handleWebviewMessage(
         } catch (error) {
           const messageText = error instanceof Error ? error.message : String(error);
           vscode.window.showErrorMessage(`Failed to stage file: ${messageText}`);
+        }
+      });
+      break;
+    }
+
+    case 'generateCommitMessage': {
+      if (document.uri.scheme !== 'file') {
+        webviewPanel.webview.postMessage({
+          type: 'commitMessageGenerationFailed',
+          message: 'Only files on disk can be committed.',
+        });
+        break;
+      }
+
+      enqueueOperation(ctx, 'generate commit message', async () => {
+        ctx.setIsUpdatingDocument(true);
+        try {
+          await document.save();
+        } finally {
+          ctx.setIsUpdatingDocument(false);
+        }
+
+        try {
+          const result = await generateCommitMessageForCurrentFile(document);
+          webviewPanel.webview.postMessage({
+            type: 'commitMessageGenerated',
+            message: result.message,
+            source: result.source,
+          });
+        } catch (error) {
+          const messageText = toErrorMessage(error);
+          webviewPanel.webview.postMessage({
+            type: 'commitMessageGenerationFailed',
+            message: messageText,
+          });
+          vscode.window.showErrorMessage(`Failed to generate commit message: ${messageText}`);
+        }
+      });
+      break;
+    }
+
+    case 'commitFile': {
+      if (document.uri.scheme !== 'file') {
+        webviewPanel.webview.postMessage({
+          type: 'commitFileFailed',
+          message: 'Only files on disk can be committed.',
+        });
+        break;
+      }
+
+      const commitMessage = typeof message.message === 'string' ? sanitizeCommitMessage(message.message) : '';
+      if (!commitMessage) {
+        webviewPanel.webview.postMessage({
+          type: 'commitFileFailed',
+          message: 'Commit message cannot be empty.',
+        });
+        break;
+      }
+
+      enqueueOperation(ctx, 'commit current markdown file', async () => {
+        ctx.setIsUpdatingDocument(true);
+        try {
+          await document.save();
+        } finally {
+          ctx.setIsUpdatingDocument(false);
+        }
+
+        try {
+          const gitContext = await resolveGitFileContext(document);
+          if (!gitContext.status) {
+            webviewPanel.webview.postMessage({
+              type: 'commitFileFailed',
+              message: 'Current file has no Git changes to commit.',
+            });
+            return;
+          }
+
+          await execGit(['add', '--', gitContext.relativePath], gitContext.root);
+          await execGit(['commit', '-m', commitMessage, '--', gitContext.relativePath], gitContext.root);
+          await ctx.refreshGitChanges?.();
+          const successText = `Committed: ${path.basename(document.uri.fsPath)}`;
+          webviewPanel.webview.postMessage({
+            type: 'commitFileCompleted',
+            message: successText,
+          });
+          vscode.window.showInformationMessage(successText);
+        } catch (error) {
+          const messageText = toErrorMessage(error);
+          webviewPanel.webview.postMessage({
+            type: 'commitFileFailed',
+            message: messageText,
+          });
+          vscode.window.showErrorMessage(`Failed to commit file: ${messageText}`);
         }
       });
       break;

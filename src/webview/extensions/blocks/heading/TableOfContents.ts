@@ -1,7 +1,7 @@
 /**
  * Table of Contents Sidebar
  *
- * Displays headings (h1-h3) from the ProseMirror document.
+ * Displays headings (h1-h5) from the ProseMirror document.
  * Click to scroll, active heading highlight on scroll.
  * Based on Outline's Contents.tsx component.
  */
@@ -18,6 +18,25 @@ interface HeadingEntry {
   level: number;
   text: string;
   pos: number;
+}
+
+type TocDropPlacement = 'before' | 'after';
+
+function getHeadingSectionEnd(doc: ProsemirrorNode, headingPos: number, level: number): number {
+  const headingNode = doc.nodeAt(headingPos);
+  if (!headingNode) return headingPos;
+
+  let sectionEnd = headingPos + headingNode.nodeSize;
+  let foundBoundary = false;
+  doc.forEach((node, offset) => {
+    if (foundBoundary || offset <= headingPos) return;
+    if (node.type.name === 'heading' && Number(node.attrs.level) <= level) {
+      foundBoundary = true;
+      return;
+    }
+    sectionEnd = offset + node.nodeSize;
+  });
+  return sectionEnd;
 }
 
 export class TableOfContents {
@@ -43,6 +62,9 @@ export class TableOfContents {
   private throttleTimer: ReturnType<typeof setTimeout> | null = null;
   private clickedPos: number | null = null;
   private programmaticScroll = false;
+  private draggedHeadingPos: number | null = null;
+  private dragOverHeadingPos: number | null = null;
+  private dragPlacement: TocDropPlacement | null = null;
   public sourceClickHandler: ((heading: { level: number; text: string }) => void) | null = null;
   private sourceScrollEl: HTMLElement | null = null;
   private sourceScrollHandler: (() => void) | null = null;
@@ -52,8 +74,107 @@ export class TableOfContents {
   constructor(view: EditorView) {
     this.view = view;
     this.scrollAreaEl = document.getElementById('editor-scroll-area');
+    this.ensureStyles();
     this.createSidebar();
     this.attachScrollListener();
+  }
+
+  private ensureStyles(): void {
+    if (document.getElementById('easyview-toc-tree-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'easyview-toc-tree-styles';
+    style.textContent = `
+      .toc-item {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 2px 6px;
+        border-radius: 8px;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .toc-item.active {
+        border-left: none !important;
+        box-shadow: none !important;
+      }
+      .toc-item.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 4px;
+        bottom: 4px;
+        width: 2px;
+        border-radius: 999px;
+        background: var(--mdpre-accent, var(--vscode-textLink-foreground, #4080d0));
+      }
+      .toc-item.drop-before {
+        box-shadow: inset 0 2px 0 var(--mdpre-accent, var(--vscode-focusBorder, #409eff));
+      }
+      .toc-item.drop-after {
+        box-shadow: inset 0 -2px 0 var(--mdpre-accent, var(--vscode-focusBorder, #409eff));
+      }
+      .toc-item.dragging {
+        opacity: 0.45;
+      }
+      .toc-item-text {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .toc-item-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        opacity: 0;
+        transition: opacity 120ms ease;
+      }
+      .toc-item:hover .toc-item-actions,
+      .toc-item.active .toc-item-actions {
+        opacity: 1;
+      }
+      .toc-item-action {
+        width: 20px;
+        height: 20px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+      }
+      .toc-item-action:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--mdpre-accent, var(--vscode-focusBorder, #409eff)) 14%, transparent);
+        color: var(--mdpre-accent, var(--vscode-focusBorder, #409eff));
+      }
+      .toc-item-action:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .toc-item-drag-handle {
+        cursor: grab;
+      }
+      .toc-item-drag-handle:active {
+        cursor: grabbing;
+      }
+      .toc-item-delete svg,
+      .toc-item-drag-handle svg {
+        width: 13px;
+        height: 13px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   // ─── DOM Creation ────────────────────────────────────────────────────
@@ -62,7 +183,7 @@ export class TableOfContents {
     this.sidebar = document.createElement('div');
     this.sidebar.className = 'toc-sidebar hidden';
 
-    // Top controls: show heading levels H1 / H1-H2 / H1-H2-H3.
+    // Top controls: show heading levels H1 through H5.
     const controls = document.createElement('div');
     controls.className = 'toc-level-controls';
     this.levelToggleBtn = document.createElement('button');
@@ -83,6 +204,8 @@ export class TableOfContents {
       { level: 1, label: 'H1', title: 'Show level 1 headings only' },
       { level: 2, label: 'H2', title: 'Show level 1-2 headings' },
       { level: 3, label: 'H3', title: 'Show level 1-3 headings' },
+      { level: 4, label: 'H4', title: 'Show level 1-4 headings' },
+      { level: 5, label: 'H5', title: 'Show level 1-5 headings' },
     ];
     levelOptions.forEach((option) => {
       const btn = document.createElement('button');
@@ -141,14 +264,14 @@ export class TableOfContents {
   // ─── Heading Extraction ──────────────────────────────────────────────
 
   /**
-   * Extract headings from document root level (level 1-3 only).
+   * Extract headings from document root level (level 1-5 only).
    * Based on Outline's ProsemirrorHelper.getHeadings()
    */
   private extractHeadings(doc: ProsemirrorNode): HeadingEntry[] {
     const headings: HeadingEntry[] = [];
 
     doc.forEach((node, offset) => {
-      if (node.type.name === 'heading' && node.attrs.level < 4) {
+      if (node.type.name === 'heading' && node.attrs.level <= 5) {
         headings.push({
           level: node.attrs.level,
           text: node.textContent || '',
@@ -225,6 +348,7 @@ export class TableOfContents {
     }
 
     filtered.forEach((heading) => {
+      const actionsDisabled = !!this.sourceClickHandler;
       const hasChildren = hasChildrenMap.get(heading.pos) ?? false;
       const hasChildrenBeyondMax = hasChildrenBeyondMaxMap.get(heading.pos) ?? false;
 
@@ -278,8 +402,55 @@ export class TableOfContents {
       text.textContent = heading.text || '(empty)';
       text.title = heading.text;
 
+      const actions = document.createElement('span');
+      actions.className = 'toc-item-actions';
+
+      const dragBtn = document.createElement('button');
+      dragBtn.type = 'button';
+      dragBtn.className = 'toc-item-action toc-item-drag-handle';
+      dragBtn.title = actionsDisabled ? 'Move is available in EasyView mode only' : 'Drag to move this heading section';
+      dragBtn.draggable = !actionsDisabled;
+      dragBtn.disabled = actionsDisabled;
+      dragBtn.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.25"/><circle cx="15" cy="6" r="1.25"/><circle cx="9" cy="12" r="1.25"/><circle cx="15" cy="12" r="1.25"/><circle cx="9" cy="18" r="1.25"/><circle cx="15" cy="18" r="1.25"/></svg>';
+      dragBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      dragBtn.addEventListener('dragstart', (event) => {
+        if (actionsDisabled) {
+          event.preventDefault();
+          return;
+        }
+        this.draggedHeadingPos = heading.pos;
+        item.classList.add('dragging');
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(heading.pos));
+        }
+      });
+      dragBtn.addEventListener('dragend', () => {
+        this.clearDropIndicators();
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'toc-item-action toc-item-delete';
+      deleteBtn.title = actionsDisabled ? 'Delete is available in EasyView mode only' : 'Delete this heading and its content';
+      deleteBtn.disabled = actionsDisabled;
+      deleteBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+      deleteBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (actionsDisabled) return;
+        this.deleteHeadingSection(heading.pos);
+      });
+
+      actions.appendChild(dragBtn);
+      actions.appendChild(deleteBtn);
+
       item.appendChild(toggleBtn);
       item.appendChild(text);
+      item.appendChild(actions);
 
       item.addEventListener('click', (e) => {
         e.preventDefault();
@@ -295,6 +466,37 @@ export class TableOfContents {
           this.scrollToHeading(heading.pos);
         }
       });
+
+      if (!actionsDisabled) {
+        item.addEventListener('dragover', (event) => {
+          if (this.draggedHeadingPos === null || this.draggedHeadingPos === heading.pos) return;
+          event.preventDefault();
+          const rect = item.getBoundingClientRect();
+          const placement: TocDropPlacement = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+          this.setDropIndicator(heading.pos, placement);
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = 'move';
+          }
+        });
+
+        item.addEventListener('dragleave', (event) => {
+          const related = event.relatedTarget as Node | null;
+          if (related && item.contains(related)) return;
+          if (this.dragOverHeadingPos === heading.pos) {
+            this.clearDropIndicators();
+          }
+        });
+
+        item.addEventListener('drop', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const sourcePos = this.draggedHeadingPos;
+          const placement = this.dragPlacement;
+          this.clearDropIndicators();
+          if (sourcePos === null || placement === null || sourcePos === heading.pos) return;
+          this.moveHeadingSection(sourcePos, heading.pos, placement);
+        });
+      }
 
       this.tocList!.appendChild(item);
     });
@@ -392,6 +594,75 @@ export class TableOfContents {
       }
     }
     return candidate;
+  }
+
+  private clearDropIndicators(): void {
+    this.draggedHeadingPos = null;
+    this.dragOverHeadingPos = null;
+    this.dragPlacement = null;
+    this.tocList?.querySelectorAll('.toc-item.dragging, .toc-item.drop-before, .toc-item.drop-after').forEach((el) => {
+      el.classList.remove('dragging', 'drop-before', 'drop-after');
+    });
+  }
+
+  private setDropIndicator(targetPos: number, placement: TocDropPlacement): void {
+    this.dragOverHeadingPos = targetPos;
+    this.dragPlacement = placement;
+    this.tocList?.querySelectorAll('.toc-item').forEach((el) => {
+      const pos = Number((el as HTMLElement).dataset.pos ?? '-1');
+      el.classList.toggle('drop-before', pos === targetPos && placement === 'before');
+      el.classList.toggle('drop-after', pos === targetPos && placement === 'after');
+    });
+  }
+
+  private deleteHeadingSection(headingPos: number): void {
+    const heading = this.headings.find((entry) => entry.pos === headingPos);
+    if (!heading) return;
+    const to = getHeadingSectionEnd(this.view.state.doc, heading.pos, heading.level);
+    if (to <= heading.pos) return;
+
+    const tr = this.view.state.tr.delete(heading.pos, to).scrollIntoView();
+    this.collapsedHeadingPos.delete(heading.pos);
+    this.expandedHeadingPos.delete(heading.pos);
+    this.clickedPos = null;
+    this.view.dispatch(tr);
+    this.view.focus();
+  }
+
+  private moveHeadingSection(sourcePos: number, targetPos: number, placement: TocDropPlacement): void {
+    const sourceHeading = this.headings.find((entry) => entry.pos === sourcePos);
+    const targetHeading = this.headings.find((entry) => entry.pos === targetPos);
+    if (!sourceHeading || !targetHeading) return;
+
+    const doc = this.view.state.doc;
+    const dragFrom = sourceHeading.pos;
+    const dragTo = getHeadingSectionEnd(doc, sourceHeading.pos, sourceHeading.level);
+    if (dragTo <= dragFrom) return;
+
+    const dropPos = placement === 'before'
+      ? targetHeading.pos
+      : getHeadingSectionEnd(doc, targetHeading.pos, targetHeading.level);
+
+    if (dropPos >= dragFrom && dropPos <= dragTo) return;
+
+    const slice = doc.slice(dragFrom, dragTo);
+    let tr = this.view.state.tr;
+    let nextHeadingPos = placement === 'before' ? targetHeading.pos : getHeadingSectionEnd(doc, targetHeading.pos, targetHeading.level);
+
+    if (dropPos <= dragFrom) {
+      tr = tr.replaceRange(dropPos, dropPos, slice);
+      nextHeadingPos = dropPos;
+      tr = tr.delete(tr.mapping.map(dragFrom), tr.mapping.map(dragTo));
+    } else {
+      tr = tr.delete(dragFrom, dragTo);
+      const mappedDropPos = tr.mapping.map(dropPos);
+      nextHeadingPos = mappedDropPos;
+      tr = tr.replaceRange(mappedDropPos, mappedDropPos, slice);
+    }
+
+    this.clickedPos = nextHeadingPos;
+    this.view.dispatch(tr.scrollIntoView());
+    this.view.focus();
   }
 
   private computeVisibleHeadings(): HeadingEntry[] {
@@ -644,6 +915,7 @@ export class TableOfContents {
     };
 
     scrollEl.addEventListener('scroll', this.sourceScrollHandler, { passive: true });
+    if (this.isVisible) this.renderList();
     this.highlightActiveHeading();
   }
 
@@ -654,6 +926,7 @@ export class TableOfContents {
     this.sourceScrollEl = null;
     this.sourceScrollHandler = null;
     this.sourceGetActivePos = null;
+    if (this.isVisible) this.renderList();
   }
 
   public get visible(): boolean {
@@ -672,6 +945,7 @@ export class TableOfContents {
 
   public destroy(): void {
     this.exitSourceMode();
+    this.clearDropIndicators();
     if (this.scrollHandler && this.scrollAreaEl) {
       this.scrollAreaEl.removeEventListener('scroll', this.scrollHandler);
     }

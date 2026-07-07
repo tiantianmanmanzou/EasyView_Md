@@ -1,10 +1,36 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { SETTINGS_COMMENT_RE, extractSettings, type EditorSettings } from './providerUtils';
+import { SETTINGS_COMMENT_RE, extractSettings, repairSerializedMarkdownContent, type EditorSettings } from './providerUtils';
 import { buildImagePathMap } from './providerImageManager';
 import { handleWebviewMessage, MessageHandlerContext } from './providerMessageHandler';
 import { computeGitLineRanges, type GitLineRange } from './gitChangeTracker';
 import { consumePendingCursorForUri } from './openCursorContext';
+import { consumePendingDocumentContentForUri } from './openDocumentSnapshot';
+import { logOpenWithDebug } from './openWithDebug';
+import { disposeTerminalForPanel } from './terminalSessionManager';
+
+function getDefaultTerminalFontFamily(): string {
+  if (process.platform === 'darwin') {
+    return 'Menlo, Monaco, "Courier New", monospace';
+  }
+  if (process.platform === 'win32') {
+    return 'Cascadia Mono, Consolas, "Courier New", monospace';
+  }
+  return '"DejaVu Sans Mono", "Liberation Mono", monospace';
+}
+
+function readTerminalAppearance(): { fontFamily: string; fontSize: number; lineHeight: number; fontWeight: string; fontWeightBold: string; letterSpacing: number } {
+  const terminalConfig = vscode.workspace.getConfiguration('terminal.integrated');
+  const terminalFontFamily = terminalConfig.get<string>('fontFamily', '').trim();
+  return {
+    fontFamily: terminalFontFamily || getDefaultTerminalFontFamily(),
+    fontSize: terminalConfig.get<number>('fontSize', 13),
+    lineHeight: terminalConfig.get<number>('lineHeight', 1),
+    fontWeight: terminalConfig.get<string>('fontWeight', 'normal'),
+    fontWeightBold: terminalConfig.get<string>('fontWeightBold', 'bold'),
+    letterSpacing: terminalConfig.get<number>('letterSpacing', 0),
+  };
+}
 
 /**
  * CustomTextEditorProvider for WYSIWYG Markdown editing.
@@ -80,7 +106,83 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return vscode.Disposable.from(editorDisposable, exportHtmlLightCommand, exportHtmlDarkCommand, exportPdfLightCommand, exportPdfDarkCommand, undoCommand, redoCommand, revealCursorCommand);
   }
 
+  public static async reloadPanelsForDocument(uri: vscode.Uri, contentOverride?: string): Promise<boolean> {
+    return MarkdownEditorProvider.instance?.reloadPanelsForDocument(uri, contentOverride) ?? false;
+  }
+
+  public static hasPanelsForDocument(uri: vscode.Uri): boolean {
+    return MarkdownEditorProvider.instance?.hasPanelsForDocument(uri) ?? false;
+  }
+
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  private getSettingsKey(document: vscode.TextDocument): string {
+    return `mdpre-zalman.editorSettings:${document.uri.toString()}`;
+  }
+
+  private hasPanelsForDocument(uri: vscode.Uri): boolean {
+    const panels = this.panelsByDocumentUri.get(uri.toString());
+    return !!panels && panels.size > 0;
+  }
+
+  private readStoredSettings(document: vscode.TextDocument, rawContent: string): EditorSettings {
+    const legacySettings = extractSettings(rawContent);
+    const stored = this.context.workspaceState.get<Partial<EditorSettings>>(this.getSettingsKey(document));
+    return {
+      fullWidth: stored?.fullWidth ?? legacySettings.fullWidth,
+      tocVisible: stored?.tocVisible ?? legacySettings.tocVisible,
+      tableWrap: stored?.tableWrap ?? legacySettings.tableWrap,
+    };
+  }
+
+  private async reloadPanelsForDocument(uri: vscode.Uri, contentOverride?: string): Promise<boolean> {
+    const key = uri.toString();
+    const panels = this.panelsByDocumentUri.get(key);
+    if (!panels || panels.size === 0) {
+      logOpenWithDebug('provider.reloadPanels.skipped', { path: uri.fsPath, reason: 'no-panels' });
+      return false;
+    }
+
+    const document = await vscode.workspace.openTextDocument(uri);
+    const rawContent = contentOverride ?? document.getText();
+    const settings = this.readStoredSettings(document, rawContent);
+    const contentWithoutComment = repairSerializedMarkdownContent(rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
+    const gitLineRanges = await computeGitLineRanges(document.uri, rawContent);
+    const activeEditor = vscode.window.activeTextEditor;
+    const initialCursorLine = activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
+      ? activeEditor.selection.active.line
+      : 0;
+    const initialCursorCharacter = activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
+      ? activeEditor.selection.active.character
+      : 0;
+
+    for (const panel of panels) {
+      const imagePathMap = buildImagePathMap(contentWithoutComment, panel.webview, document.uri);
+      panel.webview.postMessage({
+        type: 'init',
+        content: contentWithoutComment,
+        filename: path.basename(document.uri.fsPath).replace(/\.(md|markdown|mdx)$/i, ''),
+        filePath: document.uri.fsPath,
+        fullWidth: settings.fullWidth,
+        tocVisible: settings.tocVisible,
+        tableWrap: settings.tableWrap,
+        imagePathMap,
+        gitLineRanges,
+        initialCursorLine,
+        initialCursorCharacter,
+        initialTotalLines: Math.max(1, document.lineCount),
+        terminalAppearance: readTerminalAppearance(),
+      });
+    }
+
+    logOpenWithDebug('provider.reloadPanels.completed', {
+      path: uri.fsPath,
+      panelCount: panels.size,
+      contentLength: contentWithoutComment.length,
+      mode: 'soft-init-postMessage',
+    });
+    return true;
+  }
 
   private async revealCursorInEasyView(uri: vscode.Uri, line: number, character: number): Promise<void> {
     const key = uri.toString();
@@ -140,7 +242,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // Track whether we are currently pushing an update to avoid loops
     let isUpdatingWebview = false;
     let isUpdatingDocument = false;
-    let lastKnownContent = document.getText();
+    const pendingInitialContent = consumePendingDocumentContentForUri(document.uri);
+    let lastKnownContent = pendingInitialContent ?? document.getText();
+    logOpenWithDebug('provider.resolve.start', {
+      path: document.uri.fsPath,
+      pendingInitialLength: pendingInitialContent?.length ?? -1,
+      documentTextLength: document.getText().length,
+      initialLastKnownLength: lastKnownContent.length,
+      isDirty: document.isDirty,
+    });
 
     // Sequential operation queue — prevents edit/save interleaving via await
     let operationQueue: Promise<void> = Promise.resolve();
@@ -148,11 +258,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     let latestGitRequestId = 0;
 
     const normalizeForWebview = (content: string) =>
-      content.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
+      repairSerializedMarkdownContent(content.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
 
     const postGitChanges = async (contentOverride?: string) => {
       const requestId = ++latestGitRequestId;
-      const content = contentOverride ?? document.getText();
+      const content = contentOverride ?? lastKnownContent;
       const normalizedContent = normalizeForWebview(content);
       let lineRanges: GitLineRange[] = [];
       try {
@@ -180,16 +290,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       return basename.replace(/\.(md|markdown|mdx)$/i, '');
     };
 
-    const settingsKey = `mdpre-zalman.editorSettings:${document.uri.toString()}`;
-    const readStoredSettings = (rawContent: string): EditorSettings => {
-      const legacySettings = extractSettings(rawContent);
-      const stored = this.context.workspaceState.get<Partial<EditorSettings>>(settingsKey);
-      return {
-        fullWidth: stored?.fullWidth ?? legacySettings.fullWidth,
-        tocVisible: stored?.tocVisible ?? legacySettings.tocVisible,
-        tableWrap: stored?.tableWrap ?? legacySettings.tableWrap,
-      };
-    };
+    const settingsKey = this.getSettingsKey(document);
+    const readStoredSettings = (rawContent: string): EditorSettings => this.readStoredSettings(document, rawContent);
 
     const updateStoredSettings = async (settings: EditorSettings) => {
       await this.context.workspaceState.update(settingsKey, settings);
@@ -221,10 +323,17 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const newContent = document.getText();
       if (newContent === lastKnownContent) return;
 
+      logOpenWithDebug('provider.onDidChangeTextDocument', {
+        path: document.uri.fsPath,
+        newLength: newContent.length,
+        previousLength: lastKnownContent.length,
+        reason: e.reason ?? 'unknown',
+        changeCount: e.contentChanges.length,
+      });
       lastKnownContent = newContent;
 
       // Remove settings comment and normalize to LF before sending to webview
-      const contentWithoutComment = newContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
+      const contentWithoutComment = normalizeForWebview(newContent);
 
       // Build image path mapping
       const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
@@ -250,12 +359,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Prepare initial data to embed directly in HTML (avoids postMessage race condition)
     const t1 = performance.now();
-    const rawContent = document.getText();
+    const rawContent = lastKnownContent;
     console.log(`[InLineMd perf] getText: ${(performance.now() - t1).toFixed(1)}ms`);
+    logOpenWithDebug('provider.initialDataPrepared', {
+      path: document.uri.fsPath,
+      rawLength: rawContent.length,
+    });
 
     const t2 = performance.now();
     const settings = readStoredSettings(rawContent);
-    const contentWithoutComment = rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
+    const contentWithoutComment = normalizeForWebview(rawContent);
     console.log(`[InLineMd perf] extractSettings+strip: ${(performance.now() - t2).toFixed(1)}ms`);
 
     const t3 = performance.now();
@@ -280,6 +393,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       type: 'init',
       content: contentWithoutComment,
       filename: getFilename(),
+      filePath: document.uri.fsPath,
       fullWidth: settings.fullWidth,
       tocVisible: settings.tocVisible,
       tableWrap: settings.tableWrap,
@@ -288,6 +402,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       initialCursorLine,
       initialCursorCharacter,
       initialTotalLines: Math.max(1, document.lineCount),
+      terminalAppearance: readTerminalAppearance(),
     };
     lastGitLineRangesJson = JSON.stringify({
       lineRanges: initialGitLineRanges,
@@ -297,6 +412,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // Set HTML with embedded initial data — no postMessage needed for first load
     const t4 = performance.now();
     webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview, initialData);
+    logOpenWithDebug('provider.webviewHtmlAssigned', {
+      path: document.uri.fsPath,
+      initContentLength: contentWithoutComment.length,
+    });
     console.log(`[InLineMd perf] getHtmlForWebview+assign: ${(performance.now() - t4).toFixed(1)}ms`);
     console.log(`[InLineMd perf] resolveCustomTextEditor TOTAL: ${(performance.now() - t0).toFixed(1)}ms`);
 
@@ -312,6 +431,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Cleanup
     webviewPanel.onDidDispose(() => {
+      disposeTerminalForPanel(webviewPanel);
       changeSubscription.dispose();
       messageSubscription.dispose();
       saveSubscription.dispose();
@@ -336,6 +456,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     ).with({ query: `v=${assetVersion}` });
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.css')
+    ).with({ query: `v=${assetVersion}` });
+    const xtermStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'xterm.css')
     ).with({ query: `v=${assetVersion}` });
     const nonce = getNonce();
 
@@ -367,6 +490,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         worker-src 'none';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="${styleUri}" rel="stylesheet">
+    <link href="${xtermStyleUri}" rel="stylesheet">
     <title>InLineMd</title>
     <script nonce="${nonce}">
       // CRITICAL: Prevent Service Worker registration BEFORE any other code runs

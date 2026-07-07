@@ -27,13 +27,25 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&nbsp;/g, '\u00A0');
 }
 
+function normalizeEscapedInlineMarkdown(text: string): string {
+  return text
+    .replace(/(?:\\)+\*/g, '*')
+    .replace(/(?:\\)+_/g, '_')
+    .replace(/(?:\\)+~/g, '~')
+    .replace(/\\\*\\\*([\s\S]+?)\\\*\\\*/g, '**$1**')
+    .replace(/\\_\\_([\s\S]+?)\\_\\_/g, '__$1__')
+    .replace(/\\~\\~([\s\S]+?)\\~\\~/g, '~~$1~~')
+    .replace(/(^|[^\*\\])\\\*([^\s*][\s\S]*?[^\s*])\\\*(?!\*)/g, '$1*$2*')
+    .replace(/(^|[^_\\])\\_([^\s_][\s\S]*?[^\s_])\\_(?!_)/g, '$1_$2_');
+}
+
 /**
  * Emit paragraph-wrapped inline tokens for HTML cell content.
  * Handles <br> tags as hard breaks. For cells with complex inner HTML
  * (tags other than <br>), uses the <!--htmlcell--> marker so that
  * restoreHtmlCells() can parse them with ProseMirror DOMParser.
  */
-function emitCellContent(cellHtml: string, out: any[], Token: any, map?: [number, number]): void {
+function emitCellContent(cellHtml: string, out: any[], Token: any, state: any, map?: [number, number]): void {
   // Check for complex HTML (tags other than <br>)
   const hasComplexHtml = /<(?!br\s*\/?\s*>|\/)([a-z])/i.test(cellHtml);
 
@@ -50,7 +62,8 @@ function emitCellContent(cellHtml: string, out: any[], Token: any, map?: [number
     inline.children = [textTok];
     inline.content = textTok.content;
   } else {
-    // Simple text, possibly with <br> tags
+    // Simple text, possibly with <br> tags. Still run markdown inline parsing so
+    // syntax like **bold** inside <td>...</td> renders correctly.
     inline.children = [];
     const parts = cellHtml.split(/<br\s*\/?>/i);
     const contentParts: string[] = [];
@@ -58,11 +71,17 @@ function emitCellContent(cellHtml: string, out: any[], Token: any, map?: [number
       if (p > 0) {
         inline.children.push(new Token('hardbreak', 'br', 0));
       }
-      const partText = decodeHtmlEntities(parts[p]);
+      const partText = normalizeEscapedInlineMarkdown(decodeHtmlEntities(parts[p]));
       if (partText) {
-        const textTok = new Token('text', '', 0);
-        textTok.content = partText;
-        inline.children.push(textTok);
+        const partChildren: any[] = [];
+        state.md.inline.parse(partText, state.md, state.env, partChildren);
+        if (partChildren.length) {
+          inline.children.push(...partChildren);
+        } else {
+          const textTok = new Token('text', '', 0);
+          textTok.content = partText;
+          inline.children.push(textTok);
+        }
         contentParts.push(partText);
       }
     }
@@ -236,7 +255,7 @@ export function applyTableRules(md: MarkdownIt): void {
                   if (cellOpenEndPos >= 0) {
                     const cellHtml = content.slice(cellOpenEndPos, tagStartPos).trim();
                     if (cellHtml) {
-                      emitCellContent(cellHtml, newTokens, state.Token, cur.map as [number, number] | undefined);
+                      emitCellContent(cellHtml, newTokens, state.Token, state, cur.map as [number, number] | undefined);
                     } else {
                       // Empty cell — still needs a paragraph for schema compliance (block+)
                       const emptyOpen = new state.Token('paragraph_open', 'p', 1);
@@ -257,8 +276,27 @@ export function applyTableRules(md: MarkdownIt): void {
                 } else {
                   const tok = new state.Token(tokenType + '_open', tagName, 1);
                   const alignMatch = tagStr.match(/align="(\w+)"/i);
+                  const styleMatch = tagStr.match(/style="([^"]+)"/i);
+                  const styleRules: string[] = [];
+                  if (styleMatch?.[1]) {
+                    const textAlignMatch = styleMatch[1].match(/text-align\s*:\s*([\w-]+)/i);
+                    const verticalAlignMatch = styleMatch[1].match(/vertical-align\s*:\s*([\w-]+)/i);
+                    if (textAlignMatch) styleRules.push(`text-align:${textAlignMatch[1]}`);
+                    if (verticalAlignMatch) styleRules.push(`vertical-align:${verticalAlignMatch[1]}`);
+                  }
                   if (alignMatch) {
-                    tok.attrSet('style', `text-align:${alignMatch[1]}`);
+                    styleRules.push(`text-align:${alignMatch[1]}`);
+                  }
+                  const valignMatch = tagStr.match(/valign="(\w+)"/i);
+                  if (valignMatch) {
+                    styleRules.push(`vertical-align:${valignMatch[1]}`);
+                  }
+                  if (styleRules.length) {
+                    tok.attrSet('style', Array.from(new Set(styleRules)).join(';'));
+                  }
+                  const colwidthMatch = tagStr.match(/data-colwidth="([\d,\s]+)"/i);
+                  if (colwidthMatch) {
+                    tok.attrSet('data-colwidth', colwidthMatch[1].replace(/\s+/g, ''));
                   }
                   newTokens.push(tok);
                   // Mark position right after opening tag to capture cell content

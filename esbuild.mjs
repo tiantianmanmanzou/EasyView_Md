@@ -35,7 +35,7 @@ const hostConfig = {
   platform: 'node',
   format: 'cjs',
   target: 'node18',
-  external: ['vscode'],
+  external: ['vscode', 'node-pty'],
 };
 
 const webviewConfig = {

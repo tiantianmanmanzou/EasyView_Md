@@ -7,7 +7,7 @@
 
 import * as tableCommands from './TableCommands';
 import { getEditorView } from '../../../index';
-import { isHeaderEnabled } from './TableQueries';
+import { isHeaderEnabled, isRowSelection } from './TableQueries';
 import { selectedRect } from 'prosemirror-tables';
 
 export class TableGripToolbar {
@@ -235,6 +235,18 @@ export class TableGripToolbar {
     // Separator
     toolbar.appendChild(this.createSeparator());
 
+    // Width buttons
+    toolbar.appendChild(this.createButton('Narrow column', this.narrowColumnIcon(), () => {
+      this.adjustColumnWidth(this.currentIndex, -32);
+    }));
+
+    toolbar.appendChild(this.createButton('Widen column', this.widenColumnIcon(), () => {
+      this.adjustColumnWidth(this.currentIndex, 32);
+    }));
+
+    // Separator
+    toolbar.appendChild(this.createSeparator());
+
     // Alignment buttons
     toolbar.appendChild(this.createButton('Align left', this.alignLeftIcon(), () => {
       this.setColumnAlignment(this.currentIndex, 'left');
@@ -246,6 +258,22 @@ export class TableGripToolbar {
 
     toolbar.appendChild(this.createButton('Align right', this.alignRightIcon(), () => {
       this.setColumnAlignment(this.currentIndex, 'right');
+    }));
+
+    // Separator
+    toolbar.appendChild(this.createSeparator());
+
+    // Vertical alignment buttons
+    toolbar.appendChild(this.createButton('Align top', this.alignTopIcon(), () => {
+      this.setColumnVerticalAlignment(this.currentIndex, 'top');
+    }));
+
+    toolbar.appendChild(this.createButton('Align middle', this.alignMiddleIcon(), () => {
+      this.setColumnVerticalAlignment(this.currentIndex, 'middle');
+    }));
+
+    toolbar.appendChild(this.createButton('Align bottom', this.alignBottomIcon(), () => {
+      this.setColumnVerticalAlignment(this.currentIndex, 'bottom');
     }));
 
     // Separator
@@ -390,6 +418,21 @@ export class TableGripToolbar {
     tableCommands.setColumnAttr({ index: colIndex, alignment })(view.state, view.dispatch);
   }
 
+  private setColumnVerticalAlignment(colIndex: number, verticalAlignment: 'top' | 'middle' | 'bottom') {
+    const view = getEditorView();
+    if (!view) return;
+    tableCommands.setColumnAttr({ index: colIndex, verticalAlignment })(view.state, view.dispatch);
+  }
+
+  private adjustColumnWidth(colIndex: number, delta: number) {
+    const view = getEditorView();
+    if (!view) return;
+    const fallbackWidth = this.currentGrip
+      ? Math.max(48, Math.round(this.currentGrip.getBoundingClientRect().width))
+      : undefined;
+    tableCommands.adjustColumnWidth({ index: colIndex, delta, fallbackWidth })(view.state, view.dispatch);
+  }
+
   private sortColumn(colIndex: number, direction: 'asc' | 'desc') {
     const view = getEditorView();
     if (!view) return;
@@ -476,6 +519,12 @@ export class TableGripToolbar {
     const view = getEditorView();
     if (!view) return;
     this.hide();
+
+    if (isRowSelection(view.state.selection)) {
+      tableCommands.deleteRowSelection()(view.state, view.dispatch);
+      return;
+    }
+
     tableCommands.selectRow(rowIndex)(view.state, view.dispatch);
     setTimeout(() => {
       const updatedView = getEditorView();
@@ -545,6 +594,18 @@ export class TableGripToolbar {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5,6 L19,6 C19.5522847,6 20,6.44771525 20,7 C20,7.55228475 19.5522847,8 19,8 L5,8 C4.44771525,8 4,7.55228475 4,7 C4,6.44771525 4.44771525,6 5,6 Z M10,11 L19,11 C19.5522847,11 20,11.4477153 20,12 C20,12.5522847 19.5522847,13 19,13 L10,13 C9.44771525,13 9,12.5522847 9,12 C9,11.4477153 9.44771525,11 10,11 Z M5,16 L19,16 C19.5522847,16 20,16.4477153 20,17 C20,17.5522847 19.5522847,18 19,18 L5,18 C4.44771525,18 4,17.5522847 4,17 C4,16.4477153 4.44771525,16 5,16 Z"></path></svg>`;
   }
 
+  private alignTopIcon() {
+    return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 5C4.44772 5 4 5.44772 4 6C4 6.55228 4.44772 7 5 7H19C19.5523 7 20 6.55228 20 6C20 5.44772 19.5523 5 19 5H5ZM7 9C6.44772 9 6 9.44772 6 10V17C6 17.5523 6.44772 18 7 18C7.55228 18 8 17.5523 8 17V10C8 9.44772 7.55228 9 7 9ZM12 9C11.4477 9 11 9.44772 11 10V14C11 14.5523 11.4477 15 12 15C12.5523 15 13 14.5523 13 14V10C13 9.44772 12.5523 9 12 9ZM17 9C16.4477 9 16 9.44772 16 10V12C16 12.5523 16.4477 13 17 13C17.5523 13 18 12.5523 18 12V10C18 9.44772 17.5523 9 17 9Z"/></svg>`;
+  }
+
+  private alignMiddleIcon() {
+    return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 11C4.44772 11 4 11.4477 4 12C4 12.5523 4.44772 13 5 13H19C19.5523 13 20 12.5523 20 12C20 11.4477 19.5523 11 19 11H5ZM7 7C6.44772 7 6 7.44772 6 8V16C6 16.5523 6.44772 17 7 17C7.55228 17 8 16.5523 8 16V8C8 7.44772 7.55228 7 7 7ZM12 9C11.4477 9 11 9.44772 11 10V14C11 14.5523 11.4477 15 12 15C12.5523 15 13 14.5523 13 14V10C13 9.44772 12.5523 9 12 9ZM17 7C16.4477 7 16 7.44772 16 8V16C16 16.5523 16.4477 17 17 17C17.5523 17 18 16.5523 18 16V8C18 7.44772 17.5523 7 17 7Z"/></svg>`;
+  }
+
+  private alignBottomIcon() {
+    return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 17C4.44772 17 4 17.4477 4 18C4 18.5523 4.44772 19 5 19H19C19.5523 19 20 18.5523 20 18C20 17.4477 19.5523 17 19 17H5ZM7 7C6.44772 7 6 7.44772 6 8V15C6 15.5523 6.44772 16 7 16C7.55228 16 8 15.5523 8 15V8C8 7.44772 7.55228 7 7 7ZM12 10C11.4477 10 11 10.4477 11 11V15C11 15.5523 11.4477 16 12 16C12.5523 16 13 15.5523 13 15V11C13 10.4477 12.5523 10 12 10ZM17 12C16.4477 12 16 12.4477 16 13V15C16 15.5523 16.4477 16 17 16C17.5523 16 18 15.5523 18 15V13C18 12.4477 17.5523 12 17 12Z"/></svg>`;
+  }
+
   private sortAscIcon() {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M6 4C5.52332 4 5.11291 4.33646 5.01942 4.80388L4.21942 8.80388L4.01942 9.80388C3.91111 10.3454 4.26233 10.8723 4.80389 10.9806C5.34545 11.0889 5.87227 10.7377 5.98058 10.1961L6.01981 10H7.9802L8.01942 10.1961C8.12773 10.7377 8.65456 11.0889 9.19612 10.9806C9.73768 10.8723 10.0889 10.3454 9.98058 9.80388L9.78058 8.80388L8.98058 4.80388C8.8871 4.33646 8.47668 4 8 4H6ZM7.5802 8H6.41981L6.81981 6H7.1802L7.5802 8ZM13 5C12.4477 5 12 5.44772 12 6C12 6.55228 12.4477 7 13 7H19C19.5523 7 20 6.55228 20 6C20 5.44772 19.5523 5 19 5H13ZM14 9C13.4477 9 13 9.44772 13 10C13 10.5523 13.4477 11 14 11H19C19.5523 11 20 10.5523 20 10C20 9.44772 19.5523 9 19 9H14ZM14 14C14 13.4477 14.4477 13 15 13H19C19.5523 13 20 13.4477 20 14C20 14.5523 19.5523 15 19 15H15C14.4477 15 14 14.5523 14 14ZM16 17C15.4477 17 15 17.4477 15 18C15 18.5523 15.4477 19 16 19H19C19.5523 19 20 18.5523 20 18C20 17.4477 19.5523 17 19 17H16ZM4 14C4 13.4477 4.44772 13 5 13H9C9.38441 13 9.73478 13.2203 9.9013 13.5668C10.0678 13.9133 10.021 14.3245 9.78087 14.6247L7.08063 18H9C9.55229 18 10 18.4477 10 19C10 19.5523 9.55229 20 9 20H5C4.6156 20 4.26522 19.7797 4.0987 19.4332C3.93218 19.0867 3.979 18.6755 4.21913 18.3753L6.91938 15H5C4.44772 15 4 14.5523 4 14Z"></path></svg>`;
   }
@@ -567,6 +628,14 @@ export class TableGripToolbar {
 
   private moveRightIcon() {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M11.2929 17.7071C10.9024 17.3166 10.9024 16.6834 11.2929 16.2929L14.5858 13H7C6.44772 13 6 12.5523 6 12C6 11.4477 6.44772 11 7 11L14.5858 11L11.2929 7.70711C10.9024 7.31658 10.9024 6.68342 11.2929 6.29289C11.6834 5.90237 12.3166 5.90237 12.7071 6.29289L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071L12.7071 17.7071C12.3166 18.0976 11.6834 18.0976 11.2929 17.7071Z"></path></svg>`;
+  }
+
+  private narrowColumnIcon() {
+    return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 6a1 1 0 0 1 1-1h2v14H6a1 1 0 0 1-1-1V6Zm11 6a1 1 0 0 1-1 1h-4v2a1 1 0 1 1-2 0V9a1 1 0 0 1 2 0v2h4a1 1 0 0 1 1 1Zm2-7h-2v14h2a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z"/></svg>`;
+  }
+
+  private widenColumnIcon() {
+    return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 6a1 1 0 0 1 1-1h2v14H6a1 1 0 0 1-1-1V6Zm14 0v12a1 1 0 0 1-1 1h-2V5h2a1 1 0 0 1 1 1Zm-8 3a1 1 0 1 1 2 0v2h2a1 1 0 1 1 0 2h-2v2a1 1 0 1 1-2 0v-2H9a1 1 0 1 1 0-2h2V9Z"/></svg>`;
   }
 
   private exportCSVIcon() {

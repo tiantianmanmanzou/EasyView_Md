@@ -10,6 +10,81 @@ import { buttons } from './ToolbarButtons';
 
 // ─── FloatingToolbar ─────────────────────────────────────────────────────────
 
+function ensureFloatingToolbarColorStyles(): void {
+  const styleId = 'easyview-floating-toolbar-color-styles';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .floating-toolbar .toolbar-button {
+      color: var(--toolbar-group-color, var(--vscode-editor-foreground, #e5e7eb));
+      transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+
+    .floating-toolbar .toolbar-button svg,
+    .floating-toolbar .toolbar-button span {
+      color: inherit;
+    }
+
+    .floating-toolbar .toolbar-button:hover {
+      background: color-mix(in srgb, var(--toolbar-group-color, #94a3b8) 14%, transparent);
+    }
+
+    .floating-toolbar .toolbar-button.active {
+      color: var(--toolbar-group-active, var(--toolbar-group-color, #f8fafc));
+      background: color-mix(in srgb, var(--toolbar-group-color, #94a3b8) 20%, rgba(255, 255, 255, 0.06));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--toolbar-group-color, #94a3b8) 28%, transparent);
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="inline"] {
+      --toolbar-group-color: #f6c453;
+      --toolbar-group-active: #ffd978;
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="block"] {
+      --toolbar-group-color: #7dd3fc;
+      --toolbar-group-active: #b6ecff;
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="heading"] {
+      --toolbar-group-color: #c4b5fd;
+      --toolbar-group-active: #ddd6fe;
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="list"] {
+      --toolbar-group-color: #86efac;
+      --toolbar-group-active: #bbf7d0;
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="insert"] {
+      --toolbar-group-color: #fda4af;
+      --toolbar-group-active: #fecdd3;
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="path"] {
+      --toolbar-group-color: #67e8f9;
+      --toolbar-group-active: #a5f3fc;
+    }
+
+    .floating-toolbar .toolbar-button[data-color-group="utility"] {
+      --toolbar-group-color: #cbd5e1;
+      --toolbar-group-active: #f8fafc;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function getButtonColorGroup(buttonId: string): string {
+  if (['bold', 'italic', 'underline', 'strikethrough', 'highlight'].includes(buttonId)) return 'inline';
+  if (['code', 'blockquote', 'html-tags'].includes(buttonId)) return 'block';
+  if (['heading1', 'heading2', 'heading3'].includes(buttonId)) return 'heading';
+  if (['checkbox-list', 'bullet-list', 'ordered-list'].includes(buttonId)) return 'list';
+  if (['horizontal-rule', 'interpret-markdown'].includes(buttonId)) return 'insert';
+  if (['link', 'copy-outline-path', 'copy-full-path'].includes(buttonId)) return 'path';
+  return 'utility';
+}
+
 export class FloatingToolbar {
   private el: HTMLDivElement;
   private view: EditorView | null = null;
@@ -18,6 +93,7 @@ export class FloatingToolbar {
   private pendingShow = false;
 
   constructor() {
+    ensureFloatingToolbarColorStyles();
     this.el = document.createElement('div');
     this.el.className = 'floating-toolbar';
     this.el.setAttribute('role', 'toolbar');
@@ -59,6 +135,7 @@ export class FloatingToolbar {
       button.innerHTML = btn.icon;
       button.title = btn.title;
       button.dataset.command = btn.id;
+      button.dataset.colorGroup = getButtonColorGroup(btn.id);
       button.addEventListener('mousedown', (e) => {
         e.preventDefault(); // Prevent focus loss
         if (this.view) {

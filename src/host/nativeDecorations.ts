@@ -73,6 +73,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
   });
 
   private readonly boldDecoration = vscode.window.createTextEditorDecorationType({
+    color: new vscode.ThemeColor('editor.foreground'),
     fontWeight: '700',
   });
 
@@ -81,6 +82,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
   });
 
   private readonly boldItalicDecoration = vscode.window.createTextEditorDecorationType({
+    color: new vscode.ThemeColor('editor.foreground'),
     fontWeight: '700',
     fontStyle: 'italic',
   });
@@ -113,7 +115,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
 
   private readonly listMarkerDecoration = vscode.window.createTextEditorDecorationType({
     color: 'transparent',
-    textDecoration: 'none;',
+    textDecoration: 'none; display: none;',
   });
 
   private readonly tableBlockDecoration = vscode.window.createTextEditorDecorationType({
@@ -305,7 +307,7 @@ export class NativeMarkdownDecorator implements vscode.Disposable {
           renderOptions: {
             before: {
               contentText: `${markerText} `,
-              color: new vscode.ThemeColor('editor.foreground'),
+              color: new vscode.ThemeColor('textLink.foreground'),
             },
           },
         });

@@ -33,6 +33,8 @@ interface BlockChange {
   pos: number;
   size: number;
   kind: ChangeKind;
+  showOverview?: boolean;
+  overviewRatio?: number;
 }
 
 interface GitLineRange {
@@ -160,31 +162,65 @@ function computeBlockChanges(
 function buildMarkdownBlockRanges(content: string): Array<{ startLine: number; endLine: number }> {
   const lines = content.split('\n');
   const ranges: Array<{ startLine: number; endLine: number }> = [];
-  let startLine: number | null = null;
-  let inFence = false;
+  let idx = 0;
 
-  for (let idx = 0; idx < lines.length; idx++) {
-    const lineNumber = idx + 1;
-    const line = lines[idx];
-    const trimmed = line.trim();
-    const isFence = /^(```|~~~)/.test(trimmed);
+  const isBlank = (line: string) => line.trim() === '';
+  const isFence = (line: string) => /^\s*(```|~~~)/.test(line);
+  const isHeading = (line: string) => /^\s{0,3}#{1,6}\s+/.test(line);
+  const isListItem = (line: string) => /^\s{0,3}(?:[-*+]|\d+[.)])\s+/.test(line);
+  const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line);
+  const isTableSeparator = (line: string) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
 
-    if (startLine === null && trimmed !== '') {
-      startLine = lineNumber;
+  while (idx < lines.length) {
+    if (isBlank(lines[idx])) {
+      idx++;
+      continue;
     }
 
-    if (isFence) {
-      inFence = !inFence;
+    const startLine = idx + 1;
+
+    if (isFence(lines[idx])) {
+      idx++;
+      while (idx < lines.length && !isFence(lines[idx])) idx++;
+      if (idx < lines.length) idx++;
+      ranges.push({ startLine, endLine: Math.max(startLine, idx) });
+      continue;
     }
 
-    if (startLine !== null && !inFence && trimmed === '') {
-      ranges.push({ startLine, endLine: Math.max(startLine, lineNumber - 1) });
-      startLine = null;
+    if (isHeading(lines[idx])) {
+      ranges.push({ startLine, endLine: startLine });
+      idx++;
+      continue;
     }
-  }
 
-  if (startLine !== null) {
-    ranges.push({ startLine, endLine: lines.length });
+    if (idx + 1 < lines.length && isTableRow(lines[idx]) && isTableSeparator(lines[idx + 1])) {
+      idx += 2;
+      while (idx < lines.length && isTableRow(lines[idx])) idx++;
+      ranges.push({ startLine, endLine: Math.max(startLine, idx) });
+      continue;
+    }
+
+    if (isListItem(lines[idx])) {
+      idx++;
+      while (idx < lines.length && (isBlank(lines[idx]) || /^\s{2,}\S/.test(lines[idx]) || isListItem(lines[idx]))) {
+        idx++;
+      }
+      ranges.push({ startLine, endLine: Math.max(startLine, idx) });
+      continue;
+    }
+
+    idx++;
+    while (
+      idx < lines.length &&
+      !isBlank(lines[idx]) &&
+      !isFence(lines[idx]) &&
+      !isHeading(lines[idx]) &&
+      !(idx + 1 < lines.length && isTableRow(lines[idx]) && isTableSeparator(lines[idx + 1])) &&
+      !isListItem(lines[idx])
+    ) {
+      idx++;
+    }
+    ranges.push({ startLine, endLine: Math.max(startLine, idx) });
   }
 
   return ranges.length ? ranges : [{ startLine: 1, endLine: 1 }];
@@ -194,6 +230,22 @@ function intersects(a: { startLine: number; endLine: number }, b: { startLine: n
   return a.startLine <= b.endLine && b.startLine <= a.endLine;
 }
 
+function isPreciseOverviewRange(range: GitLineRange, totalLines: number): boolean {
+  const safeTotalLines = Math.max(1, totalLines);
+  const changedLines = Math.max(1, range.endLine - range.startLine + 1);
+
+  // Untracked files and fallback Git diffs can report the whole document as changed.
+  // Rendering that on the right overview rail collapses into a permanent bright top marker.
+  if (range.startLine <= 1 && range.endLine >= safeTotalLines) return false;
+  if (changedLines / safeTotalLines >= 0.8) return false;
+
+  return true;
+}
+
+function getOverviewRatio(range: GitLineRange, totalLines: number): number {
+  return (Math.max(1, range.startLine) - 1) / Math.max(1, totalLines - 1);
+}
+
 function computeGitBlockChanges(
   lineRanges: GitLineRange[],
   content: string,
@@ -201,6 +253,7 @@ function computeGitBlockChanges(
 ): BlockChange[] {
   if (!lineRanges.length) return [];
 
+  const totalLines = Math.max(1, content.split('\n').length);
   const blockRanges = buildMarkdownBlockRanges(content);
   const docBlocks: Array<{ pos: number; size: number; index: number }> = [];
   doc.forEach((node, offset, index) => {
@@ -212,15 +265,17 @@ function computeGitBlockChanges(
     const blockRange = blockRanges[Math.min(block.index, blockRanges.length - 1)];
     const matched = lineRanges.filter((range) => intersects(blockRange, range));
     if (!matched.length) continue;
+    const overviewRange = matched.find((range) => isPreciseOverviewRange(range, totalLines));
     changes.push({
       pos: block.pos,
       size: block.size,
-      kind: matched.some((range) => range.kind === 'added') ? 'added' : 'modified',
+      kind: matched.every((range) => range.kind === 'added') ? 'added' : 'modified',
+      showOverview: Boolean(overviewRange),
+      overviewRatio: overviewRange ? getOverviewRatio(overviewRange, totalLines) : undefined,
     });
   }
 
   if (!changes.length) {
-    const totalLines = Math.max(1, content.split('\n').length);
     const childCount = Math.max(1, doc.childCount);
     const seen = new Set<number>();
 
@@ -236,7 +291,13 @@ function computeGitBlockChanges(
       for (let i = 0; i < doc.childCount; i++) {
         const node = doc.child(i);
         if (i === index) {
-          changes.push({ pos: offset, size: node.nodeSize, kind: range.kind });
+          changes.push({
+            pos: offset,
+            size: node.nodeSize,
+            kind: range.kind,
+            showOverview: isPreciseOverviewRange(range, totalLines),
+            overviewRatio: getOverviewRatio(range, totalLines),
+          });
           break;
         }
         offset += node.nodeSize;
@@ -255,6 +316,7 @@ let fadeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let toastTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let debounceTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let scrollMarkerOverlay: HTMLElement | null = null;
+let leftMarkerOverlay: HTMLElement | null = null;
 let scrollMarkerChanges: BlockChange[] = [];
 let scrollMarkerView: EditorView | null = null;
 let scrollMarkerBound = false;
@@ -264,6 +326,10 @@ function clearScrollMarkers() {
     scrollMarkerOverlay.remove();
     scrollMarkerOverlay = null;
   }
+  if (leftMarkerOverlay) {
+    leftMarkerOverlay.remove();
+    leftMarkerOverlay = null;
+  }
   scrollMarkerChanges = [];
   scrollMarkerView = null;
 }
@@ -271,36 +337,65 @@ function clearScrollMarkers() {
 function layoutScrollMarkers() {
   try {
     const scrollArea = document.getElementById('editor-scroll-area');
-    if (!scrollArea || !scrollMarkerOverlay || !scrollMarkerView) return;
+    if (!scrollArea || !scrollMarkerOverlay || !leftMarkerOverlay || !scrollMarkerView) return;
 
     const rect = scrollArea.getBoundingClientRect();
+    const leftRailX = Math.round(rect.left);
     scrollMarkerOverlay.style.left = `${rect.right - 10}px`;
     scrollMarkerOverlay.style.top = `${rect.top}px`;
     scrollMarkerOverlay.style.height = `${rect.height}px`;
     scrollMarkerOverlay.innerHTML = '';
+    leftMarkerOverlay.style.left = `${leftRailX}px`;
+    leftMarkerOverlay.style.top = `${rect.top}px`;
+    leftMarkerOverlay.style.height = `${rect.height}px`;
+    leftMarkerOverlay.innerHTML = '';
 
-    const scrollHeight = Math.max(1, scrollArea.scrollHeight);
     const viewportHeight = Math.max(1, rect.height);
+    const scrollHeight = Math.max(1, scrollArea.scrollHeight);
+    const renderedOverviewTops = new Set<number>();
 
     for (const change of scrollMarkerChanges) {
       const dom = scrollMarkerView.nodeDOM(change.pos);
       if (!(dom instanceof HTMLElement)) continue;
 
       const domRect = dom.getBoundingClientRect();
-      const documentTop = domRect.top - rect.top + scrollArea.scrollTop;
-      const markerTop = Math.max(
-        1,
-        Math.min(viewportHeight - 5, Math.round((documentTop / scrollHeight) * viewportHeight))
-      );
+      if (change.showOverview !== false) {
+        const documentTop = domRect.top - rect.top + scrollArea.scrollTop;
+        const sourceRatio =
+          typeof change.overviewRatio === 'number' && Number.isFinite(change.overviewRatio)
+            ? change.overviewRatio
+            : documentTop / scrollHeight;
+        const markerTop = Math.max(
+          1,
+          Math.min(viewportHeight - 5, Math.round(sourceRatio * viewportHeight))
+        );
 
-      const marker = document.createElement('div');
-      marker.className = `ai-scroll-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
-      marker.style.top = `${markerTop}px`;
-      scrollMarkerOverlay.appendChild(marker);
+        if (!renderedOverviewTops.has(markerTop)) {
+          renderedOverviewTops.add(markerTop);
+          const marker = document.createElement('div');
+          marker.className = `ai-scroll-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
+          marker.style.top = `${markerTop}px`;
+          scrollMarkerOverlay.appendChild(marker);
+        }
+      }
+
+      const visibleTop = Math.max(0, domRect.top - rect.top);
+      const visibleBottom = Math.min(viewportHeight, domRect.bottom - rect.top);
+      if (visibleBottom > 0 && visibleTop < viewportHeight && visibleBottom > visibleTop) {
+        const leftMarker = document.createElement('div');
+        leftMarker.className = `ai-left-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
+        leftMarker.style.top = `${visibleTop}px`;
+        leftMarker.style.height = `${Math.max(6, visibleBottom - visibleTop)}px`;
+        leftMarkerOverlay.appendChild(leftMarker);
+      }
     }
   } catch {
     // Marker rendering should never interrupt editor updates.
   }
+}
+
+export function refreshAiChangeMarkers(): void {
+  layoutScrollMarkers();
 }
 
 function renderScrollMarkers(changes: BlockChange[], view: EditorView) {
@@ -317,11 +412,17 @@ function renderScrollMarkers(changes: BlockChange[], view: EditorView) {
     scrollMarkerOverlay.className = 'ai-scroll-markers';
     document.body.appendChild(scrollMarkerOverlay);
   }
+  if (!leftMarkerOverlay) {
+    leftMarkerOverlay = document.createElement('div');
+    leftMarkerOverlay.className = 'ai-left-markers';
+    document.body.appendChild(leftMarkerOverlay);
+  }
 
   layoutScrollMarkers();
 
   if (!scrollMarkerBound) {
     window.addEventListener('resize', layoutScrollMarkers);
+    document.getElementById('editor-scroll-area')?.addEventListener('scroll', layoutScrollMarkers, { passive: true });
     scrollMarkerBound = true;
   }
 }

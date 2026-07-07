@@ -47,7 +47,7 @@ import { MarkBoundaryExtension } from './extensions/behavior/mark-boundary/MarkB
 import { TrailingNodeExtension } from './extensions/behavior/trailing-node/TrailingNodeExtension';
 import { PlaceholderExtension } from './extensions/behavior/placeholder/PlaceholderExtension';
 import { ClipboardExtension } from './extensions/behavior/clipboard/ClipboardExtension';
-import { AiChangesExtension, GIT_CHANGE_META } from './extensions/integrations/ai-changes/AiChangesExtension';
+import { AiChangesExtension, GIT_CHANGE_META, refreshAiChangeMarkers } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
 import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
 
@@ -63,6 +63,7 @@ import { DualModeHistory } from './editor/DualModeHistory';
 import { createFileHeader, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
+import { createTerminalModal, type TerminalAppearance } from './ui/TerminalModal';
 
 // ─── VS Code API ────────────────────────────────────────────────────────────
 
@@ -83,12 +84,15 @@ export function getEditorView(): EditorView | null {
 // ─── State ──────────────────────────────────────────────────────────────────
 
 let currentContent = '';
+let currentFilePath = '';
 let autoFollowExternalEdits = true;
 let isFullWidth = true;
 let isTocVisible = true;
 let isTableWrap = false; // default: disabled
 let isSourceMode = false;
+let canPostEditsToHost = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
+let terminalAppearance: TerminalAppearance = {};
 const dualHistory = new DualModeHistory();
 let _skipDualHistoryRecord = false;
 let _hasEditedInCurrentMode = false;
@@ -102,7 +106,10 @@ let toolbarShortcuts: ToolbarShortcutConfig = {
   toggleTheme: 'Alt+R',
   toggleStickyNote: 'Alt+N',
   openSourceMode: 'Alt+Q',
+  copyOutlinePath: 'Alt+Shift+O',
+  copyFullPath: 'Alt+Shift+P',
   stageFile: 'Alt+S',
+  commitFile: 'Alt+C',
   scrollTop: 'Alt+ArrowUp',
   scrollBottom: 'Alt+ArrowDown',
 };
@@ -285,32 +292,36 @@ function ensureMinimalGitChangeStyles(): void {
     .ProseMirror .block-ai-modified::before,
     .ProseMirror .block-ai-added::before,
     .ProseMirror .block-ai-fadeout::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      left: calc(-1 * var(--easyview-change-rail-offset, 12px));
-      width: 2px;
-      border-radius: 999px;
-      pointer-events: none;
-      z-index: 1;
-    }
-
-    .ProseMirror .block-ai-modified::before {
-      background: var(--vscode-editorWarning-foreground, #f59e0b);
-    }
-
-    .ProseMirror .block-ai-added::before {
-      background: var(--vscode-gitDecoration-addedResourceForeground, #10b981);
-    }
-
-    .ProseMirror .block-ai-fadeout::before {
-      background: var(--vscode-gitDecoration-modifiedResourceForeground, #3b82f6);
-      opacity: 0.45;
+      content: none !important;
+      display: none !important;
     }
 
     .ProseMirror .block-ai-active::before {
       content: none !important;
+    }
+
+    .ai-left-markers {
+      position: fixed;
+      width: 2px;
+      z-index: 60;
+      pointer-events: none;
+    }
+
+    .ai-left-marker {
+      position: absolute;
+      left: 0;
+      width: 2px;
+      min-height: 6px;
+      border-radius: 999px;
+      background: var(--vscode-editorWarning-foreground, #f59e0b);
+    }
+
+    .ai-left-marker.added {
+      background: var(--vscode-gitDecoration-addedResourceForeground, #10b981);
+    }
+
+    .ai-left-marker.modified {
+      background: var(--vscode-editorWarning-foreground, #f59e0b);
     }
   `;
   document.head.appendChild(style);
@@ -331,6 +342,17 @@ function updateGitChangeRailOffset(): void {
   const paneInset = 6;
   const offset = Math.max(12, Math.round(referenceRect.left - scrollRect.left - paneInset));
   proseMirror.style.setProperty('--easyview-change-rail-offset', `${offset}px`);
+}
+
+function refreshChangeRailsAfterLayout(): void {
+  const refresh = () => {
+    updateGitChangeRailOffset();
+    refreshAiChangeMarkers();
+  };
+
+  refresh();
+  requestAnimationFrame(refresh);
+  setTimeout(refresh, 60);
 }
 
 function findFirstChangedLine(previousContent: string, nextContent: string): number | null {
@@ -470,6 +492,20 @@ function updateSourceSettingsComment(): void {
 }
 
 function postEdit(content: string): void {
+  if (!canPostEditsToHost) {
+    console.debug('[InLineMd] Suppressed pre-init edit sync', { length: content.length });
+    vscode.postMessage({
+      type: 'openWithDebugLog',
+      stage: 'suppressedPreInitEdit',
+      meta: { editLength: content.length, currentContentLength: currentContent.length },
+    });
+    return;
+  }
+  vscode.postMessage({
+    type: 'openWithDebugLog',
+    stage: 'postEdit',
+    meta: { editLength: content.length, currentContentLength: currentContent.length },
+  });
   vscode.postMessage({
     type: 'edit',
     content,
@@ -477,6 +513,114 @@ function postEdit(content: string): void {
     tocVisible: isTocVisible,
     tableWrap: isTableWrap,
   });
+}
+
+type HeadingBreadcrumbEntry = { level: number; text: string; pos: number };
+
+function normalizeHeadingText(text: string): string {
+  const normalized = text
+    .replace(/\s+#+\s*$/g, '')
+    .replace(/[*_~`]/g, '')
+    .trim();
+  return normalized || '(empty)';
+}
+
+function computeHeadingBreadcrumbFromMarkdown(markdown: string, targetLine: number): string {
+  const lines = markdown.split('\n');
+  const stack: Array<{ level: number; text: string }> = [];
+  let inFence = false;
+
+  for (let index = 0; index < lines.length; index++) {
+    const lineNo = index + 1;
+    if (lineNo > targetLine) break;
+
+    const line = lines[index];
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    const match = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+    if (!match) continue;
+
+    const level = match[1].length;
+    const text = normalizeHeadingText(match[2] || '');
+    while (stack.length > 0 && stack[stack.length - 1].level >= level) {
+      stack.pop();
+    }
+    stack.push({ level, text });
+  }
+
+  return stack.map((entry) => entry.text).join('》');
+}
+
+function computeHeadingBreadcrumbForPos(pos: number): string {
+  const doc = globalEditorView?.state.doc;
+  if (!doc) return '';
+  const stack: HeadingBreadcrumbEntry[] = [];
+
+  doc.forEach((node, offset) => {
+    if (offset > pos) return;
+    if (node.type.name !== 'heading') return;
+    const rawLevel = Number(node.attrs.level);
+    if (!Number.isFinite(rawLevel) || rawLevel < 1 || rawLevel > 6) return;
+    while (stack.length > 0 && stack[stack.length - 1].level >= rawLevel) {
+      stack.pop();
+    }
+    stack.push({
+      level: rawLevel,
+      text: normalizeHeadingText(node.textContent || ''),
+      pos: offset,
+    });
+  });
+
+  return stack.map((entry) => entry.text).join('》');
+}
+
+function getCurrentSelectionAnchorPos(): number {
+  return globalEditorView?.state.selection.from ?? 0;
+}
+
+function getCurrentOutlinePath(): string {
+  if (isSourceMode && sourceEditor) {
+    const head = sourceEditor.view.state.selection.main.head;
+    const line = sourceEditor.view.state.doc.lineAt(head).number;
+    return computeHeadingBreadcrumbFromMarkdown(sourceEditor.getContent(), line);
+  }
+  return computeHeadingBreadcrumbForPos(getCurrentSelectionAnchorPos());
+}
+
+async function copyTextToClipboard(text: string, successMessage: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast(successMessage);
+      return;
+    }
+  } catch {
+    // Fall back to host clipboard.
+  }
+  vscode.postMessage({ type: 'copyTextToClipboard', text, successMessage });
+}
+
+async function copyOutlinePathForSelection(): Promise<void> {
+  const outline = getCurrentOutlinePath();
+  if (!outline) {
+    showToast('No outline path found');
+    return;
+  }
+  const fileName = currentFilePath.split(/[\\/]/).pop()?.trim() || 'Unknown.md';
+  await copyTextToClipboard(`文件：${fileName}\n内容位置：${outline}`, 'Copied outline path');
+}
+
+async function copyFullPathForSelection(): Promise<void> {
+  const outline = getCurrentOutlinePath();
+  if (!outline) {
+    showToast('No outline path found');
+    return;
+  }
+  await copyTextToClipboard(`文件：${currentFilePath}\n内容位置：${outline}`, 'Copied file and outline path');
 }
 
 /** Detect if VS Code is using a dark theme */
@@ -646,8 +790,15 @@ function initEditor() {
     editorBody.parentElement?.insertBefore(fileHeader.el, editorBody);
   }
   const toolbar = new FloatingToolbar();
+  (window as any).__easyviewCopyOutlinePath = () => { void copyOutlinePathForSelection(); };
+  (window as any).__easyviewCopyFullPath = () => { void copyFullPathForSelection(); };
   console.log(`[InLineMd perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
   let stickyNote: StickyNoteFacade = createNoopStickyNote();
+  const terminalModal = createTerminalModal({
+    postMessage: (msg) => vscode.postMessage(msg),
+    appearance: terminalAppearance,
+    onVisibilityChange: (visible) => fileHeader.syncTerminalState(visible),
+  });
 
   const runNativeWysiwygTab = (pmView: EditorView, backwards = false): boolean => {
     if (goToNextCell(backwards ? -1 : 1)(pmView.state, pmView.dispatch)) {
@@ -876,11 +1027,28 @@ function initEditor() {
     editor.flushSync();
     vscode.postMessage({ type: 'stageFile' });
   });
+  fileHeader.setCommitHandler(() => {
+    editor.flushSync();
+    fileHeader.openCommitModal();
+    fileHeader.setCommitMessageLoading(true);
+    vscode.postMessage({ type: 'generateCommitMessage' });
+  });
+  fileHeader.setCommitConfirmHandler((message) => {
+    editor.flushSync();
+    fileHeader.setCommitInProgress(true);
+    vscode.postMessage({ type: 'commitFile', message });
+  });
+  fileHeader.setTerminalHandler(() => {
+    terminalModal.toggle();
+  });
   fileHeader.setHistoryHandler(() => {
     historyPanel.toggle();
     fileHeader.getHistoryBtn().classList.toggle('active', historyPanel.visible);
   });
-  fileHeader.setTocHandler(() => toc.toggle());
+  fileHeader.setTocHandler(() => {
+    toc.toggle();
+    refreshChangeRailsAfterLayout();
+  });
 
   let isAllCollapsed = false;
   fileHeader.setCollapseHandler(() => {
@@ -1516,6 +1684,8 @@ function initEditor() {
     const isModKey = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement | null;
     const isInShortcutModal = !!target?.closest('.file-header-shortcuts-modal');
+    const isInCommitModal = !!target?.closest('.file-header-commit-modal');
+    const isInTerminalModal = !!target?.closest('.easyview-terminal-modal');
     const isTextInputLike = !!target && (
       target.tagName === 'INPUT'
       || target.tagName === 'TEXTAREA'
@@ -1524,7 +1694,7 @@ function initEditor() {
     const isFileNameEditing = !!target?.closest('.file-header-name');
 
     // Do not hijack shortcuts when editing shortcut form fields or file name.
-    if (isInShortcutModal || isTextInputLike || isFileNameEditing) {
+    if (isInShortcutModal || isInCommitModal || isInTerminalModal || isTextInputLike || isFileNameEditing) {
       return;
     }
 
@@ -1546,12 +1716,36 @@ function initEditor() {
       openNativeSourceMode();
       return;
     }
+    if (matchesToolbarShortcut(e, 'copyOutlinePath')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      void copyOutlinePathForSelection();
+      return;
+    }
+    if (matchesToolbarShortcut(e, 'copyFullPath')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      void copyFullPathForSelection();
+      return;
+    }
     if (matchesToolbarShortcut(e, 'stageFile')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       editor.flushSync();
       vscode.postMessage({ type: 'stageFile' });
+      return;
+    }
+    if (matchesToolbarShortcut(e, 'commitFile')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      editor.flushSync();
+      fileHeader.openCommitModal();
+      fileHeader.setCommitMessageLoading(true);
+      vscode.postMessage({ type: 'generateCommitMessage' });
       return;
     }
     if (matchesToolbarShortcut(e, 'scrollTop')) {
@@ -1594,6 +1788,13 @@ function initEditor() {
       e.stopPropagation();
       e.stopImmediatePropagation();
       fileHeader.triggerThemeToggle();
+      return;
+    }
+    if (matchesToolbarShortcut(e, 'toggleTerminal')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      terminalModal.toggle();
       return;
     }
     if (matchesToolbarShortcut(e, 'toggleStickyNote')) {
@@ -1664,6 +1865,9 @@ function initEditor() {
 
   window.addEventListener('message', (event) => {
     const message = event.data;
+    if (terminalModal.handleMessage(message)) {
+      return;
+    }
 
     switch (message.type) {
       case 'init':
@@ -1671,6 +1875,16 @@ function initEditor() {
         const tMsg = message.type === 'init' ? performance.now() : 0;
         const isInit = message.type === 'init';
         const previousContent = currentContent;
+        vscode.postMessage({
+          type: 'openWithDebugLog',
+          stage: message.type === 'init' ? 'initReceived' : 'documentChangedReceived',
+          meta: {
+            messageContentLength: typeof message.content === 'string' ? message.content.length : -1,
+            previousContentLength: previousContent.length,
+            canPostEditsToHost,
+            isSourceMode,
+          },
+        });
         if (message.type === 'init') {
           console.log('[InLineMd perf] init message received');
           dualHistory.clear();
@@ -1692,6 +1906,13 @@ function initEditor() {
 
         if (message.filename) {
           fileHeader.setName(message.filename);
+        }
+        if (typeof message.filePath === 'string') {
+          currentFilePath = message.filePath;
+        }
+        if (message.terminalAppearance && typeof message.terminalAppearance === 'object') {
+          terminalAppearance = message.terminalAppearance as TerminalAppearance;
+          terminalModal.updateAppearance(terminalAppearance);
         }
 
         if (message.type === 'init') {
@@ -1720,6 +1941,7 @@ function initEditor() {
 
         if (isSourceMode && sourceEditor) {
           sourceEditor.setContent(content);
+          canPostEditsToHost = true;
           if (shouldAutoFollowExternalChange && changedLine !== null) {
             sourceEditor.scrollToLine(changedLine, 'smooth');
           }
@@ -1733,6 +1955,7 @@ function initEditor() {
           ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
           : 0;
         editor.setContent(content, isInit, isInit ? undefined : { scrollIntoView: false });
+        canPostEditsToHost = true;
         updateTocStatusBar();
         if (!isInit && scrollArea) {
           if (shouldAutoFollowExternalChange && changedLine !== null) {
@@ -1747,8 +1970,7 @@ function initEditor() {
             setTimeout(restoreScroll, 60);
           }
         }
-        requestAnimationFrame(updateGitChangeRailOffset);
-        setTimeout(updateGitChangeRailOffset, 60);
+        refreshChangeRailsAfterLayout();
         if (Array.isArray(message.gitLineRanges) && view) {
           view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
             lineRanges: message.gitLineRanges,
@@ -1804,6 +2026,49 @@ function initEditor() {
           }));
         }
         break;
+
+      case 'commitMessageGenerated': {
+        const generatedMessage = typeof message.message === 'string' ? message.message : '';
+        const source = typeof message.source === 'string' ? message.source : 'Generated';
+        if (generatedMessage.trim()) {
+          fileHeader.setCommitMessage(generatedMessage, source);
+        } else {
+          fileHeader.setCommitError('Could not generate a commit message.');
+        }
+        break;
+      }
+
+      case 'commitMessageGenerationFailed': {
+        const messageText = typeof message.message === 'string' ? message.message : 'Failed to generate commit message.';
+        fileHeader.setCommitError(messageText);
+        showToast(messageText);
+        break;
+      }
+
+      case 'commitFileCompleted': {
+        fileHeader.setCommitInProgress(false);
+        fileHeader.closeCommitModal();
+        showToast(typeof message.message === 'string' ? message.message : 'Committed current file');
+        break;
+      }
+
+      case 'commitFileFailed': {
+        const messageText = typeof message.message === 'string' ? message.message : 'Failed to commit current file.';
+        fileHeader.setCommitInProgress(false);
+        fileHeader.setCommitError(messageText);
+        showToast(messageText);
+        break;
+      }
+
+      case 'clipboardCopyCompleted': {
+        showToast(typeof message.message === 'string' ? message.message : 'Copied');
+        break;
+      }
+
+      case 'clipboardCopyFailed': {
+        showToast(typeof message.message === 'string' ? message.message : 'Copy failed');
+        break;
+      }
 
       case 'focus':
         editor.focus();

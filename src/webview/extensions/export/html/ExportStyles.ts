@@ -348,6 +348,28 @@ body {
   margin-right: auto;
 }
 
+.document-content td .table-wrapper,
+.document-content th .table-wrapper {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.document-content td[style*="text-align:center"] .table-wrapper,
+.document-content td[style*="text-align: center"] .table-wrapper,
+.document-content th[style*="text-align:center"] .table-wrapper,
+.document-content th[style*="text-align: center"] .table-wrapper {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.document-content td[style*="text-align:right"] .table-wrapper,
+.document-content td[style*="text-align: right"] .table-wrapper,
+.document-content th[style*="text-align:right"] .table-wrapper,
+.document-content th[style*="text-align: right"] .table-wrapper {
+  margin-left: auto;
+  margin-right: 0;
+}
+
 .document-content.full-width > * {
   max-width: none;
 }

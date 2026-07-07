@@ -861,6 +861,7 @@ async function convertTable(node: ProsemirrorNode, ctx: ConvertContext): Promise
 
       const cellContent = await convertChildren(cell, ctx);
       const alignment = cell.attrs.alignment || undefined;
+      const verticalAlignment = cell.attrs.verticalAlignment || undefined;
 
       // Check for keyword badges (TRUE, FALSE, NULL, etc.)
       const kwColor = getTableKeywordColor(cell.textContent.trim());
@@ -871,6 +872,7 @@ async function convertTable(node: ProsemirrorNode, ctx: ConvertContext): Promise
       const cellDef: any = {
         stack: cellContent.length > 0 ? cellContent : [{ text: ' ' }],
         ...(alignment ? { alignment } : {}),
+        ...(verticalAlignment ? { vAlign: verticalAlignment === 'middle' ? 'center' : verticalAlignment } : {}),
         ...(isHeaderCell ? { bold: true, fillColor: ctx.palette.tableHeaderFill } : {}),
       };
 

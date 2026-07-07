@@ -17,9 +17,13 @@ export type ToolbarShortcutAction =
   | 'toggleTableWrap'
   | 'toggleExternalFollow'
   | 'toggleTheme'
+  | 'toggleTerminal'
   | 'toggleStickyNote'
   | 'openSourceMode'
+  | 'copyOutlinePath'
+  | 'copyFullPath'
   | 'stageFile'
+  | 'commitFile'
   | 'scrollTop'
   | 'scrollBottom';
 
@@ -35,9 +39,13 @@ const DEFAULT_SHORTCUTS: ToolbarShortcutConfig = {
   toggleTableWrap: 'Alt+D',
   toggleExternalFollow: 'Alt+F',
   toggleTheme: 'Alt+R',
+  toggleTerminal: 'Alt+T',
   toggleStickyNote: 'Alt+N',
   openSourceMode: 'Alt+Q',
+  copyOutlinePath: 'Alt+Shift+O',
+  copyFullPath: 'Alt+Shift+P',
   stageFile: 'Alt+S',
+  commitFile: 'Alt+C',
   scrollTop: 'Alt+ArrowUp',
   scrollBottom: 'Alt+ArrowDown',
 };
@@ -49,9 +57,13 @@ const SHORTCUT_LABELS: Record<ToolbarShortcutAction, string> = {
   toggleTableWrap: 'Toggle table wrap',
   toggleExternalFollow: 'Toggle external follow scroll',
   toggleTheme: 'Toggle light/dark theme',
+  toggleTerminal: 'Toggle embedded terminal',
   toggleStickyNote: 'Toggle sticky note',
   openSourceMode: 'Open source mode',
+  copyOutlinePath: 'Copy outline path',
+  copyFullPath: 'Copy file and outline path',
   stageFile: 'Stage current file',
+  commitFile: 'Commit current file',
   scrollTop: 'Scroll to top',
   scrollBottom: 'Scroll to bottom',
 };
@@ -241,6 +253,180 @@ function readStoredExternalFollowEnabled(): boolean {
   return true;
 }
 
+function ensureCommitModalStyles(): void {
+  const styleId = 'easyview-commit-modal-styles';
+  if (document.getElementById(styleId)) return;
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .file-header-commit-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 10020;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.22);
+    }
+    .file-header-commit-backdrop.open {
+      display: flex;
+    }
+    .file-header-commit-modal {
+      width: min(560px, calc(100vw - 40px));
+      border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.28));
+      border-radius: 12px;
+      background: var(--vscode-editor-background, #fff);
+      color: var(--vscode-editor-foreground, #222);
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.28);
+      overflow: hidden;
+    }
+    .file-header-commit-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 24px;
+      padding: 4px 12px;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.22));
+      font-weight: 650;
+      font-size: 13px;
+      color: var(--mdpre-accent, var(--vscode-textLink-foreground, #0ea5e9));
+    }
+    .file-header-commit-close {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      padding: 1px 5px;
+      border-radius: 6px;
+    }
+    .file-header-commit-close:hover {
+      background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.14));
+    }
+    .file-header-commit-body {
+      padding: 14px;
+    }
+    .file-header-commit-label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 12px;
+      opacity: 0.76;
+    }
+    .file-header-commit-input-wrap {
+      position: relative;
+    }
+    .file-header-commit-textarea {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 108px;
+      resize: vertical;
+      border: 1px solid var(--vscode-input-border, rgba(127, 127, 127, 0.28));
+      border-radius: 8px;
+      padding: 30px 12px 10px;
+      color: var(--vscode-input-foreground, inherit);
+      background: var(--vscode-input-background, transparent);
+      font: 13px/1.5 var(--vscode-editor-font-family, Menlo, Consolas, monospace);
+      outline: none;
+    }
+    .file-header-commit-textarea:focus {
+      border-color: var(--mdpre-accent, var(--vscode-focusBorder, #0ea5e9));
+      box-shadow: 0 0 0 1px var(--mdpre-accent, var(--vscode-focusBorder, #0ea5e9));
+    }
+    .file-header-commit-source {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      z-index: 1;
+      display: none;
+      max-width: calc(100% - 20px);
+      padding-left: 8px;
+      overflow: hidden;
+      color: var(--vscode-descriptionForeground, rgba(127, 127, 127, 0.9));
+      background: var(--vscode-input-background, var(--vscode-editor-background, transparent));
+      font-size: 11px;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-header-commit-source.visible {
+      display: block;
+    }
+    .file-header-commit-loading {
+      position: absolute;
+      inset: 1px;
+      z-index: 2;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border-radius: 8px;
+      color: var(--vscode-descriptionForeground, rgba(127, 127, 127, 0.9));
+      background: color-mix(in srgb, var(--vscode-input-background, var(--vscode-editor-background, #fff)) 88%, transparent);
+      font-size: 13px;
+      pointer-events: none;
+    }
+    .file-header-commit-loading.open {
+      display: flex;
+    }
+    .file-header-commit-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(127, 127, 127, 0.28);
+      border-top-color: var(--mdpre-accent, var(--vscode-textLink-foreground, #0ea5e9));
+      border-radius: 999px;
+      animation: easyview-commit-spin 0.8s linear infinite;
+    }
+    .file-header-commit-loading-dots::after {
+      content: '';
+      animation: easyview-commit-dots 1.2s steps(4, end) infinite;
+    }
+    @keyframes easyview-commit-spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes easyview-commit-dots {
+      0% { content: ''; }
+      25% { content: '.'; }
+      50% { content: '..'; }
+      75%, 100% { content: '...'; }
+    }
+    .file-header-commit-status {
+      min-height: 18px;
+      margin-top: 8px;
+      font-size: 12px;
+      opacity: 0.78;
+    }
+    .file-header-commit-status.error {
+      color: var(--vscode-errorForeground, #f87171);
+      opacity: 1;
+    }
+    .file-header-commit-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 0 14px 14px;
+    }
+    .file-header-commit-btn {
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 7px;
+      padding: 6px 12px;
+      cursor: pointer;
+      color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground, inherit));
+      background: var(--vscode-button-secondaryBackground, rgba(127, 127, 127, 0.15));
+    }
+    .file-header-commit-btn.primary {
+      color: var(--vscode-button-foreground, #fff);
+      background: var(--mdpre-accent, var(--vscode-button-background, #0e639c));
+    }
+    .file-header-commit-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 export interface FileHeader {
   el: HTMLElement;
   setName: (name: string) => void;
@@ -255,6 +441,9 @@ export interface FileHeader {
   setScrollTopHandler: (handler: () => void) => void;
   setScrollBottomHandler: (handler: () => void) => void;
   setStageHandler: (handler: () => void) => void;
+  setCommitHandler: (handler: () => void) => void;
+  setCommitConfirmHandler: (handler: (message: string) => void) => void;
+  setTerminalHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
   setStickyNoteHandler: (handler: () => void) => void;
   setExternalFollowHandler: (handler: (enabled: boolean) => void) => void;
@@ -269,12 +458,20 @@ export interface FileHeader {
   triggerTableWrapToggle: () => void;
   triggerExternalFollowToggle: () => void;
   triggerThemeToggle: () => void;
+  openCommitModal: () => void;
+  closeCommitModal: () => void;
+  setCommitMessageLoading: (loading: boolean) => void;
+  setCommitMessage: (message: string, status?: string) => void;
+  setCommitError: (message: string) => void;
+  setCommitInProgress: (busy: boolean) => void;
+  syncTerminalState: (open: boolean) => void;
   getSourceBtn: () => HTMLElement;
   getHistoryBtn: () => HTMLElement;
 }
 
 export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const { postMessage, getState, setState, onSettingsChange } = deps;
+  ensureCommitModalStyles();
   type ThemeMode = 'light' | 'dark';
   type AccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple' | 'cherryRed';
   const accentThemes: Array<{ value: AccentTheme; label: string }> = [
@@ -320,6 +517,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   let shortcutChangeHandler: ((config: ToolbarShortcutConfig) => void) | null = null;
   let externalFollowEnabled = readStoredExternalFollowEnabled();
   let externalFollowHandler: ((enabled: boolean) => void) | null = null;
+  let commitConfirmHandler: ((message: string) => void) | null = null;
 
   const setLinkedShortcut = (action: ToolbarShortcutAction, shortcut: string): void => {
     if (LINKED_SHORTCUT_ACTIONS.includes(action)) {
@@ -500,6 +698,17 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   stageBtn.className = 'file-header-btn';
   stageBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5c-1.1-1.1-2.6-1.7-4.5-1.7-2.8 0-4.8 1.3-4.8 3.5 0 1.9 1.5 2.9 4.4 3.5l1.2.3c2.6.6 3.8 1.4 3.8 3.2 0 2.4-2.1 3.8-5 3.8-2 0-3.7-.6-5-1.8"/></svg>';
   rightGroup.appendChild(stageBtn);
+
+  const commitBtn = document.createElement('button');
+  commitBtn.className = 'file-header-btn';
+  commitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/><path d="M12 3v6"/><path d="M12 15v6"/></svg>';
+  rightGroup.appendChild(commitBtn);
+
+  const terminalBtn = document.createElement('button');
+  terminalBtn.className = 'file-header-btn';
+  terminalBtn.title = 'Open embedded terminal';
+  terminalBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="m7 9 3 3-3 3"/><path d="M12 15h5"/></svg>';
+  rightGroup.appendChild(terminalBtn);
 
   const historyBtn = document.createElement('button');
   historyBtn.className = 'file-header-btn';
@@ -736,6 +945,71 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     openShortcutModal();
   });
 
+  const commitBackdrop = document.createElement('div');
+  commitBackdrop.className = 'file-header-commit-backdrop';
+  commitBackdrop.innerHTML = `
+    <div class="file-header-commit-modal" role="dialog" aria-modal="true" aria-label="Commit">
+      <div class="file-header-commit-title">
+        <span>Commit</span>
+        <button class="file-header-commit-close" type="button" aria-label="Close">x</button>
+      </div>
+      <div class="file-header-commit-body">
+        <label class="file-header-commit-label">Commit message for current file</label>
+        <div class="file-header-commit-input-wrap">
+          <span class="file-header-commit-source"></span>
+          <textarea class="file-header-commit-textarea" spellcheck="false" placeholder="Generating commit message..."></textarea>
+          <div class="file-header-commit-loading" aria-live="polite">
+            <span class="file-header-commit-spinner"></span>
+            <span>Generating message<span class="file-header-commit-loading-dots"></span></span>
+          </div>
+        </div>
+        <div class="file-header-commit-status"></div>
+      </div>
+      <div class="file-header-commit-actions">
+        <button class="file-header-commit-btn" type="button" data-action="cancel">Cancel</button>
+        <button class="file-header-commit-btn primary" type="button" data-action="commit">Commit</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(commitBackdrop);
+
+  const commitTextarea = commitBackdrop.querySelector('.file-header-commit-textarea') as HTMLTextAreaElement;
+  const commitSource = commitBackdrop.querySelector('.file-header-commit-source') as HTMLElement;
+  const commitLoading = commitBackdrop.querySelector('.file-header-commit-loading') as HTMLElement;
+  const commitStatus = commitBackdrop.querySelector('.file-header-commit-status') as HTMLElement;
+  const commitSubmitBtn = commitBackdrop.querySelector('[data-action="commit"]') as HTMLButtonElement;
+  const commitCancelBtn = commitBackdrop.querySelector('[data-action="cancel"]') as HTMLButtonElement;
+  const commitCloseBtn = commitBackdrop.querySelector('.file-header-commit-close') as HTMLButtonElement;
+
+  const updateCommitSubmitState = (): void => {
+    commitSubmitBtn.disabled = !commitTextarea.value.trim() || commitTextarea.disabled;
+  };
+
+  const setCommitStatus = (message: string, isError = false): void => {
+    commitStatus.textContent = message;
+    commitStatus.classList.toggle('error', isError);
+  };
+
+  commitTextarea.addEventListener('input', updateCommitSubmitState);
+  commitTextarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitSubmitBtn.click();
+  });
+  commitBackdrop.addEventListener('click', (event) => {
+    if (event.target === commitBackdrop) {
+      commitBackdrop.classList.remove('open');
+    }
+  });
+  commitCancelBtn.addEventListener('click', () => commitBackdrop.classList.remove('open'));
+  commitCloseBtn.addEventListener('click', () => commitBackdrop.classList.remove('open'));
+  commitSubmitBtn.addEventListener('click', () => {
+    const message = commitTextarea.value.trim();
+    if (!message || commitSubmitBtn.disabled) return;
+    commitConfirmHandler?.(message);
+  });
+
   shortcutsBackdrop.addEventListener('click', (event) => {
     if (event.target === shortcutsBackdrop) {
       closeShortcutModal();
@@ -759,6 +1033,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     if (e.key === 'Escape') {
       exportDropdown.classList.remove('open');
       closeShortcutModal();
+      commitBackdrop.classList.remove('open');
     }
   });
 
@@ -781,6 +1056,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setTitleWithShortcut(scrollTopBtn, 'Scroll to top', 'scrollTop');
     setTitleWithShortcut(scrollBottomBtn, 'Scroll to bottom', 'scrollBottom');
     setTitleWithShortcut(stageBtn, 'Stage current file', 'stageFile');
+    setTitleWithShortcut(commitBtn, 'Commit current file', 'commitFile');
+    setTitleWithShortcut(terminalBtn, 'Open embedded terminal', 'toggleTerminal');
     setTitleWithShortcut(stickyNoteBtn, 'Toggle sticky note editor', 'toggleStickyNote');
     setTitleWithShortcut(sourceBtn, 'Open native source mode with inline suggestions', 'openSourceMode');
     syncExternalFollowButton(externalFollowEnabled);
@@ -852,6 +1129,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setScrollTopHandler(handler: () => void) { scrollTopBtn.addEventListener('click', handler); },
     setScrollBottomHandler(handler: () => void) { scrollBottomBtn.addEventListener('click', handler); },
     setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
+    setCommitHandler(handler: () => void) { commitBtn.addEventListener('click', handler); },
+    setCommitConfirmHandler(handler: (message: string) => void) { commitConfirmHandler = handler; },
+    setTerminalHandler(handler: () => void) { terminalBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
     setStickyNoteHandler(handler: () => void) { stickyNoteBtn.addEventListener('click', handler); },
     setExternalFollowHandler(handler: (enabled: boolean) => void) {
@@ -891,6 +1171,59 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     },
     triggerThemeToggle() {
       themeToggleBtn.click();
+    },
+    openCommitModal() {
+      commitBackdrop.classList.add('open');
+      commitTextarea.focus();
+      commitTextarea.select();
+    },
+    closeCommitModal() {
+      commitBackdrop.classList.remove('open');
+    },
+    setCommitMessageLoading(loading: boolean) {
+      commitTextarea.disabled = loading;
+      commitSubmitBtn.disabled = true;
+      commitLoading.classList.toggle('open', loading);
+      if (loading) {
+        commitTextarea.value = '';
+        commitTextarea.placeholder = 'Generating commit message...';
+        commitSource.textContent = '';
+        commitSource.classList.remove('visible');
+        setCommitStatus('');
+      } else {
+        commitTextarea.placeholder = 'Commit message';
+        setCommitStatus('');
+        updateCommitSubmitState();
+      }
+    },
+    setCommitMessage(message: string, status = '') {
+      commitTextarea.disabled = false;
+      commitTextarea.value = message;
+      commitTextarea.placeholder = 'Commit message';
+      commitLoading.classList.remove('open');
+      commitSource.textContent = status;
+      commitSource.classList.toggle('visible', !!status);
+      setCommitStatus('');
+      updateCommitSubmitState();
+      commitTextarea.focus();
+      commitTextarea.select();
+    },
+    setCommitError(message: string) {
+      commitTextarea.disabled = false;
+      commitLoading.classList.remove('open');
+      commitSource.textContent = '';
+      commitSource.classList.remove('visible');
+      setCommitStatus(message, true);
+      updateCommitSubmitState();
+    },
+    setCommitInProgress(busy: boolean) {
+      commitTextarea.disabled = busy;
+      commitSubmitBtn.disabled = busy || !commitTextarea.value.trim();
+      commitLoading.classList.remove('open');
+      setCommitStatus(busy ? 'Committing current file...' : '');
+    },
+    syncTerminalState(open: boolean) {
+      terminalBtn.classList.toggle('active', open);
     },
     getSourceBtn() { return sourceBtn; },
     getHistoryBtn() { return historyBtn; },

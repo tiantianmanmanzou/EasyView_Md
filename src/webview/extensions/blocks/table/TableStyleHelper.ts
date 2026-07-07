@@ -36,4 +36,8 @@ export class TableStyleHelper {
   static readonly alignLeft = "align-left";
   static readonly alignCenter = "align-center";
   static readonly alignRight = "align-right";
+
+  // Width modes
+  static readonly tableBalancedWrap = "table-balanced-wrap";
+  static readonly tableManualWidth = "table-manual-width";
 }

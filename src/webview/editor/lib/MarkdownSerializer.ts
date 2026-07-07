@@ -113,26 +113,54 @@ function serializeImage(state: MarkdownSerializerState, node: ProsemirrorNode) {
 function serializeTableAsHtml(state: MarkdownSerializerState, node: ProsemirrorNode, rows: ProsemirrorNode[]) {
   const isHeader = rows[0].firstChild?.type.name === 'table_header';
 
+  function cellHasBlockContent(cell: ProsemirrorNode): boolean {
+    let hasBlock = false;
+    cell.forEach((child) => {
+      if (child.type.name !== 'paragraph') hasBlock = true;
+    });
+    return hasBlock;
+  }
+
   state.write('<table>\n');
 
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
     state.write('<tr>\n');
+    const renderedCells: string[] = [];
 
     for (let c = 0; c < row.childCount; c++) {
       const cell = row.child(c);
       const tag = (r === 0 && isHeader) ? 'th' : 'td';
       const align = cell.attrs.alignment;
-      const alignAttr = align ? ` align="${align}"` : '';
+      const verticalAlign = cell.attrs.verticalAlignment;
+      const widthAttr = Array.isArray(cell.attrs.colwidth) && cell.attrs.colwidth.length
+        ? ` data-colwidth="${cell.attrs.colwidth.join(',')}"`
+        : '';
+      const styleRules: string[] = [];
+      if (align) styleRules.push(`text-align:${align}`);
+      if (verticalAlign) styleRules.push(`vertical-align:${verticalAlign}`);
+      const styleAttr = styleRules.length ? ` style="${styleRules.join(';')}"` : '';
+      const cellAttrs = `${styleAttr}${widthAttr}`;
 
       // Serialize cell content as markdown using the main serializer
       const cellDoc = cell.type.schema.node('doc', null, cell.content.content);
       const cellMd = serializer.serialize(cellDoc).trim();
+      const hasBlockContent = cellHasBlockContent(cell);
 
-      // Always use blank-line format so markdown-it processes content as markdown
-      state.write(`<${tag}${alignAttr}>\n\n${cellMd}\n\n</${tag}>\n`);
+      if (!cellMd) {
+        renderedCells.push(`<${tag}${cellAttrs}></${tag}>`);
+      } else if (!hasBlockContent && !cellMd.includes('\n')) {
+        renderedCells.push(`<${tag}${cellAttrs}>${cellMd}</${tag}>`);
+      } else if (!hasBlockContent) {
+        renderedCells.push(`<${tag}${cellAttrs}>\n${cellMd}\n</${tag}>`);
+      } else {
+        // Keep one leading blank line for block markdown inside HTML table cells.
+        renderedCells.push(`<${tag}${cellAttrs}>\n\n${cellMd}\n</${tag}>`);
+      }
     }
 
+    state.write(renderedCells.join(''));
+    state.write('\n');
     state.write('</tr>\n');
   }
 
@@ -152,16 +180,24 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
 
   // Check if any cell has complex content → use HTML table format
   let hasComplex = false;
+  let hasManualWidths = false;
+  let hasVerticalAlignments = false;
   for (const row of rows) {
     for (let c = 0; c < row.childCount; c++) {
       const cell = row.child(c);
+      if (Array.isArray(cell.attrs.colwidth) && cell.attrs.colwidth.some((width: number) => typeof width === 'number' && width > 0)) {
+        hasManualWidths = true;
+      }
+      if (cell.attrs.verticalAlignment) {
+        hasVerticalAlignments = true;
+      }
       cell.forEach((child) => {
         if (child.type.name !== 'paragraph') hasComplex = true;
       });
     }
   }
 
-  if (hasComplex) {
+  if (hasComplex || hasManualWidths || hasVerticalAlignments) {
     serializeTableAsHtml(state, node, rows);
     return;
   }
@@ -430,7 +466,9 @@ function serializeHtmlInline(state: MarkdownSerializerState, node: ProsemirrorNo
 }
 
 function serializeHardBreak(state: MarkdownSerializerState) {
-  state.write('<br>\n');
+  // Keep hard line breaks as Markdown syntax instead of writing literal HTML
+  // tags into the source document.
+  state.write('  \n');
 }
 
 function serializeSoftBreak(state: MarkdownSerializerState) {

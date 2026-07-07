@@ -519,9 +519,11 @@ export function addRowAndMoveSelection({
 export function setColumnAttr({
   index,
   alignment,
+  verticalAlignment,
 }: {
   index: number;
-  alignment: string;
+  alignment?: string | null;
+  verticalAlignment?: string | null;
 }): Command {
   return (state, dispatch) => {
     if (dispatch) {
@@ -531,11 +533,73 @@ export function setColumnAttr({
         const node = state.doc.nodeAt(pos);
         transaction = transaction.setNodeMarkup(pos, undefined, {
           ...node?.attrs,
-          alignment,
+          ...(alignment !== undefined ? { alignment } : {}),
+          ...(verticalAlignment !== undefined ? { verticalAlignment } : {}),
         });
       });
       dispatch(transaction);
     }
+    return true;
+  };
+}
+
+export function adjustColumnWidth({
+  index,
+  delta,
+  fallbackWidth,
+}: {
+  index: number;
+  delta: number;
+  fallbackWidth?: number;
+}): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+
+    if (dispatch) {
+      const rect = selectedRect(state);
+      const targetColumns =
+        state.selection instanceof CellSelection && state.selection.isColSelection()
+          ? Array.from({ length: rect.right - rect.left }, (_, offset) => rect.left + offset)
+          : [index];
+
+      const baseFallbackWidth = Math.max(48, Math.round(fallbackWidth || 120));
+      const nextStateDoc = state.doc;
+      let transaction = state.tr;
+      const seen = new Set<number>();
+
+      for (let row = 0; row < rect.map.height; row++) {
+        for (const columnIndex of targetColumns) {
+          const mapPos = rect.map.map[row * rect.map.width + columnIndex];
+          const cellPos = rect.tableStart + mapPos;
+          if (seen.has(cellPos)) continue;
+          seen.add(cellPos);
+
+          const cell = nextStateDoc.nodeAt(cellPos);
+          if (!cell) continue;
+
+          const cellRect = rect.map.findCell(mapPos);
+          const colspan = Math.max(1, cell.attrs.colspan || 1);
+          const slotIndex = Math.max(0, Math.min(colspan - 1, columnIndex - cellRect.left));
+          const existingWidths = Array.isArray(cell.attrs.colwidth)
+            ? cell.attrs.colwidth.slice(0, colspan)
+            : [];
+          while (existingWidths.length < colspan) existingWidths.push(baseFallbackWidth);
+
+          const currentWidth = typeof existingWidths[slotIndex] === 'number' && existingWidths[slotIndex] > 0
+            ? existingWidths[slotIndex]
+            : baseFallbackWidth;
+          existingWidths[slotIndex] = Math.max(48, Math.min(960, currentWidth + delta));
+
+          transaction = transaction.setNodeMarkup(cellPos, undefined, {
+            ...cell.attrs,
+            colwidth: existingWidths,
+          });
+        }
+      }
+
+      dispatch(transaction);
+    }
+
     return true;
   };
 }

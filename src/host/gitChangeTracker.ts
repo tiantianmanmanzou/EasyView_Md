@@ -106,7 +106,7 @@ function computeChangedLineRanges(baseContent: string, currentContent: string): 
       }
       i--;
       j--;
-    } else if (j > 0 && (i === 0 || dp[i * width + j - 1] >= dp[(i - 1) * width + j])) {
+    } else if (j > 0 && (i === 0 || dp[i * width + j - 1] > dp[(i - 1) * width + j])) {
       changed.push({ line: j, kind: pendingDeletion ? 'modified' : 'added' });
       pendingDeletion = false;
       j--;

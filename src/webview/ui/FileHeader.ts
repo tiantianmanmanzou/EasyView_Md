@@ -419,6 +419,10 @@ function ensureCommitModalStyles(): void {
       color: var(--vscode-button-foreground, #fff);
       background: var(--mdpre-accent, var(--vscode-button-background, #0e639c));
     }
+    .file-header-commit-btn.sync {
+      color: var(--vscode-button-foreground, #fff);
+      background: var(--vscode-gitDecoration-addedResourceForeground, #22c55e);
+    }
     .file-header-commit-btn:disabled {
       cursor: not-allowed;
       opacity: 0.55;
@@ -443,6 +447,7 @@ export interface FileHeader {
   setStageHandler: (handler: () => void) => void;
   setCommitHandler: (handler: () => void) => void;
   setCommitConfirmHandler: (handler: (message: string) => void) => void;
+  setCommitSyncHandler: (handler: (message: string) => void) => void;
   setTerminalHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
   setStickyNoteHandler: (handler: () => void) => void;
@@ -463,7 +468,7 @@ export interface FileHeader {
   setCommitMessageLoading: (loading: boolean) => void;
   setCommitMessage: (message: string, status?: string) => void;
   setCommitError: (message: string) => void;
-  setCommitInProgress: (busy: boolean) => void;
+  setCommitInProgress: (busy: boolean, mode?: 'commit' | 'sync') => void;
   syncTerminalState: (open: boolean) => void;
   getSourceBtn: () => HTMLElement;
   getHistoryBtn: () => HTMLElement;
@@ -518,6 +523,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   let externalFollowEnabled = readStoredExternalFollowEnabled();
   let externalFollowHandler: ((enabled: boolean) => void) | null = null;
   let commitConfirmHandler: ((message: string) => void) | null = null;
+  let commitSyncHandler: ((message: string) => void) | null = null;
+  let commitModalBusy = false;
 
   const setLinkedShortcut = (action: ToolbarShortcutAction, shortcut: string): void => {
     if (LINKED_SHORTCUT_ACTIONS.includes(action)) {
@@ -968,6 +975,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       <div class="file-header-commit-actions">
         <button class="file-header-commit-btn" type="button" data-action="cancel">Cancel</button>
         <button class="file-header-commit-btn primary" type="button" data-action="commit">Commit</button>
+        <button class="file-header-commit-btn sync" type="button" data-action="sync">Sync</button>
       </div>
     </div>
   `;
@@ -978,11 +986,17 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const commitLoading = commitBackdrop.querySelector('.file-header-commit-loading') as HTMLElement;
   const commitStatus = commitBackdrop.querySelector('.file-header-commit-status') as HTMLElement;
   const commitSubmitBtn = commitBackdrop.querySelector('[data-action="commit"]') as HTMLButtonElement;
+  const commitSyncBtn = commitBackdrop.querySelector('[data-action="sync"]') as HTMLButtonElement;
   const commitCancelBtn = commitBackdrop.querySelector('[data-action="cancel"]') as HTMLButtonElement;
   const commitCloseBtn = commitBackdrop.querySelector('.file-header-commit-close') as HTMLButtonElement;
 
   const updateCommitSubmitState = (): void => {
-    commitSubmitBtn.disabled = !commitTextarea.value.trim() || commitTextarea.disabled;
+    const hasMessage = !!commitTextarea.value.trim();
+    const disabled = !hasMessage || commitTextarea.disabled;
+    commitSubmitBtn.disabled = disabled;
+    commitSyncBtn.disabled = disabled;
+    commitCancelBtn.disabled = commitModalBusy;
+    commitCloseBtn.disabled = commitModalBusy;
   };
 
   const setCommitStatus = (message: string, isError = false): void => {
@@ -998,16 +1012,25 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     commitSubmitBtn.click();
   });
   commitBackdrop.addEventListener('click', (event) => {
-    if (event.target === commitBackdrop) {
+    if (event.target === commitBackdrop && !commitModalBusy) {
       commitBackdrop.classList.remove('open');
     }
   });
-  commitCancelBtn.addEventListener('click', () => commitBackdrop.classList.remove('open'));
-  commitCloseBtn.addEventListener('click', () => commitBackdrop.classList.remove('open'));
+  commitCancelBtn.addEventListener('click', () => {
+    if (!commitModalBusy) commitBackdrop.classList.remove('open');
+  });
+  commitCloseBtn.addEventListener('click', () => {
+    if (!commitModalBusy) commitBackdrop.classList.remove('open');
+  });
   commitSubmitBtn.addEventListener('click', () => {
     const message = commitTextarea.value.trim();
     if (!message || commitSubmitBtn.disabled) return;
     commitConfirmHandler?.(message);
+  });
+  commitSyncBtn.addEventListener('click', () => {
+    const message = commitTextarea.value.trim();
+    if (!message || commitSyncBtn.disabled) return;
+    commitSyncHandler?.(message);
   });
 
   shortcutsBackdrop.addEventListener('click', (event) => {
@@ -1033,7 +1056,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     if (e.key === 'Escape') {
       exportDropdown.classList.remove('open');
       closeShortcutModal();
-      commitBackdrop.classList.remove('open');
+      if (!commitModalBusy) commitBackdrop.classList.remove('open');
     }
   });
 
@@ -1131,6 +1154,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
     setCommitHandler(handler: () => void) { commitBtn.addEventListener('click', handler); },
     setCommitConfirmHandler(handler: (message: string) => void) { commitConfirmHandler = handler; },
+    setCommitSyncHandler(handler: (message: string) => void) { commitSyncHandler = handler; },
     setTerminalHandler(handler: () => void) { terminalBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
     setStickyNoteHandler(handler: () => void) { stickyNoteBtn.addEventListener('click', handler); },
@@ -1181,8 +1205,12 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       commitBackdrop.classList.remove('open');
     },
     setCommitMessageLoading(loading: boolean) {
+      commitModalBusy = loading;
       commitTextarea.disabled = loading;
       commitSubmitBtn.disabled = true;
+      commitSyncBtn.disabled = true;
+      commitCancelBtn.disabled = loading;
+      commitCloseBtn.disabled = loading;
       commitLoading.classList.toggle('open', loading);
       if (loading) {
         commitTextarea.value = '';
@@ -1197,6 +1225,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       }
     },
     setCommitMessage(message: string, status = '') {
+      commitModalBusy = false;
       commitTextarea.disabled = false;
       commitTextarea.value = message;
       commitTextarea.placeholder = 'Commit message';
@@ -1209,6 +1238,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       commitTextarea.select();
     },
     setCommitError(message: string) {
+      commitModalBusy = false;
       commitTextarea.disabled = false;
       commitLoading.classList.remove('open');
       commitSource.textContent = '';
@@ -1216,11 +1246,15 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       setCommitStatus(message, true);
       updateCommitSubmitState();
     },
-    setCommitInProgress(busy: boolean) {
+    setCommitInProgress(busy: boolean, mode: 'commit' | 'sync' = 'commit') {
+      commitModalBusy = busy;
       commitTextarea.disabled = busy;
       commitSubmitBtn.disabled = busy || !commitTextarea.value.trim();
+      commitSyncBtn.disabled = busy || !commitTextarea.value.trim();
+      commitCancelBtn.disabled = busy;
+      commitCloseBtn.disabled = busy;
       commitLoading.classList.remove('open');
-      setCommitStatus(busy ? 'Committing current file...' : '');
+      setCommitStatus(busy ? (mode === 'sync' ? 'Syncing current file...' : 'Committing current file...') : '');
     },
     syncTerminalState(open: boolean) {
       terminalBtn.classList.toggle('active', open);

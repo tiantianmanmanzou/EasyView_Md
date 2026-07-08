@@ -15,6 +15,7 @@ import { parseMarkdownWithFrontmatter } from './Frontmatter';
 import { applyCustomRules } from './MarkdownItRules';
 import { applyTableRules } from './MarkdownTableRules';
 import { tokenMapping } from './MarkdownTokenMapping';
+import { applyEasyViewTableMeta, stripEasyViewTableMeta } from './TableStyleMetadata';
 
 // ─── markdown-it instance ───────────────────────────────────────────────────
 
@@ -135,7 +136,8 @@ function restoreHtmlCells(doc: ProsemirrorNode): ProsemirrorNode {
 
 export function parseMarkdown(markdown: string, parser: MarkdownParser): ProsemirrorNode | null {
   const t0 = performance.now();
-  const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(markdown);
+  const { content: markdownWithoutTableMeta, meta: tableMeta } = stripEasyViewTableMeta(markdown);
+  const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(markdownWithoutTableMeta);
   const t1 = performance.now();
 
   // Normalize table column counts before parsing (markdown-it requires
@@ -156,6 +158,7 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
 
   // Restore complex HTML content in table cells
   contentDoc = restoreHtmlCells(contentDoc);
+  contentDoc = applyEasyViewTableMeta(contentDoc, tableMeta);
   const t3 = performance.now();
 
   if (t2 - t0 > 5) {
@@ -187,7 +190,8 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
  * The resulting array index corresponds to textblock ordinal in ProseMirror traversal.
  */
 export function extractTextblockLineMap(markdown: string): number[] {
-  const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(markdown);
+  const { content: markdownWithoutTableMeta } = stripEasyViewTableMeta(markdown);
+  const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(markdownWithoutTableMeta);
   const normalizedContent = normalizeTableColumns(content);
   const tokens = lineMapMarkdownIt.parse(normalizedContent, {});
 

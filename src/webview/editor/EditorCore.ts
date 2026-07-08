@@ -30,7 +30,7 @@ import { ExtensionManager } from './EditorExtensionManager';
 import type { Extension } from './EditorExtension';
 import { schema } from './EditorSchema';
 import { createParser, createPasteParser, parseMarkdown } from './lib/MarkdownParser';
-import { serializer } from './lib/MarkdownSerializer';
+import { docToMarkdown } from './lib/MarkdownSerializer';
 
 import { EditorImageManager } from './EditorImageManager';
 import {
@@ -227,7 +227,7 @@ export class EditorCore {
 
   getMarkdown(): string {
     if (!this._view) return this._currentContent;
-    return serializer.serialize(this._view.state.doc, { tightLists: true });
+    return docToMarkdown(this._view.state.doc);
   }
 
   /**
@@ -374,7 +374,7 @@ export class EditorCore {
       this._syncTimer = null;
       if (!this._view) return;
       try {
-        const md = serializer.serialize(this._view.state.doc, { tightLists: true });
+        const md = docToMarkdown(this._view.state.doc);
         if (md !== this._currentContent) {
           this._currentContent = md;
           this.config.onContentChange?.(md);
@@ -537,7 +537,7 @@ export class EditorCore {
             this._syncTimer = null;
           }
           try {
-            const md = serializer.serialize(this._view.state.doc, { tightLists: true });
+            const md = docToMarkdown(this._view.state.doc);
             this._currentContent = md;
             this.config.onContentChange?.(md);
           } catch (err) {
@@ -549,7 +549,7 @@ export class EditorCore {
             this._syncTimer = null;
             if (!this._view) return;
             try {
-              const md = serializer.serialize(this._view.state.doc, { tightLists: true });
+              const md = docToMarkdown(this._view.state.doc);
               if (md !== this._currentContent) {
                 this._currentContent = md;
                 this.config.onContentChange?.(md);

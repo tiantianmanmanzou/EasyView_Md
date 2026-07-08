@@ -7,6 +7,7 @@ interface TabCompletionRequest {
 }
 
 type StickyNoteMode = 'localFile' | 'tempFile';
+type StickyNoteDisplayMode = 'sourceNative' | 'renderDisplay';
 
 interface StickyNoteModalOptions {
   getDocumentContent: () => string;
@@ -46,7 +47,12 @@ const STICKY_NOTE_RECT_KEY = 'easyview-md-sticky-note-rect';
 const STICKY_NOTE_RECT_VERSION_KEY = 'easyview-md-sticky-note-rect-version';
 const STICKY_NOTE_RECT_VERSION = '2';
 const STICKY_NOTE_MODE_KEY = 'easyview-md-sticky-note-mode';
+const STICKY_NOTE_DISPLAY_MODE_KEY = 'easyview-md-sticky-note-display-mode';
+const STICKY_NOTE_FONT_SIZE_KEY = 'easyview-md-sticky-note-font-size';
 const LOCAL_FILE_SAVE_DEBOUNCE_MS = 300;
+const STICKY_NOTE_FONT_SIZE_MIN = 11;
+const STICKY_NOTE_FONT_SIZE_MAX = 22;
+const STICKY_NOTE_FONT_SIZE_DEFAULT = 13;
 
 export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNoteModal {
   ensureStickyNoteStyles();
@@ -61,8 +67,32 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
   title.className = 'easyview-sticky-note__title';
   title.textContent = '小签';
 
+  const headerCenter = document.createElement('div');
+  headerCenter.className = 'easyview-sticky-note__center';
+
   const modeGroup = document.createElement('div');
   modeGroup.className = 'easyview-sticky-note__mode-group';
+
+  const headerActions = document.createElement('div');
+  headerActions.className = 'easyview-sticky-note__actions';
+
+  const displayModeWrap = document.createElement('div');
+  displayModeWrap.className = 'easyview-sticky-note__display-mode';
+
+  const nativeModeLabel = document.createElement('span');
+  nativeModeLabel.className = 'easyview-sticky-note__display-label';
+  nativeModeLabel.textContent = '原生';
+
+  const displayToggleBtn = document.createElement('button');
+  displayToggleBtn.type = 'button';
+  displayToggleBtn.className = 'easyview-sticky-note__display-toggle';
+  displayToggleBtn.setAttribute('aria-label', '切换小签显示模式');
+  displayToggleBtn.title = '左侧为原生 VS Code 编辑器模式，右侧为渲染显示模式';
+  displayToggleBtn.innerHTML = '<span class="easyview-sticky-note__display-thumb"></span>';
+
+  const renderModeLabel = document.createElement('span');
+  renderModeLabel.className = 'easyview-sticky-note__display-label';
+  renderModeLabel.textContent = '渲染';
 
   const localModeBtn = document.createElement('button');
   localModeBtn.type = 'button';
@@ -85,6 +115,20 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
   closeBtn.setAttribute('aria-label', 'Close sticky note');
   closeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 
+  const decreaseFontBtn = document.createElement('button');
+  decreaseFontBtn.type = 'button';
+  decreaseFontBtn.className = 'easyview-sticky-note__action-btn';
+  decreaseFontBtn.setAttribute('aria-label', 'Decrease sticky note font size');
+  decreaseFontBtn.title = '缩小字号';
+  decreaseFontBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"/></svg>';
+
+  const increaseFontBtn = document.createElement('button');
+  increaseFontBtn.type = 'button';
+  increaseFontBtn.className = 'easyview-sticky-note__action-btn';
+  increaseFontBtn.setAttribute('aria-label', 'Increase sticky note font size');
+  increaseFontBtn.title = '放大字号';
+  increaseFontBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+
   const body = document.createElement('div');
   body.className = 'easyview-sticky-note__body';
 
@@ -97,8 +141,16 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
   resizeHandle.setAttribute('aria-hidden', 'true');
 
   header.appendChild(title);
-  header.appendChild(modeGroup);
-  header.appendChild(closeBtn);
+  displayModeWrap.appendChild(nativeModeLabel);
+  displayModeWrap.appendChild(displayToggleBtn);
+  displayModeWrap.appendChild(renderModeLabel);
+  headerCenter.appendChild(modeGroup);
+  headerCenter.appendChild(displayModeWrap);
+  header.appendChild(headerCenter);
+  headerActions.appendChild(decreaseFontBtn);
+  headerActions.appendChild(increaseFontBtn);
+  headerActions.appendChild(closeBtn);
+  header.appendChild(headerActions);
   root.appendChild(header);
   root.appendChild(body);
   root.appendChild(resizeHandle);
@@ -107,13 +159,40 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
   let suppressChange = false;
   let open = false;
   let rect = readStoredRect() ?? createDefaultRect();
-  let mode: StickyNoteMode = 'tempFile';
+  let mode: StickyNoteMode = readStoredMode();
+  let displayMode: StickyNoteDisplayMode = readStoredDisplayMode();
   let latestDocumentContent = '';
   let localFileDraft = '';
   let localFileDirty = false;
   let tempContent = readStoredTempContent();
+  let fontSize = readStoredFontSize();
   let localFileSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let editor: ReturnType<typeof createSourceEditor> | null = null;
+
+  const syncDisplayModeToggle = (): void => {
+    const renderDisplay = displayMode === 'renderDisplay';
+    displayToggleBtn.classList.toggle('render-display', renderDisplay);
+    nativeModeLabel.classList.toggle('active', !renderDisplay);
+    renderModeLabel.classList.toggle('active', renderDisplay);
+  };
+
+  const persistDisplayMode = (): void => {
+    try {
+      localStorage.setItem(STICKY_NOTE_DISPLAY_MODE_KEY, displayMode);
+    } catch {
+      // Ignore storage failures in restricted contexts.
+    }
+  };
+
+  const applyFontSize = (persist = false): void => {
+    const next = Math.max(STICKY_NOTE_FONT_SIZE_MIN, Math.min(STICKY_NOTE_FONT_SIZE_MAX, fontSize));
+    fontSize = next;
+    root.style.setProperty('--easyview-sticky-note-font-size', `${fontSize}px`);
+    decreaseFontBtn.disabled = fontSize <= STICKY_NOTE_FONT_SIZE_MIN;
+    increaseFontBtn.disabled = fontSize >= STICKY_NOTE_FONT_SIZE_MAX;
+    editor?.view.requestMeasure();
+    if (persist) persistFontSize(fontSize);
+  };
 
   const clearLocalFileSaveTimer = (): void => {
     if (!localFileSaveTimer) return;
@@ -129,11 +208,10 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
     }, LOCAL_FILE_SAVE_DEBOUNCE_MS);
   };
 
-  const ensureEditor = (): ReturnType<typeof createSourceEditor> => {
-    if (editor) return editor;
+  const createEditorInstance = (): ReturnType<typeof createSourceEditor> => {
     editor = createSourceEditor({
       parent: editorMount,
-      visualMode: 'stickyNoteCompactMarkdown',
+      visualMode: displayMode === 'renderDisplay' ? 'stickyNoteCompactMarkdown' : 'default',
       onChange: (content) => {
         if (suppressChange) return;
         if (mode === 'tempFile') {
@@ -155,6 +233,29 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
       requestTabCompletion: options.requestTabCompletion,
     });
     return editor;
+  };
+
+  const ensureEditor = (): ReturnType<typeof createSourceEditor> => {
+    if (editor) return editor;
+    return createEditorInstance();
+  };
+
+  const rebuildEditor = (focus = true): void => {
+    const content = editor?.getContent() ?? (mode === 'localFile' ? localFileDraft : tempContent);
+    editor?.destroy();
+    editor = null;
+    editorMount.replaceChildren();
+    const activeEditor = createEditorInstance();
+    suppressChange = true;
+    activeEditor.setContent(content);
+    suppressChange = false;
+    applyFontSize(false);
+    if (focus && open) {
+      requestAnimationFrame(() => {
+        activeEditor.view.requestMeasure();
+        activeEditor.focus();
+      });
+    }
   };
 
   const setEditorContent = (content: string): void => {
@@ -230,6 +331,20 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
     requestAnimationFrame(() => editor?.focus());
   };
 
+  const switchDisplayMode = (nextMode: StickyNoteDisplayMode): void => {
+    if (displayMode === nextMode) return;
+    if (mode === 'tempFile') {
+      tempContent = editor?.getContent() ?? tempContent;
+      persistTempContent(tempContent);
+    } else {
+      localFileDraft = editor?.getContent() ?? localFileDraft;
+    }
+    displayMode = nextMode;
+    persistDisplayMode();
+    syncDisplayModeToggle();
+    rebuildEditor(true);
+  };
+
   const setOpen = (visible: boolean): void => {
     if (!visible && mode === 'localFile') {
       commitLocalFileDraft();
@@ -301,12 +416,25 @@ export function createStickyNoteModal(options: StickyNoteModalOptions): StickyNo
 
   localModeBtn.addEventListener('click', () => switchMode('localFile'));
   tempModeBtn.addEventListener('click', () => switchMode('tempFile'));
+  displayToggleBtn.addEventListener('click', () => {
+    switchDisplayMode(displayMode === 'sourceNative' ? 'renderDisplay' : 'sourceNative');
+  });
+  decreaseFontBtn.addEventListener('click', () => {
+    fontSize = Math.max(STICKY_NOTE_FONT_SIZE_MIN, fontSize - 1);
+    applyFontSize(true);
+  });
+  increaseFontBtn.addEventListener('click', () => {
+    fontSize = Math.min(STICKY_NOTE_FONT_SIZE_MAX, fontSize + 1);
+    applyFontSize(true);
+  });
   header.addEventListener('pointerdown', beginDrag);
   resizeHandle.addEventListener('pointerdown', beginResize);
   closeBtn.addEventListener('click', () => setOpen(false));
   window.addEventListener('resize', handleWindowResize);
 
   syncModeButtons();
+  syncDisplayModeToggle();
+  applyFontSize();
   applyRect();
   setOpen(false);
 
@@ -365,6 +493,36 @@ function readStoredMode(): StickyNoteMode {
     return raw === 'localFile' ? 'localFile' : 'tempFile';
   } catch {
     return 'tempFile';
+  }
+}
+
+function readStoredDisplayMode(): StickyNoteDisplayMode {
+  try {
+    const raw = localStorage.getItem(STICKY_NOTE_DISPLAY_MODE_KEY);
+    return raw === 'renderDisplay' ? 'renderDisplay' : 'sourceNative';
+  } catch {
+    return 'sourceNative';
+  }
+}
+
+function readStoredFontSize(): number {
+  try {
+    const raw = localStorage.getItem(STICKY_NOTE_FONT_SIZE_KEY);
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parsed)) {
+      return Math.max(STICKY_NOTE_FONT_SIZE_MIN, Math.min(STICKY_NOTE_FONT_SIZE_MAX, parsed));
+    }
+  } catch {
+    // Ignore storage failures in restricted contexts.
+  }
+  return STICKY_NOTE_FONT_SIZE_DEFAULT;
+}
+
+function persistFontSize(fontSize: number): void {
+  try {
+    localStorage.setItem(STICKY_NOTE_FONT_SIZE_KEY, String(fontSize));
+  } catch {
+    // Ignore storage failures in restricted contexts.
   }
 }
 
@@ -485,12 +643,72 @@ function ensureStickyNoteStyles(): void {
 
     .easyview-sticky-note__mode-group {
       display: inline-flex;
-      justify-self: center;
       align-items: center;
       gap: 2px;
       padding: 1px;
       border-radius: 999px;
       background: color-mix(in srgb, var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.28)) 42%, transparent);
+    }
+
+    .easyview-sticky-note__center {
+      display: inline-flex;
+      justify-self: center;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .easyview-sticky-note__display-mode {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 2px;
+    }
+
+    .easyview-sticky-note__display-label {
+      font-size: 9px;
+      line-height: 1;
+      color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+      white-space: nowrap;
+      opacity: 0.72;
+    }
+
+    .easyview-sticky-note__display-label.active {
+      color: var(--vscode-foreground);
+      opacity: 1;
+      font-weight: 700;
+    }
+
+    .easyview-sticky-note__display-toggle {
+      position: relative;
+      width: 26px;
+      height: 14px;
+      border: none;
+      border-radius: 999px;
+      padding: 0;
+      background: color-mix(in srgb, var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.28)) 42%, transparent);
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+
+    .easyview-sticky-note__display-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--mdpre-accent, var(--vscode-button-background, #0e639c));
+      transition: transform 140ms ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+    }
+
+    .easyview-sticky-note__display-toggle.render-display .easyview-sticky-note__display-thumb {
+      transform: translateX(12px);
+    }
+
+    .easyview-sticky-note__display-toggle:hover {
+      background: color-mix(in srgb, var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.42)) 54%, transparent);
     }
 
     .easyview-sticky-note__mode-btn {
@@ -533,10 +751,41 @@ function ensureStickyNoteStyles(): void {
       line-height: 1;
     }
 
+    .easyview-sticky-note__actions {
+      display: inline-flex;
+      align-items: center;
+      justify-self: end;
+      gap: 2px;
+    }
+
+    .easyview-sticky-note__action-btn,
+    .easyview-sticky-note__close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border: none;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--vscode-icon-foreground, var(--vscode-foreground));
+      cursor: pointer;
+      flex: 0 0 auto;
+      padding: 0;
+      line-height: 1;
+    }
+
+    .easyview-sticky-note__action-btn:hover,
     .easyview-sticky-note__close:hover {
       background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
     }
 
+    .easyview-sticky-note__action-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .easyview-sticky-note__action-btn svg,
     .easyview-sticky-note__close svg {
       width: 10px;
       height: 10px;
@@ -554,7 +803,7 @@ function ensureStickyNoteStyles(): void {
     .easyview-sticky-note__editor {
       position: absolute;
       inset: 0;
-      font-size: 13px;
+      font-size: var(--easyview-sticky-note-font-size, 13px);
     }
 
     .easyview-sticky-note__editor .cm-editor,

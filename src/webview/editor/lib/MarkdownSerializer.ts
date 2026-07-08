@@ -12,6 +12,7 @@ import {
   defaultMarkdownSerializer,
 } from 'prosemirror-markdown';
 import type { Node as ProsemirrorNode, Mark } from 'prosemirror-model';
+import { appendEasyViewTableMeta, collectEasyViewTableMeta } from './TableStyleMetadata';
 
 // ─── Node Serializers ──────────────────────────────────────────────────────
 
@@ -133,14 +134,9 @@ function serializeTableAsHtml(state: MarkdownSerializerState, node: ProsemirrorN
       const tag = (r === 0 && isHeader) ? 'th' : 'td';
       const align = cell.attrs.alignment;
       const verticalAlign = cell.attrs.verticalAlignment;
-      const widthAttr = Array.isArray(cell.attrs.colwidth) && cell.attrs.colwidth.length
-        ? ` data-colwidth="${cell.attrs.colwidth.join(',')}"`
-        : '';
-      const styleRules: string[] = [];
-      if (align) styleRules.push(`text-align:${align}`);
-      if (verticalAlign) styleRules.push(`vertical-align:${verticalAlign}`);
-      const styleAttr = styleRules.length ? ` style="${styleRules.join(';')}"` : '';
-      const cellAttrs = `${styleAttr}${widthAttr}`;
+      const alignAttr = align ? ` align="${align}"` : '';
+      const valignAttr = verticalAlign ? ` valign="${verticalAlign}"` : '';
+      const cellAttrs = `${alignAttr}${valignAttr}`;
 
       // Serialize cell content as markdown using the main serializer
       const cellDoc = cell.type.schema.node('doc', null, cell.content.content);
@@ -653,5 +649,8 @@ export const serializer = new MarkdownSerializer(
  * Serialize a ProseMirror document to Markdown.
  */
 export function docToMarkdown(doc: ProsemirrorNode): string {
-  return serializer.serialize(doc, { tightLists: true });
+  return appendEasyViewTableMeta(
+    serializer.serialize(doc, { tightLists: true }),
+    collectEasyViewTableMeta(doc)
+  );
 }

@@ -1035,8 +1035,13 @@ function initEditor() {
   });
   fileHeader.setCommitConfirmHandler((message) => {
     editor.flushSync();
-    fileHeader.setCommitInProgress(true);
+    fileHeader.setCommitInProgress(true, 'commit');
     vscode.postMessage({ type: 'commitFile', message });
+  });
+  fileHeader.setCommitSyncHandler((message) => {
+    editor.flushSync();
+    fileHeader.setCommitInProgress(true, 'sync');
+    vscode.postMessage({ type: 'syncFile', message });
   });
   fileHeader.setTerminalHandler(() => {
     terminalModal.toggle();
@@ -2047,7 +2052,6 @@ function initEditor() {
 
       case 'commitFileCompleted': {
         fileHeader.setCommitInProgress(false);
-        fileHeader.closeCommitModal();
         showToast(typeof message.message === 'string' ? message.message : 'Committed current file');
         break;
       }
@@ -2055,6 +2059,21 @@ function initEditor() {
       case 'commitFileFailed': {
         const messageText = typeof message.message === 'string' ? message.message : 'Failed to commit current file.';
         fileHeader.setCommitInProgress(false);
+        fileHeader.setCommitError(messageText);
+        showToast(messageText);
+        break;
+      }
+
+      case 'syncFileCompleted': {
+        fileHeader.setCommitInProgress(false);
+        fileHeader.closeCommitModal();
+        showToast(typeof message.message === 'string' ? message.message : 'Synced current file');
+        break;
+      }
+
+      case 'syncFileFailed': {
+        const messageText = typeof message.message === 'string' ? message.message : 'Failed to sync current file.';
+        fileHeader.setCommitInProgress(false, 'sync');
         fileHeader.setCommitError(messageText);
         showToast(messageText);
         break;

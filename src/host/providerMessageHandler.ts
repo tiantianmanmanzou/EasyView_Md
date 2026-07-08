@@ -1237,6 +1237,32 @@ async function resolveGitFileContext(document: vscode.TextDocument): Promise<{
   return { root, relativePath, status, diff };
 }
 
+async function resolveGitPushState(root: string): Promise<{
+  hasUpstream: boolean;
+  ahead: number;
+  behind: number;
+}> {
+  try {
+    await execGitOutput(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], root);
+  } catch {
+    return { hasUpstream: false, ahead: 0, behind: 0 };
+  }
+
+  try {
+    const raw = (await execGitOutput(['rev-list', '--left-right', '--count', '@{upstream}...HEAD'], root)).trim();
+    const [behindText = '0', aheadText = '0'] = raw.split(/\s+/);
+    const behind = Number.parseInt(behindText, 10);
+    const ahead = Number.parseInt(aheadText, 10);
+    return {
+      hasUpstream: true,
+      ahead: Number.isFinite(ahead) ? ahead : 0,
+      behind: Number.isFinite(behind) ? behind : 0,
+    };
+  } catch {
+    return { hasUpstream: true, ahead: 0, behind: 0 };
+  }
+}
+
 function truncateForPrompt(value: string, maxChars = 12000): string {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}\n\n[Diff truncated for commit message generation]`;
@@ -1776,6 +1802,78 @@ export async function handleWebviewMessage(
             message: messageText,
           });
           vscode.window.showErrorMessage(`Failed to commit file: ${messageText}`);
+        }
+      });
+      break;
+    }
+
+    case 'syncFile': {
+      if (document.uri.scheme !== 'file') {
+        webviewPanel.webview.postMessage({
+          type: 'syncFileFailed',
+          message: 'Only files on disk can be synced.',
+        });
+        break;
+      }
+
+      const commitMessage = typeof message.message === 'string' ? sanitizeCommitMessage(message.message) : '';
+      if (!commitMessage) {
+        webviewPanel.webview.postMessage({
+          type: 'syncFileFailed',
+          message: 'Commit message cannot be empty.',
+        });
+        break;
+      }
+
+      enqueueOperation(ctx, 'sync current markdown file', async () => {
+        ctx.setIsUpdatingDocument(true);
+        try {
+          await document.save();
+        } finally {
+          ctx.setIsUpdatingDocument(false);
+        }
+
+        try {
+          const gitContext = await resolveGitFileContext(document);
+          let successText = `Synced: ${path.basename(document.uri.fsPath)}`;
+
+          if (gitContext.status) {
+            await execGit(['add', '--', gitContext.relativePath], gitContext.root);
+            await execGit(['commit', '-m', commitMessage, '--', gitContext.relativePath], gitContext.root);
+            await execGit(['push'], gitContext.root);
+          } else {
+            const pushState = await resolveGitPushState(gitContext.root);
+            if (!pushState.hasUpstream) {
+              webviewPanel.webview.postMessage({
+                type: 'syncFileFailed',
+                message: 'Current branch has no upstream remote configured.',
+              });
+              return;
+            }
+            if (pushState.ahead <= 0) {
+              webviewPanel.webview.postMessage({
+                type: 'syncFileFailed',
+                message: 'Current branch has no unpushed commits to sync.',
+              });
+              return;
+            }
+            await execGit(['push'], gitContext.root);
+            successText = `Pushed current branch: ${path.basename(document.uri.fsPath)}`;
+          }
+
+          await ctx.refreshGitChanges?.();
+          webviewPanel.webview.postMessage({
+            type: 'syncFileCompleted',
+            message: successText,
+          });
+          vscode.window.showInformationMessage(successText);
+        } catch (error) {
+          const messageText = toErrorMessage(error);
+          webviewPanel.webview.postMessage({
+            type: 'syncFileFailed',
+            message: messageText,
+          });
+          vscode.window.showErrorMessage(`Failed to sync file: ${messageText}`);
         }
       });
       break;

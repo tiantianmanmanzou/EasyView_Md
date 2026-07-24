@@ -1,5 +1,7 @@
 # EasyView_Md — Native Inline Suggestion Markdown Editor for VS Code
 
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 # Sample
 
 ### Demo Part 1

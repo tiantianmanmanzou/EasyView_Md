@@ -460,6 +460,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const xtermStyleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'media', 'xterm.css')
     ).with({ query: `v=${assetVersion}` });
+    const pdfCjkNormalFontUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'SourceHanSansCN-Normal.otf')
+    ).with({ query: `v=${assetVersion}` });
+    const pdfCjkBoldFontUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'SourceHanSansCN-Heavy.otf')
+    ).with({ query: `v=${assetVersion}` });
+    const pdfSymbolsFontUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'NotoSansSymbols2-Regular.ttf')
+    ).with({ query: `v=${assetVersion}` });
     const nonce = getNonce();
 
     // Get CSV delimiter setting from configuration
@@ -486,7 +495,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         script-src 'nonce-${nonce}';
         img-src ${webview.cspSource} https: http: data:;
         font-src ${webview.cspSource};
-        connect-src https: http:;
+        connect-src ${webview.cspSource} https: http:;
         worker-src 'none';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="${styleUri}" rel="stylesheet">
@@ -520,6 +529,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       // Set system locale and CSV delimiter preference for webview
       window.systemLocale = '${systemLocale}';
       window.csvDelimiterSetting = '${csvDelimiter}';
+      window.__easyviewPdfFonts = ${JSON.stringify({
+        normal: pdfCjkNormalFontUri.toString(),
+        bold: pdfCjkBoldFontUri.toString(),
+        symbols: pdfSymbolsFontUri.toString(),
+      })};
       ${initialData ? `window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};` : ''}
     </script>
 </head>

@@ -10,6 +10,8 @@ import { setPendingCursorForUri } from './openCursorContext';
 import { setPendingDocumentContentForUri } from './openDocumentSnapshot';
 import { logOpenWithDebug } from './openWithDebug';
 import { registerNativeMarkdownImagePaste } from './nativeImagePaste';
+import { registerWordToMarkdownCommand } from './wordToMarkdown';
+import { getInstalledExtensionVersion, notifyExtensionUpdated } from './extensionUpdateNotification';
 
 function execGit(args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -54,10 +56,15 @@ async function migrateDefaultEditorLayoutState(context: vscode.ExtensionContext)
 
 export function activate(context: vscode.ExtensionContext) {
   void migrateDefaultEditorLayoutState(context);
+  const installedVersion = getInstalledExtensionVersion();
+  if (installedVersion) {
+    void notifyExtensionUpdated(context, installedVersion);
+  }
   const mermaidRenderer = NativeMermaidRenderer.register(context);
   context.subscriptions.push(NativeMarkdownDecorator.register(context, mermaidRenderer));
   context.subscriptions.push(MarkdownEditorProvider.register(context));
   context.subscriptions.push(registerNativeMarkdownImagePaste());
+  context.subscriptions.push(registerWordToMarkdownCommand());
 
   context.subscriptions.push(
     vscode.commands.registerCommand('inlineMd.openEditor', async (uri?: vscode.Uri) => {

@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "EasyView_Md supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "1.0.247",
+  "version": "2.0.0",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "assets/logo.png",
@@ -73,6 +73,11 @@
         "icon": "$(edit)"
       },
       {
+        "command": "inlineMd.convertWordToMarkdown",
+        "title": "Convert to Markdown with Easyview_Md",
+        "category": "EasyView_Md"
+      },
+      {
         "command": "inlineMd.exportHtmlLight",
         "title": "Export to HTML (Light)",
         "category": "EasyView_Md"
@@ -121,6 +126,11 @@
           "command": "inlineMd.openNativeEditor",
           "when": "resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
           "group": "navigation@2"
+        },
+        {
+          "command": "inlineMd.convertWordToMarkdown",
+          "when": "resourceExtname == .docx || resourceExtname == .doc",
+          "group": "navigation@3"
         }
       ]
     },
@@ -221,6 +231,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/lodash": "^4.17.23",
     "@types/markdown-it": "^14.1.2",
+    "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.85.0",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1",
@@ -262,6 +273,7 @@
     "pdf-lib": "^1.17.1",
     "pdfmake": "^0.3.4",
     "plantuml-encoder": "^1.4.0",
+    "pngjs": "^7.0.0",
     "prosemirror-commands": "^1.7.1",
     "prosemirror-dropcursor": "^1.8.2",
     "prosemirror-gapcursor": "^1.4.0",

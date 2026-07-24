@@ -53,29 +53,35 @@ export async function collectMermaidSvgs(doc: ProsemirrorNode, palette: PdfPalet
         const { svg } = await mermaid.render(tempId, source);
         map.set(source, svg);
         tempEl.remove();
-      } catch {
-        // skip individual diagram
+      } catch (error) {
+        // Keep collecting: a visible editor SVG can still be used below when
+        // Mermaid's export-time renderer rejects an otherwise valid diagram.
+        console.warn('[InLineMd PDF] Mermaid re-render failed; using editor SVG if available:', error);
       }
     }
-  } catch {
-    // mermaid import failed — fall back to DOM SVGs
-    try {
-      const wrappers = document.querySelectorAll('.mermaid-diagram-wrapper');
-      for (const wrapper of wrappers) {
-        const svgEl = wrapper.querySelector('svg');
-        const pre = wrapper.previousElementSibling;
-        if (svgEl && pre) {
-          const code = pre.querySelector('code');
-          const text = code?.textContent?.trim() || pre.textContent?.trim() || '';
-          if (text && sources.includes(text) && !map.has(text)) {
-            const svgString = new XMLSerializer().serializeToString(svgEl);
-            map.set(text, svgString);
-          }
+  } catch (error) {
+    console.warn('[InLineMd PDF] Mermaid import failed; using editor SVG if available:', error);
+  }
+
+  // Always fill unresolved sources from the diagram currently visible in the
+  // editor. Previously this only ran when dynamic import failed, so a single
+  // transient re-render failure downgraded that diagram to source code in PDF.
+  try {
+    const wrappers = document.querySelectorAll('.mermaid-diagram-wrapper');
+    for (const wrapper of wrappers) {
+      const svgEl = wrapper.querySelector('svg');
+      const pre = wrapper.previousElementSibling;
+      if (svgEl && pre) {
+        const code = pre.querySelector('code');
+        const text = code?.textContent?.trim() || pre.textContent?.trim() || '';
+        if (text && sources.includes(text) && !map.has(text)) {
+          const svgString = new XMLSerializer().serializeToString(svgEl);
+          map.set(text, svgString);
         }
       }
-    } catch {
-      // ignore
     }
+  } catch (error) {
+    console.warn('[InLineMd PDF] Unable to read editor Mermaid SVG:', error);
   }
 
   return map;
@@ -100,7 +106,7 @@ export async function convertMermaidSvgsToPng(
         result.set(source, pngData);
       }
     } catch {
-      // skip — will fall back to SVG or code block
+      // Skip invalid SVG — PDF export falls back to a readable code block.
     }
   }
 
@@ -117,22 +123,24 @@ export function svgToPng(svgString: string, bgColor = '#ffffff'): Promise<{ base
       const parser = new DOMParser();
       const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
       const svgEl = svgDoc.documentElement;
+      if (svgEl.localName !== 'svg' || svgDoc.querySelector('parsererror')) {
+        resolve(null);
+        return;
+      }
 
-      // Get SVG dimensions
-      let width = parseFloat(svgEl.getAttribute('width') || '0');
-      let height = parseFloat(svgEl.getAttribute('height') || '0');
+      // Mermaid often emits width/height as percentages. Those are not canvas
+      // pixels and used to crop the right/bottom of the diagram. Prefer the
+      // viewBox whenever it is present, then fall back to numeric dimensions.
+      const viewBox = svgEl.getAttribute('viewBox');
+      const viewBoxParts = viewBox?.trim().split(/[\s,]+/) || [];
+      const viewBoxWidth = parseFloat(viewBoxParts[2] || '0');
+      const viewBoxHeight = parseFloat(viewBoxParts[3] || '0');
+      let width = viewBoxWidth || parseFloat(svgEl.getAttribute('width') || '0');
+      let height = viewBoxHeight || parseFloat(svgEl.getAttribute('height') || '0');
 
-      // If no explicit dimensions, try viewBox
       if (!width || !height) {
-        const viewBox = svgEl.getAttribute('viewBox');
-        if (viewBox) {
-          const parts = viewBox.split(/[\s,]+/);
-          width = parseFloat(parts[2]) || 800;
-          height = parseFloat(parts[3]) || 600;
-        } else {
-          width = 800;
-          height = 600;
-        }
+        width = 800;
+        height = 600;
       }
 
       // Ensure SVG has explicit dimensions and white background

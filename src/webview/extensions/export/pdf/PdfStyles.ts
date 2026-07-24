@@ -4,13 +4,13 @@
 
 import type { PdfPalette } from './PdfPalette';
 
-export function getPageConfig(palette: PdfPalette) {
+export function getPageConfig(palette: PdfPalette, bodyFont = 'Roboto') {
   return {
     pageSize: 'A4' as const,
     pageOrientation: 'portrait' as const,
     pageMargins: [40, 25, 40, 50] as [number, number, number, number],
     defaultStyle: {
-      font: 'Roboto',
+      font: bodyFont,
       fontSize: 11,
       lineHeight: 1.25,
       color: palette.text,

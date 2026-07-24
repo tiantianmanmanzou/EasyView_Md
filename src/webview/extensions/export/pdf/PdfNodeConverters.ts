@@ -19,9 +19,24 @@ import {
 } from './PdfStyles';
 import { type PdfPalette } from './PdfPalette';
 import { highlightCode } from './PdfCodeHighlighting';
-import { splitEmoji, splitCodeSegmentsForEmoji, wrapWithEmojiFont, lightenHex, getEmojiColor } from './PdfEmojiUtils';
+import { splitEmoji, splitCodeSegmentsForEmoji, wrapWithEmojiFont, lightenHex, getEmojiColor, getPdfSymbolFont } from './PdfEmojiUtils';
 
 type Content = any;
+
+// Roboto Mono has no CJK glyphs. Preserve monospace for ASCII source while
+// switching CJK-bearing source snippets to the bundled Chinese PDF font.
+function getCodeFont(text: string): 'RobotoMono' | 'SourceHanSansCN' {
+  return /[\u3400-\u9FFF\uF900-\uFAFF]/u.test(text) ? 'SourceHanSansCN' : 'RobotoMono';
+}
+
+/**
+ * A literal `\\-` is commonly stored in table cells to prevent Markdown from
+ * treating a dash as table syntax. It is an authoring escape, not visible
+ * content, so restore the intended dash before handing text to pdfmake.
+ */
+function normalizePdfText(text: string): string {
+  return text.replace(/\\-/g, '-');
+}
 
 // ─── Context ──────────────────────────────────────────────────────────────
 
@@ -533,6 +548,7 @@ function convertHorizontalRule(ctx: ConvertContext): Content {
 async function convertCodeBlock(node: ProsemirrorNode, ctx: ConvertContext): Promise<Content> {
   const language = node.attrs.language || '';
   const text = (node.textContent || '').replace(/\n+$/, ''); // trim trailing newlines
+  const codeFont = getCodeFont(text);
 
   // Check if this is a mermaid diagram
   if (language === 'mermaid' || language === 'mermaidjs') {
@@ -576,7 +592,7 @@ async function convertCodeBlock(node: ProsemirrorNode, ctx: ConvertContext): Pro
     const emojiSplit = splitCodeSegmentsForEmoji(segments);
     codeContent = {
       text: emojiSplit,
-      font: 'RobotoMono',
+      font: codeFont,
       fontSize: 9,
       lineHeight: 1.4,
       preserveLeadingSpaces: true,
@@ -588,10 +604,10 @@ async function convertCodeBlock(node: ProsemirrorNode, ctx: ConvertContext): Pro
     if (hasEmoji) {
       codeContent = {
         text: parts.map(p => p.isEmoji
-          ? { text: p.text, font: 'NotoEmoji' }
+          ? { text: p.text, font: getPdfSymbolFont(p.text) }
           : { text: p.text }
         ),
-        font: 'RobotoMono',
+        font: codeFont,
         fontSize: 9,
         lineHeight: 1.4,
         preserveLeadingSpaces: true,
@@ -599,7 +615,7 @@ async function convertCodeBlock(node: ProsemirrorNode, ctx: ConvertContext): Pro
     } else {
       codeContent = {
         text: text,
-        font: 'RobotoMono',
+        font: codeFont,
         fontSize: 9,
         lineHeight: 1.4,
         preserveLeadingSpaces: true,
@@ -641,28 +657,16 @@ function convertMermaidBlock(text: string, ctx: ConvertContext): Content {
     }
     return result;
   }
-  // Fallback: try SVG directly (may have rendering issues)
-  const svg = ctx.mermaidSvgMap.get(text);
-  if (svg) {
-    try {
-      return {
-        svg: svg,
-        fit: [CONTENT_WIDTH, MAX_HEIGHT],
-        alignment: 'center' as const,
-        margin: [0, 8, 0, 8] as [number, number, number, number],
-      } as any;
-    } catch {
-      // fallback below
-    }
-  }
-  // Fallback: show as code block
+  // Do not pass raw SVG to pdfmake. Mermaid may emit SVG that browsers can
+  // display but pdfmake's strict XML parser rejects, which aborts the export.
+  // If rasterization failed, retain the source as a readable code block.
   return {
     table: {
       widths: ['*'],
       body: [[{
         stack: [
           { text: 'mermaid', fontSize: 8, color: ctx.palette.textMuted, bold: true, alignment: 'right' as const, margin: [0, 0, 0, 4] as any },
-          { text: text, font: 'RobotoMono', fontSize: 9, lineHeight: 1.4, preserveLeadingSpaces: true },
+          { text: text, font: getCodeFont(text), fontSize: 9, lineHeight: 1.4, preserveLeadingSpaces: true },
         ],
       }]],
     },
@@ -1492,6 +1496,7 @@ function convertInlineNode(node: ProsemirrorNode, ctx: ConvertContext): any {
  * Apply ProseMirror marks to a text string, returning a pdfmake text object.
  */
 function applyMarks(text: string, marks: readonly Mark[], palette: PdfPalette): any {
+  text = normalizePdfText(text);
   if (!marks || marks.length === 0) {
     return text;
   }
@@ -1513,7 +1518,7 @@ function applyMarks(text: string, marks: readonly Mark[], palette: PdfPalette): 
         result.decoration = addDecoration(result.decoration, 'lineThrough');
         break;
       case 'code_inline':
-        result.font = 'RobotoMono';
+        result.font = getCodeFont(text);
         result.fontSize = 10;
         result.background = palette.codeInlineBg;
         result.color = palette.codeInlineColor;
@@ -1551,7 +1556,7 @@ function applyMarks(text: string, marks: readonly Mark[], palette: PdfPalette): 
         const tag = mark.attrs.tag;
         if (tag === 'kbd') {
           result.text = `\u00A0${text}\u00A0`;
-          result.font = 'RobotoMono';
+          result.font = getCodeFont(text);
           result.fontSize = 9;
           result.background = palette.kbdBg;
           result.bold = true;
@@ -1564,7 +1569,7 @@ function applyMarks(text: string, marks: readonly Mark[], palette: PdfPalette): 
         } else if (tag === 'small') {
           result.fontSize = 9;
         } else if (tag === 'var' || tag === 'samp') {
-          result.font = 'RobotoMono';
+          result.font = getCodeFont(text);
           result.italics = true;
         } else if (tag === 'abbr') {
           result.decoration = addDecoration(result.decoration, 'underline');

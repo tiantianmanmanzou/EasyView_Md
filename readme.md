@@ -23,6 +23,15 @@ The legacy custom-editor / WYSIWYG path is still available as an optional manual
 
 but the default direction is native-editor enhancement.
 
+## What's New in 2.0.0
+
+- **Word to Markdown conversion** — right-click a `.docx` or `.doc` file and select `Convert to Markdown with Easyview_Md`. The converted Markdown is created beside the source file, with extracted images stored in a matching `.assets` folder.
+- **Reliable Word image conversion** — Word image dimensions are retained using native Markdown image attributes, and transparent PNGs are flattened onto a white background for consistent rendering.
+- **Portable image paste** — when Markdown or HTML containing Base64 images is pasted into the native VS Code editor, images are written to the current document's `.assets` folder and replaced with relative image references.
+- **Rich copy with images** — copying a selection containing images keeps formatted HTML and embeds image data, so pasting into other rich-text editors retains the selected text and images.
+- **Improved DOCX and PDF export** — DOCX export keeps H1-H4 headings black and bold without adding blank body paragraphs; PDF export includes bundled Chinese and symbol fonts for more reliable CJK, emoji, diagram, and special-character output.
+- **Update notification** — after a new EasyView_Md version is installed and activated, VS Code shows a native update message with a link to the release notes. First installation only records the version and does not interrupt the user.
+
 ## Editor
 
 - **Native inline suggestion support** — keep Copilot / VS Code inline suggestion on the native Markdown editor path
@@ -156,9 +165,22 @@ Render Mermaid diagrams directly in the editor:
 
 - **Drag & drop** from file system
 - **Paste** from clipboard
+- **Portable image references** — Base64 images pasted as Markdown or HTML in the native editor are saved to the document's `.assets` directory automatically
+- **Rich copy** — copy selected formatted content and images to paste into other rich-text editors
 - **Image toolbar** — width/height controls
 - **Insert via slash menu** — by URL or file picker
 - Formats: PNG, JPEG, GIF, SVG, WebP, BMP, ICO
+
+### Word to Markdown
+
+Convert Word files directly from VS Code Explorer:
+
+1. Right-click a `.docx` or `.doc` file.
+2. Select **Convert to Markdown with Easyview_Md**.
+3. EasyView_Md writes a Markdown file beside the source document and puts extracted images in `<document>.assets`.
+4. Select **Open Markdown** in the completion notification to open the converted file in EasyView_Md.
+
+The conversion keeps document headings, tables, image alt text and dimensions. PNG images with transparency are converted to an opaque white background. `.docx` conversion requires [Pandoc](https://pandoc.org/); legacy `.doc` conversion additionally requires LibreOffice (`soffice`).
 
 ### Other Block Types
 
@@ -217,6 +239,14 @@ Render Mermaid diagrams directly in the editor:
 - Auto landscape pages for wide tables
 - Footnotes, frontmatter, keyword badges — all preserved
 - Page numbers in footer
+- Bundled Chinese and symbol fonts for reliable CJK, emoji, and special-character output
+
+### DOCX
+
+- Export Markdown to DOCX from the export menu
+- H1-H4 headings are exported as black bold headings
+- Consecutive body text lines remain line breaks instead of becoming empty-looking paragraphs
+- Markdown image size attributes such as `{width=357}` are honored without being exported as visible text
 
 ### CSV
 
@@ -247,6 +277,7 @@ Render Mermaid diagrams directly in the editor:
 | Command                | Description                                              |
 | ---------------------- | -------------------------------------------------------- |
 | `Open with EasyView_Md` | Open current markdown file in the optional custom editor |
+| `Convert to Markdown with Easyview_Md` | Convert a `.docx` or `.doc` file from Explorer into Markdown |
 | `Export to HTML (Light)` | Export as HTML with light theme                          |
 | `Export to HTML (Dark)` | Export as HTML with dark theme                           |
 | `Export to PDF (Light)` | Export as PDF with light theme                           |
@@ -266,7 +297,7 @@ Render Mermaid diagrams directly in the editor:
 | `inlineMd.nativeDecorations.enabled`       | Enable lightweight inline markdown decorations in the native VS Code editor     | `true`  |
 | `inlineMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `false` |
 | `inlineMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor         | `true`  |
-| `inlineMd.nativeEditor.forceMonospaceFont` | Force Markdown native source editors to use a CJK-aware monospace font family   | `true`  |
+| `inlineMd.nativeEditor.forceMonospaceFont` | Keep CJK-aware language defaults while preserving explicit user/workspace font settings | `true`  |
 
 ### Per-File Settings
 

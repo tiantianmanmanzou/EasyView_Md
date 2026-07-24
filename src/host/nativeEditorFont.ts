@@ -16,21 +16,8 @@ export async function ensureNativeMarkdownEditorFont(document: vscode.TextDocume
   if (!inlineConfig.get<boolean>('nativeEditor.forceMonospaceFont', true)) {
     return;
   }
-
-  const languageId = document.languageId === 'mdx' ? 'mdx' : 'markdown';
-  const editorConfig = vscode.workspace.getConfiguration('editor', {
-    languageId,
-    uri: document.uri,
-  });
-  const currentFontFamily = editorConfig.get<string>('fontFamily', '');
-  if (currentFontFamily === NATIVE_MARKDOWN_MONOSPACE_FONT_FAMILY) {
-    return;
-  }
-
-  await editorConfig.update(
-    'fontFamily',
-    NATIVE_MARKDOWN_MONOSPACE_FONT_FAMILY,
-    vscode.ConfigurationTarget.Global,
-    true
-  );
+  // Do not mutate user settings while opening native source mode.
+  // Language-scoped defaults already come from package.json configurationDefaults,
+  // and explicit user/workspace overrides should remain authoritative.
+  return;
 }

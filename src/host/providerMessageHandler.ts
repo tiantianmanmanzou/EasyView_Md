@@ -400,24 +400,37 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
 
   paragraphs.push(new Paragraph({
     heading: HeadingLevel.HEADING_1,
-    children: [new TextRun(title || 'Document')],
+    children: [new TextRun({ text: title || 'Document', bold: true, color: '000000' })],
     spacing: { after: 280 },
   }));
+
+  // Consecutive Markdown text lines are soft line breaks, not separate Word
+  // paragraphs. Keeping them in one paragraph avoids an empty-looking line.
+  let pendingBodyRuns: TextRun[] = [];
+  const flushPendingBody = () => {
+    if (pendingBodyRuns.length === 0) return;
+    paragraphs.push(new Paragraph({
+      children: pendingBodyRuns,
+      spacing: { after: 0 },
+    }));
+    pendingBodyRuns = [];
+  };
 
   for (const rawLine of lines) {
     const line = rawLine.replace(/\t/g, '    ');
     const trimmed = line.trim();
 
     if (!trimmed) {
-      paragraphs.push(new Paragraph({ text: '' }));
+      flushPendingBody();
       continue;
     }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
+      flushPendingBody();
       const level = headingMatch[1].length;
       const text = stripMarkdownInline(headingMatch[2]);
-      const headingMap: Record<number, HeadingLevel> = {
+      const headingMap: Record<number, (typeof HeadingLevel)[keyof typeof HeadingLevel]> = {
         1: HeadingLevel.HEADING_1,
         2: HeadingLevel.HEADING_2,
         3: HeadingLevel.HEADING_3,
@@ -427,13 +440,16 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
       };
       paragraphs.push(new Paragraph({
         heading: headingMap[level] ?? HeadingLevel.HEADING_3,
-        children: [new TextRun(text)],
+        children: [level <= 4
+          ? new TextRun({ text, bold: true, color: '000000' })
+          : new TextRun(text)],
       }));
       continue;
     }
 
     const bulletMatch = line.match(/^(\s*)([-*+])\s+(.*)$/);
     if (bulletMatch) {
+      flushPendingBody();
       const level = Math.max(0, Math.floor((bulletMatch[1]?.length ?? 0) / 2));
       paragraphs.push(new Paragraph({
         bullet: { level: Math.min(level, 8) },
@@ -444,6 +460,7 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
 
     const orderedMatch = line.match(/^(\s*)\d+\.\s+(.*)$/);
     if (orderedMatch) {
+      flushPendingBody();
       const level = Math.max(0, Math.floor((orderedMatch[1]?.length ?? 0) / 2));
       paragraphs.push(new Paragraph({
         numbering: {
@@ -457,6 +474,7 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
 
     const quoteMatch = line.match(/^>\s?(.*)$/);
     if (quoteMatch) {
+      flushPendingBody();
       paragraphs.push(new Paragraph({
         indent: { left: 480 },
         border: { left: { color: '999999', size: 6, space: 8, style: 'single' } },
@@ -466,6 +484,7 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
     }
 
     if (/^---+$/.test(trimmed) || /^___+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
+      flushPendingBody();
       paragraphs.push(new Paragraph({
         thematicBreak: true,
       }));
@@ -478,6 +497,7 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
     // so they are not emitted as plain text in DOCX.
     const imageMatches = [...line.matchAll(/!\[([^\]]*)\]\(([^)]+)\)(?:\s*\{[^}]+\})?/g)];
     if (imageMatches.length > 0) {
+      flushPendingBody();
       const children: (TextRun | ImageRun)[] = [];
       let cursor = 0;
       for (const match of imageMatches) {
@@ -526,10 +546,13 @@ async function markdownToDocx(markdown: string, title: string, docDir: string): 
       continue;
     }
 
-    paragraphs.push(new Paragraph({
-      children: [new TextRun(stripMarkdownInline(trimmed))],
+    pendingBodyRuns.push(new TextRun({
+      text: stripMarkdownInline(trimmed),
+      break: pendingBodyRuns.length > 0 ? 1 : undefined,
     }));
   }
+
+  flushPendingBody();
 
   return new DocxDocument({
     numbering: {

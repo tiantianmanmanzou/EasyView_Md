@@ -24,6 +24,12 @@ export const EMOJI_RE = /(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\u200D(?:\
 
 /** Unicode symbols that Roboto doesn't have but NotoEmoji does (checkmarks, ballot boxes, etc.) */
 const SYMBOL_RE = /[\u2600-\u27BF\u2B50-\u2B55\u2702-\u27B0\u2300-\u23FF\u25A0-\u25FF\u2610-\u2612\u2713-\u2717\u2190-\u21FF]/g;
+const BALLOT_BOX_RE = /^[\u2610-\u2612]$/u;
+
+/** Use the dedicated symbol font for ballot boxes; NotoEmoji has no glyphs for them. */
+export function getPdfSymbolFont(symbol: string): 'NotoSymbols2' | 'NotoEmoji' {
+  return BALLOT_BOX_RE.test(symbol) ? 'NotoSymbols2' : 'NotoEmoji';
+}
 
 /**
  * Split text into segments of regular text and emoji/symbol text.
@@ -148,7 +154,7 @@ export function splitCodeSegmentsForEmoji(
     } else {
       for (const part of parts) {
         if (part.isEmoji) {
-          result.push({ text: part.text, color: seg.color, font: 'NotoEmoji' });
+          result.push({ text: part.text, color: seg.color, font: getPdfSymbolFont(part.text) });
         } else {
           result.push({ text: part.text, color: seg.color });
         }
@@ -177,7 +183,7 @@ export function wrapWithEmojiFont(textObj: any): any[] {
   return parts.map(part => {
     if (part.isEmoji) {
       const emojiColor = getEmojiColor(part.text);
-      const seg: any = { ...baseProps, text: part.text, font: 'NotoEmoji' };
+      const seg: any = { ...baseProps, text: part.text, font: getPdfSymbolFont(part.text) };
       if (emojiColor) seg.color = emojiColor;
       return seg;
     }

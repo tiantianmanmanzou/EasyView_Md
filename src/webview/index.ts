@@ -1092,6 +1092,16 @@ function initEditor() {
     });
   };
 
+  const clipboardImageDataCache = new Map<string, Promise<string | null>>();
+  (window as any).__easyviewGetImageDataUrl = (originalSrc: string): Promise<string | null> => {
+    const cached = clipboardImageDataCache.get(originalSrc);
+    if (cached) return cached;
+    const request = requestImageBase64FromHost(originalSrc, 15000)
+      .catch(() => null);
+    clipboardImageDataCache.set(originalSrc, request);
+    return request;
+  };
+
   window.addEventListener('inlinemd:resolveImageFallback', (event: Event) => {
     const detail = (event as CustomEvent<{
       originalSrc?: string;

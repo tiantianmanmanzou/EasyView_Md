@@ -31,13 +31,33 @@ import { collectMathImages } from './PdfMathRenderer';
 import { type ConvertContext, convertNode } from './PdfNodeConverters';
 
 // Lazy initialization — deferred until first PDF export to avoid crashing webview on load
-let _pdfMakeReady = false;
+let pdfMakeReady: Promise<void> | null = null;
+let pdfDefaultFont = 'Roboto';
 
-function ensurePdfMakeReady() {
-  if (_pdfMakeReady) return;
-  _pdfMakeReady = true;
+function getPdfFontUris(): { normal?: string; bold?: string; symbols?: string } {
+  return (window as Window & {
+    __easyviewPdfFonts?: { normal?: string; bold?: string; symbols?: string };
+  }).__easyviewPdfFonts ?? {};
+}
 
-  try {
+async function fetchFontAsBase64(uri: string): Promise<string> {
+  const response = await fetch(uri);
+  if (!response.ok) {
+    throw new Error(`Failed to load PDF font: ${response.status}`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let start = 0; start < bytes.length; start += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(start, start + chunkSize)));
+  }
+  return btoa(chunks.join(''));
+}
+
+async function ensurePdfMakeReady(): Promise<void> {
+  if (pdfMakeReady) return pdfMakeReady;
+
+  pdfMakeReady = (async () => {
     // Register built-in Roboto font files
     // Use .default because esbuild wraps CJS vfs_fonts.js in ESM namespace
     const vfsData = (pdfFonts as any).default || pdfFonts;
@@ -66,10 +86,56 @@ function ensurePdfMakeReady() {
         italics: 'NotoEmoji-Regular.ttf',
         bolditalics: 'NotoEmoji-Regular.ttf',
       };
+
+      const cjkFonts = getPdfFontUris();
+      if (cjkFonts.normal && cjkFonts.bold) {
+        try {
+          const [normal, bold] = await Promise.all([
+            fetchFontAsBase64(cjkFonts.normal),
+            fetchFontAsBase64(cjkFonts.bold),
+          ]);
+          (pdfMake as any).addVirtualFileSystem({
+            'SourceHanSansCN-Normal.otf': normal,
+            'SourceHanSansCN-Heavy.otf': bold,
+          });
+          fonts.SourceHanSansCN = {
+            normal: 'SourceHanSansCN-Normal.otf',
+            bold: 'SourceHanSansCN-Heavy.otf',
+            italics: 'SourceHanSansCN-Normal.otf',
+            bolditalics: 'SourceHanSansCN-Heavy.otf',
+          };
+          pdfDefaultFont = 'SourceHanSansCN';
+        } catch (error) {
+          console.warn('[InLineMd] CJK PDF font unavailable; using Roboto fallback:', error);
+        }
+      }
+
+      // Noto Sans Symbols 2 supplies ballot-box glyphs that neither the
+      // Chinese body font nor the bundled emoji font contains.
+      if (cjkFonts.symbols) {
+        try {
+          const symbols = await fetchFontAsBase64(cjkFonts.symbols);
+          (pdfMake as any).addVirtualFileSystem({
+            'NotoSansSymbols2-Regular.ttf': symbols,
+          });
+          fonts.NotoSymbols2 = {
+            normal: 'NotoSansSymbols2-Regular.ttf',
+            bold: 'NotoSansSymbols2-Regular.ttf',
+            italics: 'NotoSansSymbols2-Regular.ttf',
+            bolditalics: 'NotoSansSymbols2-Regular.ttf',
+          };
+        } catch (error) {
+          console.warn('[InLineMd] PDF symbol font unavailable:', error);
+        }
+      }
     }
+  })();
+
+  try {
+    await pdfMakeReady;
   } catch (err) {
     console.error('[InLineMd] pdfmake init failed:', err);
-    _pdfMakeReady = false;
+    pdfMakeReady = null;
     throw err;
   }
 }
@@ -90,7 +156,7 @@ export async function generatePdfBase64(
   const palette = options.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE;
 
   // Initialize pdfmake on first call
-  ensurePdfMakeReady();
+  await ensurePdfMakeReady();
 
   const t0 = performance.now();
 
@@ -172,7 +238,7 @@ async function buildDocDefinition(
   // so text/headings/etc. don't stretch to 761pt
   const finalContent = centerContentOnLandscapePages(grouped);
 
-  const pageConfig = getPageConfig(palette);
+  const pageConfig = getPageConfig(palette, pdfDefaultFont);
 
   const dd: any = {
     pageSize: pageConfig.pageSize,

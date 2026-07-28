@@ -24,12 +24,15 @@ type TableBlock = {
 
 const MONOSPACE_FONT_FAMILY = NATIVE_MARKDOWN_MONOSPACE_FONT_FAMILY;
 const HEADING_DECORATION_STYLES = [
-  { fontSize: '180%', fontWeight: '700' },
-  { fontSize: '140%', fontWeight: '700' },
-  { fontSize: '120%', fontWeight: '700' },
-  { fontSize: '110%', fontWeight: '650' },
+  // Native editor decorations cannot expand the actual line box height.
+  // Keep heading sizes conservative so they stay readable without covering
+  // the following lines in VS Code's source editor.
+  { fontSize: '145%', fontWeight: '700' },
+  { fontSize: '128%', fontWeight: '700' },
+  { fontSize: '116%', fontWeight: '700' },
+  { fontSize: '108%', fontWeight: '650' },
   { fontSize: '100%', fontWeight: '650' },
-  { fontSize: '90%', fontWeight: '650' },
+  { fontSize: '94%', fontWeight: '650' },
 ];
 
 export class NativeMarkdownDecorator implements vscode.Disposable {

@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器增强与可选的可视化编辑器。Markdown 文件默认保留在 VS Code 原生 `TextEditor` 路径中，因此可继续使用 Copilot 和 VS Code 的内联建议能力；需要可视化编辑时，可手动使用 **Open with EasyView_Md** 打开。
+EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器与可选的可视化编辑器。Markdown 文件可保留在 VS Code 原生 `TextEditor` 中；需要可视化编辑时，可手动使用 **Open with EasyView_Md** 打开。
 
 ## 示例
 
@@ -29,7 +29,7 @@ EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器增�
 
 ## 编辑能力
 
-- **原生内联建议支持**：Markdown 继续走 VS Code 原生编辑器路径，可使用 Copilot / VS Code 内联建议。
+- **原生编辑器兼容**：无需可视化编辑时，Markdown 文件可继续使用 VS Code 原生文本编辑器打开。
 - **原生 Markdown 装饰**：在 VS Code 编辑器中提供轻量级的行内格式展示。
 - **可视化编辑**：支持完整 Markdown 序列化的所见即所得编辑。
 - **源码模式**：使用 CodeMirror 6 编辑原始 Markdown，快捷键 `Ctrl+/` 或 macOS `Option+Q`。
@@ -156,7 +156,6 @@ EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器增�
 
 - Markdown 默认仍使用 VS Code 原生文本编辑器。
 - 需要可视化编辑时，使用 **Open with EasyView_Md**。
-- 原生编辑器内联建议能力不依赖 Webview 自定义编辑器。
 
 ### 命令
 

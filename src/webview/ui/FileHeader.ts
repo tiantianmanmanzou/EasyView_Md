@@ -1082,7 +1082,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setTitleWithShortcut(commitBtn, 'Commit current file', 'commitFile');
     setTitleWithShortcut(terminalBtn, 'Open embedded terminal', 'toggleTerminal');
     setTitleWithShortcut(stickyNoteBtn, 'Toggle sticky note editor', 'toggleStickyNote');
-    setTitleWithShortcut(sourceBtn, 'Open native source mode with inline suggestions', 'openSourceMode');
+    setTitleWithShortcut(sourceBtn, 'Open native source mode', 'openSourceMode');
     syncExternalFollowButton(externalFollowEnabled);
     setTitleWithShortcut(themeToggleBtn, themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', 'toggleTheme');
   };

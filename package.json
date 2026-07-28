@@ -1,8 +1,8 @@
 {
   "name": "easyview-md",
   "displayName": "EasyView_Md",
-  "description": "EasyView_Md supports native inline suggestion via native TextEditor + decorations/CodeLens/hover/overlay.",
-  "version": "2.0.0",
+  "description": "A visual Markdown editor for VS Code with rich editing, document conversion, and export tools.",
+  "version": "2.0.1",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "assets/logo.png",
@@ -24,11 +24,10 @@
     "markdown",
     "wysiwyg",
     "editor",
-    "native-inline-suggestion",
-    "decorations",
-    "codelens",
-    "hover",
-    "overlay"
+    "visual-editor",
+    "markdown-editor",
+    "document-converter",
+    "export"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [

@@ -1540,11 +1540,6 @@ export async function handleWebviewMessage(
         editor.selection = new vscode.Selection(position, position);
         editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 
-        try {
-          await vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
-        } catch {
-          // Native inline suggestions remain available even if explicit triggering is unavailable.
-        }
         },
         (messageText) => {
           vscode.window.showErrorMessage(`Failed to open native source mode: ${messageText}`);
@@ -1559,9 +1554,7 @@ export async function handleWebviewMessage(
       const character = typeof message.character === 'number' ? message.character : 0;
       const wordPrefix = typeof message.wordPrefix === 'string' ? message.wordPrefix : '';
 
-      logInlineSuggest(
-        `request: custom-editor/webview path does not have a native inline-suggestion host; use VS Code text editor for ${document.uri.toString()}`
-      );
+      logInlineSuggest(`request: custom-editor completion is unavailable for ${document.uri.toString()}`);
 
       webviewPanel.webview.postMessage({
         type: 'tabCompletionResponse',

@@ -1,4 +1,4 @@
-# EasyView_Md — Native Inline Suggestion Markdown Editor for VS Code
+# EasyView_Md — Visual Markdown Editor for VS Code
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -16,14 +16,7 @@
 
 ![](./assets/demo_part3.gif)
 
-EasyView_Md supports **native inline suggestion** in VS Code.
-
-Its target architecture is **native `TextEditor` + decorations / CodeLens / hover / overlay**,
-so Markdown files can stay on the native editor path instead of leaving the VS Code editing host.
-
-The legacy custom-editor / WYSIWYG path is still available as an optional manual editor,
-
-but the default direction is native-editor enhancement.
+EasyView_Md is a feature-rich Markdown editor for VS Code. Markdown files can remain in the native VS Code editor, or be opened manually in the visual editor when richer editing tools are needed.
 
 ## What's New in 2.0.0
 
@@ -36,8 +29,7 @@ but the default direction is native-editor enhancement.
 
 ## Editor
 
-- **Native inline suggestion support** — keep Copilot / VS Code inline suggestion on the native Markdown editor path
-- **Native editor enhancement architecture** — based on `TextEditor` + decorations / CodeLens / hover / overlay
+- **Native editor compatibility** — keep Markdown files on the VS Code text editor path when visual editing is not needed
 - **Native markdown decorations** — lightweight inline styling directly in the VS Code editor
 - **WYSIWYG editing** — visual editing with full Markdown serialization
 - **Source mode** — switch to raw Markdown editing with CodeMirror 6 (`Ctrl+/` or `Option+Q`)
@@ -74,7 +66,7 @@ but the default direction is native-editor enhancement.
 - **Scroll to bottom** — jump to bottom of current editor (`Option+↓`)
 - **Stage current file** — stage current markdown file (`Option+S`)
 - **History panel** — toggle history panel from toolbar button
-- **Native source mode** — open native source mode with inline suggestions (`Ctrl+/` or `Option+Q`)
+- **Native source mode** — open raw Markdown in the VS Code editor (`Ctrl+/` or `Option+Q`)
 - **Export menu** — `Export HTML (Light)`, `Export HTML (Dark)`, `Export PDF (Light)`, `Export PDF (Dark)`
 - **Theme mode toggle** — switch light/dark mode (`Option+R`)
 - **Accent theme selector** — `Default text`, `Blue`, `Orange red`, `Green`, `Purple`, `Cherry red`
@@ -272,7 +264,6 @@ The conversion keeps document headings, tables, image alt text and dimensions. P
 
 - **Default open behavior** — Markdown files stay in the native VS Code text editor
 - **Optional custom editor** — the legacy custom editor can still be opened manually when needed
-- **Native inline suggestion host** — available on the native editor path, not on the legacy webview custom-editor path
 
 ### Commands
 

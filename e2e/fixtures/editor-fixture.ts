@@ -40,15 +40,10 @@ export class EditorPage {
    */
   async getMarkdown(): Promise<string> {
     return await this.page.evaluate(() => {
-      // Access the editor core through the global test API
-      const w = window as any;
-      if (w.__editorCore) {
-        return w.__editorCore.getMarkdown();
-      }
-      // Fallback: get messages sent to VS Code
-      const msgs = w.__vscodeMessages || [];
-      const updateMsg = msgs.filter((m: any) => m.type === 'update').pop();
-      return updateMsg?.text || '';
+      // The test harness mirrors the host bridge by capturing the webview's edit message.
+      const msgs = (window as any).__vscodeMessages || [];
+      const editMsg = [...msgs].reverse().find((m: any) => m.type === 'edit');
+      return editMsg?.content || '';
     });
   }
 

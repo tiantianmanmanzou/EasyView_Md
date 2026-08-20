@@ -4,6 +4,7 @@ vi.mock('vscode', () => ({}));
 
 import { PNG } from 'pngjs';
 import { flattenPngWithWhiteBackground, rewriteExtractedMediaPaths } from './wordToMarkdown';
+import { stripPandocHighlightMarkup } from './pandocHighlightMarkup';
 
 describe('rewriteExtractedMediaPaths', () => {
   it('replaces Pandoc temporary image paths with portable asset references', () => {
@@ -49,7 +50,49 @@ describe('rewriteExtractedMediaPaths', () => {
 
     expect(output).toBe('![diagram](<./document.assets/flow chart.png>){width=400}');
   });
+});
 
+describe('stripPandocHighlightMarkup', () => {
+  it('unwraps Word highlighter spans in headings', () => {
+    expect(stripPandocHighlightMarkup('## <span class="mark">数据安全管控</span>')).toBe('## 数据安全管控');
+    expect(stripPandocHighlightMarkup('#### <span class="mark">数据资源一致性稽核</span>')).toBe(
+      '#### 数据资源一致性稽核',
+    );
+  });
+
+  it('unwraps highlighter spans inside other Markdown marks', () => {
+    expect(stripPandocHighlightMarkup('1.  **<span class="mark">业务系统管理</span>**')).toBe(
+      '1.  **业务系统管理**',
+    );
+  });
+
+  it('drops empty highlighter tags that would otherwise become HTML blocks', () => {
+    expect(
+      stripPandocHighlightMarkup('## <span class="mark">\n</span>\n'),
+    ).toBe('## \n');
+  });
+
+  it('unwraps nested highlighter tags and <mark> elements', () => {
+    expect(
+      stripPandocHighlightMarkup('<span class="mark"><span class="mark">标题</span></span>'),
+    ).toBe('标题');
+    expect(stripPandocHighlightMarkup('<mark class="mark">重点</mark>')).toBe('重点');
+  });
+
+  it('unwraps highlighter spans that wrap other inline HTML', () => {
+    expect(
+      stripPandocHighlightMarkup('## <span class="mark"><em>数据安全管控</em></span>'),
+    ).toBe('## <em>数据安全管控</em>');
+  });
+
+  it('leaves unrelated spans unchanged', () => {
+    expect(stripPandocHighlightMarkup('<span class="underline">保留</span>')).toBe(
+      '<span class="underline">保留</span>',
+    );
+  });
+});
+
+describe('flattenPngWithWhiteBackground', () => {
   it('flattens transparent PNG pixels against a white background', () => {
     const source = new PNG({ width: 2, height: 1 });
     source.data.set([

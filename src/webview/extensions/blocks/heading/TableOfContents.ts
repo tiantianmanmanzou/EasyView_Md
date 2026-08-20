@@ -84,6 +84,27 @@ export class TableOfContents {
     const style = document.createElement('style');
     style.id = 'easyview-toc-tree-styles';
     style.textContent = `
+      .toc-sidebar {
+        transition:
+          width 0.2s ease,
+          min-width 0.2s ease,
+          opacity 0.2s ease,
+          padding 0.2s ease,
+          border-color 0.2s ease;
+      }
+
+      .toc-sidebar.hidden {
+        width: 0 !important;
+        min-width: 0 !important;
+        margin-left: 0 !important;
+        opacity: 0;
+        pointer-events: none;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        border-right-color: transparent !important;
+        overflow: hidden;
+      }
+
       .toc-item {
         position: relative;
         display: flex;
@@ -259,6 +280,37 @@ export class TableOfContents {
     if (editorBody && this.scrollAreaEl) {
       editorBody.insertBefore(this.sidebar, this.scrollAreaEl);
     }
+
+    this.attachSidebarTransitionListener();
+  }
+
+  private notifyLayoutChange(): void {
+    window.dispatchEvent(new CustomEvent('easyview-toc-layout-change'));
+  }
+
+  private scheduleLayoutChangeNotifications(): void {
+    const notify = () => this.notifyLayoutChange();
+    notify();
+    requestAnimationFrame(notify);
+    setTimeout(notify, 60);
+    setTimeout(notify, 220);
+  }
+
+  private attachSidebarTransitionListener(): void {
+    if (!this.sidebar || this.sidebar.dataset.easyviewLayoutBound === '1') return;
+    this.sidebar.dataset.easyviewLayoutBound = '1';
+    this.sidebar.addEventListener('transitionend', (event) => {
+      const property = event.propertyName;
+      if (
+        property === 'width' ||
+        property === 'min-width' ||
+        property === 'margin-left' ||
+        property === 'padding-left' ||
+        property === 'padding-right'
+      ) {
+        this.notifyLayoutChange();
+      }
+    });
   }
 
   // ─── Heading Extraction ──────────────────────────────────────────────
@@ -882,6 +934,7 @@ export class TableOfContents {
     this.headings = this.extractHeadings(this.view.state.doc);
     this.activeIndex = -1;
     this.renderList();
+    this.scheduleLayoutChangeNotifications();
   }
 
   public close(): void {
@@ -889,6 +942,7 @@ export class TableOfContents {
     this.isVisible = false;
     this.sidebar?.classList.add('hidden');
     document.body.classList.remove('toc-visible');
+    this.scheduleLayoutChangeNotifications();
   }
 
   /**

@@ -320,6 +320,7 @@ let leftMarkerOverlay: HTMLElement | null = null;
 let scrollMarkerChanges: BlockChange[] = [];
 let scrollMarkerView: EditorView | null = null;
 let scrollMarkerBound = false;
+let scrollMarkerLayoutObserver: ResizeObserver | null = null;
 
 function clearScrollMarkers() {
   if (scrollMarkerOverlay) {
@@ -340,7 +341,17 @@ function layoutScrollMarkers() {
     if (!scrollArea || !scrollMarkerOverlay || !leftMarkerOverlay || !scrollMarkerView) return;
 
     const rect = scrollArea.getBoundingClientRect();
-    const leftRailX = Math.round(rect.left);
+    const proseMirror = document.querySelector('#editor .ProseMirror') as HTMLElement | null;
+    let leftRailX = Math.round(rect.left);
+    if (proseMirror) {
+      const referenceBlock =
+        (proseMirror.querySelector(':scope > *:not(.table-wrapper)') as HTMLElement | null) ??
+        (proseMirror.firstElementChild as HTMLElement | null) ??
+        proseMirror;
+      const referenceRect = referenceBlock.getBoundingClientRect();
+      const paneInset = 6;
+      leftRailX = Math.round(Math.max(rect.left, referenceRect.left - paneInset));
+    }
     scrollMarkerOverlay.style.left = `${rect.right - 10}px`;
     scrollMarkerOverlay.style.top = `${rect.top}px`;
     scrollMarkerOverlay.style.height = `${rect.height}px`;
@@ -398,6 +409,29 @@ export function refreshAiChangeMarkers(): void {
   layoutScrollMarkers();
 }
 
+function bindScrollMarkerLayoutListeners(): void {
+  if (scrollMarkerBound) return;
+  scrollMarkerBound = true;
+
+  window.addEventListener('resize', layoutScrollMarkers);
+  window.addEventListener('easyview-toc-layout-change', layoutScrollMarkers);
+  window.addEventListener('easyview-table-wrap-layout-change', layoutScrollMarkers);
+  window.addEventListener('easyview-editor-layout-change', layoutScrollMarkers);
+  document.getElementById('editor-scroll-area')?.addEventListener('scroll', layoutScrollMarkers, { passive: true });
+
+  if (typeof ResizeObserver === 'undefined') return;
+
+  scrollMarkerLayoutObserver = new ResizeObserver(() => layoutScrollMarkers());
+  const scrollArea = document.getElementById('editor-scroll-area');
+  const editorBody = document.getElementById('editor-body');
+  const tocSidebar = document.querySelector('.toc-sidebar');
+  const historyPanel = document.querySelector('.history-panel');
+  if (scrollArea) scrollMarkerLayoutObserver.observe(scrollArea);
+  if (editorBody) scrollMarkerLayoutObserver.observe(editorBody);
+  if (tocSidebar instanceof HTMLElement) scrollMarkerLayoutObserver.observe(tocSidebar);
+  if (historyPanel instanceof HTMLElement) scrollMarkerLayoutObserver.observe(historyPanel);
+}
+
 function renderScrollMarkers(changes: BlockChange[], view: EditorView) {
   if (!changes.length) {
     clearScrollMarkers();
@@ -419,12 +453,7 @@ function renderScrollMarkers(changes: BlockChange[], view: EditorView) {
   }
 
   layoutScrollMarkers();
-
-  if (!scrollMarkerBound) {
-    window.addEventListener('resize', layoutScrollMarkers);
-    document.getElementById('editor-scroll-area')?.addEventListener('scroll', layoutScrollMarkers, { passive: true });
-    scrollMarkerBound = true;
-  }
+  bindScrollMarkerLayoutListeners();
 }
 
 function getIndicator(): HTMLElement {

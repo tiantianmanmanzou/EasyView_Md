@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "A visual Markdown editor for VS Code with rich editing, document conversion, and export tools.",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "assets/logo.png",
@@ -69,10 +69,15 @@
         "command": "inlineMd.openNativeEditor",
         "title": "Open in Native Markdown Editor",
         "category": "EasyView_Md",
-        "icon": "$(edit)"
+        "icon": "$(code)"
       },
       {
         "command": "inlineMd.convertWordToMarkdown",
+        "title": "Convert to Markdown with Easyview_Md",
+        "category": "EasyView_Md"
+      },
+      {
+        "command": "inlineMd.convertPdfToMarkdown",
         "title": "Convert to Markdown with Easyview_Md",
         "category": "EasyView_Md"
       },
@@ -129,6 +134,11 @@
         {
           "command": "inlineMd.convertWordToMarkdown",
           "when": "resourceExtname == .docx || resourceExtname == .doc",
+          "group": "navigation@3"
+        },
+        {
+          "command": "inlineMd.convertPdfToMarkdown",
+          "when": "resourceExtname == .pdf",
           "group": "navigation@3"
         }
       ]
@@ -218,7 +228,7 @@
     "watch": "node esbuild.mjs --watch",
     "vscode:prepublish": "node esbuild.mjs --production",
     "package": "vsce package",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run src",
     "test:unit:watch": "vitest",
     "test:e2e": "vscode-test",
     "test:e2e:pw": "npx playwright test",
@@ -237,6 +247,7 @@
     "@vscode/vsce": "^3.0.0",
     "buffer": "^6.0.3",
     "esbuild": "^0.24.0",
+    "happy-dom": "^20.11.6",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   },

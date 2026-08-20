@@ -10,6 +10,7 @@
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { BlockEdgeCursor } from '../block-edge-cursor/BlockEdgeCursor';
+import { handleNestedTableEnter } from '../../blocks/table/nestedTableEnter';
 import type { Schema } from 'prosemirror-model';
 import { Extension } from '../../../editor/EditorExtension';
 
@@ -47,11 +48,33 @@ export class KeyboardOverridesExtension extends Extension {
 
             // GapCursor + Enter: insert a paragraph and move cursor into it
             if (isGapCursor && event.key === 'Enter') {
+              enterPressed = false;
+              if (resetTimeout) {
+                clearTimeout(resetTimeout);
+                resetTimeout = null;
+              }
+              if (handleNestedTableEnter(view)) return true;
               const pos = view.state.selection.from;
-              const tr = view.state.tr.insert(pos, schema.nodes.paragraph.create({}));
+              const tr = view.state.tr.replaceWith(
+                pos,
+                pos,
+                schema.nodes.paragraph.create(),
+              );
               tr.setSelection(TextSelection.near(tr.doc.resolve(pos + 1)));
-              view.dispatch(tr);
+              view.dispatch(tr.scrollIntoView());
               return true;
+            }
+
+            // Enter after / below a nested table inside an outer HTML table cell.
+            if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+              if (handleNestedTableEnter(view)) {
+                enterPressed = false;
+                if (resetTimeout) {
+                  clearTimeout(resetTimeout);
+                  resetTimeout = null;
+                }
+                return true;
+              }
             }
 
             // GapCursor + Backspace/Delete: delete the adjacent block node

@@ -506,6 +506,7 @@ export interface SourceEditorOptions {
   onChange: (content: string) => void;
   visualMode?: 'default' | 'stickyNoteCompactMarkdown';
   onSelectionOrDocChange?: () => void;
+  onDocumentHistoryChange?: (update: import('@codemirror/view').ViewUpdate) => void;
   /** Called when native CM undo stack is exhausted — return true if cross-mode undo was handled */
   onUndoExhausted?: () => boolean;
   /** Called when native CM redo stack is exhausted — return true if cross-mode redo was handled */
@@ -751,6 +752,7 @@ export function createSourceEditor(options: SourceEditorOptions) {
 
     if (update.docChanged && !suppressChange) {
       options.onChange(update.state.doc.toString());
+      options.onDocumentHistoryChange?.(update);
     }
 
     if (suppressChange) return;

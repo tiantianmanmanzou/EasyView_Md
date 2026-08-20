@@ -616,8 +616,9 @@ body {
   overflow-x: auto;
   width: fit-content;
   max-width: 100%;
-  margin-top: 0;
-  margin-bottom: 16px;
+  margin: 0 0 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px var(--shadow);
 }
 
 .document-content table {
@@ -636,6 +637,7 @@ body {
   border-left: 1px solid var(--table-border);
   border-top: 1px solid var(--table-border);
   padding: 10px 14px;
+  line-height: 1.55;
   text-align: left;
   vertical-align: top;
   word-wrap: break-word;
@@ -677,6 +679,8 @@ body {
 .document-content th p {
   margin: 0;
 }
+
+.document-content tbody tr:nth-child(even) td { background: var(--table-header-bg); }
 
 .document-content tr:hover td {
   background: var(--table-row-hover);
@@ -787,10 +791,10 @@ body {
 .document-content blockquote {
   border-left: 3px solid var(--blockquote-border);
   background: var(--blockquote-bg);
-  margin-top: 0;
-  margin-bottom: 16px;
-  padding: 8px 16px;
-  border-radius: 0 4px 4px 0;
+  margin: 4px 0 20px;
+  padding: 12px 18px;
+  border-radius: 0 6px 6px 0;
+  line-height: 1.65;
   color: var(--blockquote-text);
   transition: border-color 0.2s, color 0.2s, background-color 0.2s;
 }
@@ -1367,5 +1371,10 @@ math-block {
   .document-content pre { border: 1px solid #ddd !important; }
   .document-content a { color: inherit !important; text-decoration: underline !important; }
   .document-content a::after { content: " (" attr(href) ")"; font-size: 80%; opacity: 0.7; }
+  .document-content .table-wrapper { width: 100% !important; overflow: visible !important; box-shadow: none !important; }
+  .document-content table { width: 100% !important; max-width: 100% !important; font-size: 9.5pt; }
+  .document-content th, .document-content td { padding: 7px 9px; }
+  .document-content thead { display: table-header-group; }
+  .document-content tr, .document-content blockquote { break-inside: avoid; page-break-inside: avoid; }
 }
 `;

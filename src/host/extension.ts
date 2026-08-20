@@ -10,7 +10,9 @@ import { setPendingCursorForUri } from './openCursorContext';
 import { setPendingDocumentContentForUri } from './openDocumentSnapshot';
 import { logOpenWithDebug } from './openWithDebug';
 import { registerNativeMarkdownImagePaste } from './nativeImagePaste';
+import { suppressNativeOutlineRestore } from './nativeOutlineNavigation';
 import { registerWordToMarkdownCommand } from './wordToMarkdown';
+import { registerPdfToMarkdownCommand } from './pdfToMarkdown';
 import { getInstalledExtensionVersion, notifyExtensionUpdated } from './extensionUpdateNotification';
 
 function execGit(args: string[], cwd: string): Promise<void> {
@@ -65,6 +67,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(MarkdownEditorProvider.register(context));
   context.subscriptions.push(registerNativeMarkdownImagePaste());
   context.subscriptions.push(registerWordToMarkdownCommand());
+  context.subscriptions.push(registerPdfToMarkdownCommand());
 
   context.subscriptions.push(
     vscode.commands.registerCommand('inlineMd.openEditor', async (uri?: vscode.Uri) => {
@@ -99,6 +102,7 @@ export function activate(context: vscode.ExtensionContext) {
           path: targetUri.fsPath,
           viewColumn: sourceEditor?.viewColumn ?? 'unknown',
         });
+        suppressNativeOutlineRestore();
         await vscode.commands.executeCommand(
           'vscode.openWith',
           targetUri,

@@ -151,7 +151,7 @@ export function blockquoteLayout(palette: PdfPalette) {
       return 6;
     },
     paddingBottom() {
-      return 1;
+      return 6;
     },
     fillColor() {
       return palette.blockquoteFill;

@@ -20,12 +20,14 @@ import {
 } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { Fragment, Slice } from 'prosemirror-model';
-import type { Schema } from 'prosemirror-model';
+import type { ResolvedPos, Schema } from 'prosemirror-model';
 import { keydownHandler } from 'prosemirror-keymap';
 import { Extension } from '../../../editor/EditorExtension';
 import { BlockEdgeCursor } from './BlockEdgeCursor';
 import { isValidBlockEdge, findBlockEdgeFrom } from './blockEdgeUtils';
 import { _isMouseDragging } from '../../../editor/EditorCore';
+
+const NESTED_TABLE_GAP_CLICK_TOLERANCE = 6;
 
 // Plugin state: which side to render the cursor on
 // 'after'  = cursor is after the block before  → RIGHT edge of nodeBefore
@@ -89,6 +91,11 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
 
       handleClick(view: EditorView, pos: number, event: MouseEvent) {
         if (!view || !view.editable) return false;
+
+        if (tryPlaceBlockEdgeAfterNestedTableFromClick(view, event)) {
+          return true;
+        }
+
         const $pos = view.state.doc.resolve(pos);
 
         // Dead zone detection: click resolved inside a gap-requiring block
@@ -109,9 +116,7 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
               if (gapPos <= view.state.doc.content.size) {
                 const $gap = view.state.doc.resolve(gapPos);
                 if (isValidBlockEdge($gap)) {
-                  const tr = view.state.tr.setSelection(new BlockEdgeCursor($gap));
-                  tr.setMeta(blockEdgeCursorKey, { side: 'after' });
-                  view.dispatch(tr);
+                  dispatchBlockEdgeCursor(view, $gap, 'after');
                   return true;
                 }
               }
@@ -121,9 +126,7 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
             if (event.clientX < ancestorRect.left - 2) {
               const $gap = view.state.doc.resolve(ancestorStart);
               if (isValidBlockEdge($gap)) {
-                const tr = view.state.tr.setSelection(new BlockEdgeCursor($gap));
-                tr.setMeta(blockEdgeCursorKey, { side: 'before' });
-                view.dispatch(tr);
+                dispatchBlockEdgeCursor(view, $gap, 'before');
                 return true;
               }
             }
@@ -173,13 +176,26 @@ function blockEdgeCursorPlugin(): Plugin<BlockEdgeCursorState> {
           side = 'after';
         }
 
-        const tr = view.state.tr.setSelection(new BlockEdgeCursor($pos));
-        tr.setMeta(blockEdgeCursorKey, { side });
-        view.dispatch(tr);
+        dispatchBlockEdgeCursor(view, $pos, side);
         return true;
       },
 
       handleKeyDown(view: EditorView, event: KeyboardEvent) {
+        if (
+          event.key === 'Enter' &&
+          !event.shiftKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          view.state.selection instanceof BlockEdgeCursor
+        ) {
+          // Ensure focus so the first Enter after a gap click is handled here
+          // even when the click did not originate from an already-focused editor.
+          if (!view.hasFocus()) {
+            view.focus();
+          }
+        }
+
         if (shouldPrepareBlockEdgeForTyping(view, event)) {
           materializeTextCursorFromBlockEdge(view);
           return false;
@@ -274,6 +290,104 @@ function materializeTextCursorFromBlockEdge(view: EditorView): boolean {
     view.focus();
   }
   return true;
+}
+
+function dispatchBlockEdgeCursor(view: EditorView, $gap: ResolvedPos, side: CursorSide): void {
+  const tr = view.state.tr.setSelection(new BlockEdgeCursor($gap));
+  tr.setMeta(blockEdgeCursorKey, { side });
+  view.dispatch(tr);
+  view.focus();
+}
+
+/**
+ * When a click lands visually to the right of (or just below) a nested table
+ * inside a host cell, posAtCoords often resolves inside the nested table.
+ * Use DOM geometry on the table wrapper instead.
+ */
+function resolveTableStartFromWrapper(view: EditorView, wrapper: HTMLElement): number | null {
+  let pos: number;
+  try {
+    pos = view.posAtDOM(wrapper, 0);
+  } catch {
+    return null;
+  }
+
+  const $pos = view.state.doc.resolve(pos);
+  for (let depth = $pos.depth; depth > 0; depth--) {
+    if ($pos.node(depth).type.spec.tableRole === 'table') {
+      return $pos.before(depth);
+    }
+  }
+
+  const nodeAt = view.state.doc.nodeAt(pos);
+  if (nodeAt?.type.spec.tableRole === 'table') return pos;
+
+  const nodeBefore = $pos.nodeBefore;
+  if (nodeBefore?.type.spec.tableRole === 'table') {
+    return pos - nodeBefore.nodeSize;
+  }
+
+  return null;
+}
+
+export function tryPlaceBlockEdgeAfterNestedTableFromClick(
+  view: EditorView,
+  event: MouseEvent,
+): boolean {
+  const target = event.target;
+  if (!(target instanceof Node)) return false;
+
+  const fromEl = target instanceof HTMLElement ? target : target.parentElement;
+  const hostCell = fromEl?.closest('td, th');
+  if (!(hostCell instanceof HTMLElement)) return false;
+
+  const cellContent =
+    (hostCell.querySelector(':scope > .easyview-table-cell-content') as HTMLElement | null) ??
+    hostCell;
+  const contentRect = cellContent.getBoundingClientRect();
+  const clickX = event.clientX;
+  const clickY = event.clientY;
+  const tol = NESTED_TABLE_GAP_CLICK_TOLERANCE;
+
+  const wrappers = cellContent.querySelectorAll(':scope > .table-wrapper');
+  for (const wrapper of wrappers) {
+    if (!(wrapper instanceof HTMLElement)) continue;
+
+    const outerWrapper = hostCell.closest('.table-wrapper');
+    const isNested =
+      !!outerWrapper && outerWrapper !== wrapper && hostCell.contains(wrapper);
+    if (!isNested) continue;
+
+    const rect = wrapper.getBoundingClientRect();
+    const inVerticalBand = clickY >= rect.top - tol && clickY <= rect.bottom + tol;
+    const toRightOfTable =
+      clickX > rect.right - 2 && clickX <= contentRect.right + tol;
+    const belowTable =
+      clickY > rect.bottom - 2 && clickY <= contentRect.bottom + tol;
+    const inHorizontalRange =
+      clickX >= rect.left - tol && clickX <= contentRect.right + tol;
+
+    if (!((inVerticalBand && toRightOfTable) || (belowTable && inHorizontalRange))) {
+      continue;
+    }
+
+    const tableStart = resolveTableStartFromWrapper(view, wrapper);
+    if (tableStart == null) continue;
+
+    const tableNode = view.state.doc.nodeAt(tableStart);
+    if (!tableNode || tableNode.type.spec.tableRole !== 'table') continue;
+
+    const gapPos = tableStart + tableNode.nodeSize;
+    if (gapPos > view.state.doc.content.size) continue;
+
+    const $gap = view.state.doc.resolve(gapPos);
+    if (!isValidBlockEdge($gap)) continue;
+
+    dispatchBlockEdgeCursor(view, $gap, 'after');
+    return true;
+  }
+
+  return false;
 }
 
 // ─── Visual rect helper ──────────────────────────────────────────────────────

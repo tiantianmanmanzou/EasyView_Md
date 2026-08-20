@@ -1,35 +1,143 @@
 /**
- * PdfMermaidRenderer — Mermaid diagram collection and SVG-to-PNG conversion for PDF export.
+ * PdfMermaidRenderer — Mermaid diagram collection and SVG-to-PNG conversion for PDF/DOCX export.
  */
 
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import { type PdfPalette } from './PdfPalette';
+import {
+  looksLikeMermaid,
+  normalizeMermaidSource,
+} from './mermaidSource';
+
+export {
+  extractMermaidSourcesFromMarkdown,
+  looksLikeMermaid,
+  normalizeMermaidSource,
+} from './mermaidSource';
+
+export type MermaidPng = { base64: string; width: number; height: number };
+
+function uniqueSources(sources: string[]): string[] {
+  return [...new Set(sources.map(normalizeMermaidSource).filter(Boolean))];
+}
+
+function collectMermaidSourcesFromDoc(doc: ProsemirrorNode): string[] {
+  const sources: string[] = [];
+  doc.descendants((node) => {
+    if (node.type.name === 'code_block') {
+      const lang = String(node.attrs.language || '').trim().toLowerCase();
+      const text = normalizeMermaidSource(node.textContent || '');
+      if (!text) return;
+      if (lang === 'mermaid' || lang === 'mermaidjs' || looksLikeMermaid(text)) {
+        sources.push(text);
+      }
+    } else if (node.type.name === 'mermaid') {
+      const text = normalizeMermaidSource(node.attrs.content || '');
+      if (text) sources.push(text);
+    }
+  });
+  return sources;
+}
+
+function collectLiveMermaidSvgs(): Array<{ source: string; svg: string }> {
+  const result: Array<{ source: string; svg: string }> = [];
+  try {
+    const wrappers = document.querySelectorAll('.mermaid-diagram-wrapper');
+    for (const wrapper of wrappers) {
+      const svgEl = wrapper.querySelector('svg');
+      if (!svgEl) continue;
+      const pre = wrapper.previousElementSibling;
+      const code = pre?.querySelector?.('code');
+      const source = normalizeMermaidSource(code?.textContent || pre?.textContent || '');
+      const svg = new XMLSerializer().serializeToString(svgEl);
+      if (svg) result.push({ source, svg });
+    }
+  } catch (error) {
+    console.warn('[InLineMd PDF] Unable to read editor Mermaid SVG:', error);
+  }
+  return result;
+}
 
 /**
  * Collect mermaid diagram sources from the document, then re-render them
  * with the appropriate theme for PDF export.
  */
-export async function collectMermaidSvgs(doc: ProsemirrorNode, palette: PdfPalette): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  const sources: string[] = [];
+export async function collectMermaidPngsFromDoc(
+  doc: ProsemirrorNode,
+  palette: PdfPalette,
+): Promise<Map<string, MermaidPng>> {
+  const { map } = await collectExportMermaidPngs(collectMermaidSourcesFromDoc(doc), palette);
+  return map;
+}
 
-  // Collect all mermaid sources from the document
-  doc.descendants((node) => {
-    if (node.type.name === 'code_block') {
-      const lang = node.attrs.language || '';
-      if (lang === 'mermaid' || lang === 'mermaidjs') {
-        const text = node.textContent?.trim();
-        if (text) sources.push(text);
-      }
-    } else if (node.type.name === 'mermaid') {
-      const text = (node.attrs.content || '').trim();
-      if (text) sources.push(text);
+export async function renderMermaidPngs(sources: string[], palette: PdfPalette): Promise<Map<string, MermaidPng>> {
+  const { map } = await collectExportMermaidPngs(sources, palette);
+  return map;
+}
+
+export async function collectExportMermaidPngs(
+  sources: string[],
+  palette: PdfPalette,
+): Promise<{ map: Map<string, MermaidPng>; ordered: Array<{ source: string } & MermaidPng> }> {
+  const unique = uniqueSources(sources);
+  const svgMap = await renderMermaidSvgs(unique, palette);
+  const live = collectLiveMermaidSvgs();
+  const usedLive = new Set<number>();
+  const ordered: Array<{ source: string } & MermaidPng> = [];
+  const map = new Map<string, MermaidPng>();
+
+  const takeLiveSvg = (source: string, index: number): string | undefined => {
+    const key = normalizeMermaidSource(source);
+    const bySource = live.findIndex((item, itemIndex) => !usedLive.has(itemIndex) && item.source && item.source === key);
+    if (bySource >= 0) {
+      usedLive.add(bySource);
+      return live[bySource].svg;
     }
-  });
+    if (!usedLive.has(index) && live[index]?.svg) {
+      usedLive.add(index);
+      return live[index].svg;
+    }
+    const next = live.findIndex((_item, itemIndex) => !usedLive.has(itemIndex));
+    if (next >= 0) {
+      usedLive.add(next);
+      return live[next].svg;
+    }
+    return undefined;
+  };
 
-  if (sources.length === 0) return map;
+  const candidates = unique.length > 0 ? unique : live.map((item) => item.source);
+  for (let index = 0; index < candidates.length; index++) {
+    const source = candidates[index];
+    let svg = svgMap.get(source);
+    let png = svg ? await svgToPng(svg, palette.pageBackground) : null;
+    if (!png) {
+      svg = takeLiveSvg(source, index);
+      png = svg ? await svgToPng(svg, palette.pageBackground) : null;
+    }
+    if (!png) continue;
+    map.set(source, png);
+    ordered.push({ source, ...png });
+  }
 
-  // Re-render with appropriate theme for PDF (DOM SVGs inherit editor theme colors)
+  if (ordered.length === 0) {
+    for (let index = 0; index < live.length; index++) {
+      const png = await svgToPng(live[index].svg, palette.pageBackground);
+      if (!png) continue;
+      const source = live[index].source || `live-mermaid-${index}`;
+      map.set(source, png);
+      ordered.push({ source, ...png });
+    }
+  }
+
+  return { map, ordered };
+}
+
+export async function renderMermaidSvgs(sources: string[], palette: PdfPalette): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const unique = uniqueSources(sources);
+  const live = collectLiveMermaidSvgs();
+  if (unique.length === 0 && live.length === 0) return map;
+
   try {
     const mermaidModule = await import('mermaid');
     const mermaid = mermaidModule.default;
@@ -39,74 +147,60 @@ export async function collectMermaidSvgs(doc: ProsemirrorNode, palette: PdfPalet
       suppressErrorRendering: true,
       theme: palette.mermaidTheme as any,
       darkMode: palette.mermaidDarkMode,
-      fontFamily: 'Arial, Helvetica, sans-serif',
+      fontFamily: '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, Helvetica, sans-serif',
       themeVariables: palette.mermaidThemeVariables,
-    });
+      gantt: { useWidth: 700 },
+      pie: { useWidth: 700 },
+    } as any);
 
-    for (const source of sources) {
+    for (const source of unique) {
+      const tempEl = document.createElement('div');
+      tempEl.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+      document.body.appendChild(tempEl);
       try {
-        const tempId = 'pdf-mermaid-' + Math.random().toString(36).substr(2, 9);
-        const tempEl = document.createElement('div');
+        const tempId = 'pdf-mermaid-' + Math.random().toString(36).slice(2, 11);
         tempEl.id = tempId;
-        tempEl.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
-        document.body.appendChild(tempEl);
         const { svg } = await mermaid.render(tempId, source);
         map.set(source, svg);
-        tempEl.remove();
       } catch (error) {
-        // Keep collecting: a visible editor SVG can still be used below when
-        // Mermaid's export-time renderer rejects an otherwise valid diagram.
         console.warn('[InLineMd PDF] Mermaid re-render failed; using editor SVG if available:', error);
+      } finally {
+        tempEl.remove();
       }
     }
   } catch (error) {
     console.warn('[InLineMd PDF] Mermaid import failed; using editor SVG if available:', error);
   }
 
-  // Always fill unresolved sources from the diagram currently visible in the
-  // editor. Previously this only ran when dynamic import failed, so a single
-  // transient re-render failure downgraded that diagram to source code in PDF.
-  try {
-    const wrappers = document.querySelectorAll('.mermaid-diagram-wrapper');
-    for (const wrapper of wrappers) {
-      const svgEl = wrapper.querySelector('svg');
-      const pre = wrapper.previousElementSibling;
-      if (svgEl && pre) {
-        const code = pre.querySelector('code');
-        const text = code?.textContent?.trim() || pre.textContent?.trim() || '';
-        if (text && sources.includes(text) && !map.has(text)) {
-          const svgString = new XMLSerializer().serializeToString(svgEl);
-          map.set(text, svgString);
-        }
-      }
+  for (const item of live) {
+    if (item.source && !map.has(item.source)) {
+      map.set(item.source, item.svg);
     }
-  } catch (error) {
-    console.warn('[InLineMd PDF] Unable to read editor Mermaid SVG:', error);
   }
+
+  unique.forEach((source, index) => {
+    if (map.has(source)) return;
+    const fallback = live.find((item) => item.source === source)?.svg || live[index]?.svg;
+    if (fallback) map.set(source, fallback);
+  });
 
   return map;
 }
 
-// ─── Mermaid SVG -> PNG Conversion ────────────────────────────────────────
-
-/**
- * Convert mermaid SVG strings to PNG base64 images via canvas.
- * This avoids pdfmake SVG rendering issues (dark theme colors, missing fonts, etc.).
- */
 export async function convertMermaidSvgsToPng(
   svgMap: Map<string, string>,
   bgColor: string,
-): Promise<Map<string, { base64: string; width: number; height: number }>> {
-  const result = new Map<string, { base64: string; width: number; height: number }>();
+): Promise<Map<string, MermaidPng>> {
+  const result = new Map<string, MermaidPng>();
 
   for (const [source, svgString] of svgMap) {
     try {
       const pngData = await svgToPng(svgString, bgColor);
       if (pngData) {
-        result.set(source, pngData);
+        result.set(normalizeMermaidSource(source), pngData);
       }
     } catch {
-      // Skip invalid SVG — PDF export falls back to a readable code block.
+      // Skip invalid SVG — export falls back to a readable code block.
     }
   }
 
@@ -116,43 +210,53 @@ export async function convertMermaidSvgsToPng(
 /**
  * Convert an SVG string to a PNG base64 data URI via Image + Canvas.
  */
-export function svgToPng(svgString: string, bgColor = '#ffffff'): Promise<{ base64: string; width: number; height: number } | null> {
+export function svgToPng(svgString: string, bgColor = '#ffffff'): Promise<MermaidPng | null> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: MermaidPng | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
     try {
-      // Parse SVG to get dimensions
       const parser = new DOMParser();
       const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
       const svgEl = svgDoc.documentElement;
       if (svgEl.localName !== 'svg' || svgDoc.querySelector('parsererror')) {
-        resolve(null);
+        finish(null);
         return;
       }
 
-      // Mermaid often emits width/height as percentages. Those are not canvas
-      // pixels and used to crop the right/bottom of the diagram. Prefer the
-      // viewBox whenever it is present, then fall back to numeric dimensions.
+      flattenForeignObjects(svgEl);
+
       const viewBox = svgEl.getAttribute('viewBox');
       const viewBoxParts = viewBox?.trim().split(/[\s,]+/) || [];
       const viewBoxWidth = parseFloat(viewBoxParts[2] || '0');
       const viewBoxHeight = parseFloat(viewBoxParts[3] || '0');
-      let width = viewBoxWidth || parseFloat(svgEl.getAttribute('width') || '0');
-      let height = viewBoxHeight || parseFloat(svgEl.getAttribute('height') || '0');
+      let width = viewBoxWidth || parseFloat(String(svgEl.getAttribute('width') || '').replace(/px$/, '')) || 0;
+      let height = viewBoxHeight || parseFloat(String(svgEl.getAttribute('height') || '').replace(/px$/, '')) || 0;
 
       if (!width || !height) {
         width = 800;
         height = 600;
       }
 
-      // Ensure SVG has explicit dimensions and white background
+      svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
       svgEl.setAttribute('width', String(width));
       svgEl.setAttribute('height', String(height));
       const existingStyle = svgEl.getAttribute('style') || '';
-      svgEl.setAttribute('style', existingStyle + `;background:${bgColor};`);
+      svgEl.setAttribute('style', `${existingStyle};background:${bgColor};`);
 
-      // Scale up for better quality (3x)
-      const scale = 3;
-      const canvasWidth = width * scale;
-      const canvasHeight = height * scale;
+      const scale = 2;
+      const padding = 10;
+      const radius = 8;
+      const borderWidth = 1;
+      const borderColor = '#C8CDD4';
+      const diagramWidth = Math.max(1, Math.round(width * scale));
+      const diagramHeight = Math.max(1, Math.round(height * scale));
+      const canvasWidth = diagramWidth + Math.round(padding * 2 * scale);
+      const canvasHeight = diagramHeight + Math.round(padding * 2 * scale);
 
       const serializer = new XMLSerializer();
       const svgData = serializer.serializeToString(svgEl);
@@ -166,29 +270,89 @@ export function svgToPng(svgString: string, bgColor = '#ffffff'): Promise<{ base
           canvas.width = canvasWidth;
           canvas.height = canvasHeight;
           const ctx = canvas.getContext('2d');
-          if (!ctx) { resolve(null); return; }
+          if (!ctx) { finish(null); return; }
 
-          // Page background color
           ctx.fillStyle = bgColor;
           ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-          // Draw SVG
-          ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
+          const inset = (borderWidth / 2) * scale;
+          const boxX = inset;
+          const boxY = inset;
+          const boxW = canvasWidth - inset * 2;
+          const boxH = canvasHeight - inset * 2;
+          const boxR = Math.min(radius * scale, boxW / 2, boxH / 2);
+
+          pathRoundedRect(ctx, boxX, boxY, boxW, boxH, boxR);
+          ctx.fillStyle = bgColor;
+          ctx.fill();
+          ctx.save();
+          ctx.clip();
+          ctx.drawImage(img, padding * scale, padding * scale, diagramWidth, diagramHeight);
+          ctx.restore();
+
+          pathRoundedRect(ctx, boxX, boxY, boxW, boxH, boxR);
+          ctx.strokeStyle = borderColor;
+          ctx.lineWidth = borderWidth * scale;
+          ctx.stroke();
 
           const base64 = canvas.toDataURL('image/png');
-          resolve({ base64, width, height });
+          finish({
+            base64,
+            width: width + padding * 2,
+            height: height + padding * 2,
+          });
         } catch {
-          resolve(null);
+          finish(null);
         }
       };
-      img.onerror = () => resolve(null);
-
-      // Timeout after 5 seconds
-      setTimeout(() => resolve(null), 5000);
-
+      img.onerror = () => finish(null);
+      setTimeout(() => finish(null), 10000);
       img.src = dataUri;
     } catch {
-      resolve(null);
+      finish(null);
     }
   });
+}
+
+function pathRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function flattenForeignObjects(svgEl: Element): void {
+  const ns = 'http://www.w3.org/2000/svg';
+  const foreignObjects = Array.from(svgEl.querySelectorAll('foreignObject'));
+  for (const fo of foreignObjects) {
+    const text = (fo.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text) {
+      fo.remove();
+      continue;
+    }
+    const x = parseFloat(fo.getAttribute('x') || '0');
+    const y = parseFloat(fo.getAttribute('y') || '0');
+    const width = parseFloat(fo.getAttribute('width') || '0');
+    const height = parseFloat(fo.getAttribute('height') || '0');
+    const textEl = svgEl.ownerDocument.createElementNS(ns, 'text');
+    textEl.setAttribute('x', String(x + width / 2));
+    textEl.setAttribute('y', String(y + height / 2));
+    textEl.setAttribute('text-anchor', 'middle');
+    textEl.setAttribute('dominant-baseline', 'middle');
+    textEl.setAttribute('font-size', '14');
+    textEl.setAttribute('fill', '#1f2328');
+    textEl.textContent = text;
+    fo.parentNode?.replaceChild(textEl, fo);
+  }
 }

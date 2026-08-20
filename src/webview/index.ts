@@ -7,7 +7,8 @@
 
 import { NodeSelection } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
-import { undo, redo } from 'prosemirror-history';
+import { undo, redo, undoDepth, redoDepth, isHistoryTransaction } from 'prosemirror-history';
+import { undo as cmUndo, redo as cmRedo, undoDepth as cmUndoDepth, redoDepth as cmRedoDepth } from '@codemirror/commands';
 import { goToNextCell } from 'prosemirror-tables';
 
 import { EditorCore } from './editor/EditorCore';
@@ -17,12 +18,13 @@ import { KeyboardOverridesExtension } from './extensions/behavior/keyboard-overr
 import { ListsExtension } from './extensions/blocks/lists/ListsExtension';
 import { SmartTextExtension } from './extensions/behavior/smart-text/SmartTextExtension';
 import { MarksExtension } from './extensions/inline/marks/MarksExtension';
-import { HeadingExtension, setToastFunction } from './extensions/blocks/heading/HeadingExtension';
+import { HeadingExtension, setHeadingOutlinePathCopyHandler, setToastFunction } from './extensions/blocks/heading/HeadingExtension';
 import { BlockquoteExtension } from './extensions/blocks/blockquote/BlockquoteExtension';
 import { CodeBlockExtension } from './extensions/blocks/code-block/CodeBlockExtension';
 import { NoticeExtension } from './extensions/blocks/notice/NoticeExtension';
 import { HorizontalRuleExtension } from './extensions/blocks/horizontal-rule/HorizontalRuleExtension';
 import { TableExtension } from './extensions/blocks/table/TableExtension';
+import { setFirstRowStickyDefault } from './extensions/blocks/table/TablePreferences';
 import { ImageExtension } from './extensions/inline/image/ImageExtension';
 import { MermaidExtension } from './extensions/blocks/mermaid/MermaidExtension';
 import { PlantUmlExtension } from './extensions/blocks/plantuml/PlantUmlExtension';
@@ -47,7 +49,11 @@ import { MarkBoundaryExtension } from './extensions/behavior/mark-boundary/MarkB
 import { TrailingNodeExtension } from './extensions/behavior/trailing-node/TrailingNodeExtension';
 import { PlaceholderExtension } from './extensions/behavior/placeholder/PlaceholderExtension';
 import { ClipboardExtension } from './extensions/behavior/clipboard/ClipboardExtension';
-import { AiChangesExtension, GIT_CHANGE_META, refreshAiChangeMarkers } from './extensions/integrations/ai-changes/AiChangesExtension';
+import {
+  AiChangesExtension,
+  GIT_CHANGE_META,
+  refreshAiChangeMarkers,
+} from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
 import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
 
@@ -60,6 +66,8 @@ import { TableOfContents } from './extensions/blocks/heading/TableOfContents';
 import { generateStandaloneHtml } from './extensions/export/html/ExportHtml';
 import { createSourceEditor } from './editor/SourceEditor';
 import { DualModeHistory } from './editor/DualModeHistory';
+import { EditOperationLog } from './editor/EditOperationLog';
+import { describeProseMirrorTransaction, describeSourceDocChange } from './editor/describeEditOperation';
 import { createFileHeader, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
@@ -94,6 +102,7 @@ let canPostEditsToHost = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
 let terminalAppearance: TerminalAppearance = {};
 const dualHistory = new DualModeHistory();
+const editOperationLog = new EditOperationLog();
 let _skipDualHistoryRecord = false;
 let _hasEditedInCurrentMode = false;
 let _modeEntryContent = ''; // content snapshot when entering current mode
@@ -129,7 +138,9 @@ function createNoopStickyNote(): StickyNoteFacade {
     close() {},
     toggle() {},
     setDocumentContent() {},
-    isOpen() { return false; },
+    isOpen() {
+      return false;
+    },
     destroy() {},
   };
 }
@@ -147,12 +158,27 @@ function normalizeShortcutKeyLabel(value: string): string {
   return value[0].toUpperCase() + value.slice(1).toLowerCase();
 }
 
-function parseShortcut(shortcut: string): { ctrl: boolean; meta: boolean; alt: boolean; shift: boolean; key: string } | null {
+function parseShortcut(shortcut: string): {
+  ctrl: boolean;
+  meta: boolean;
+  alt: boolean;
+  shift: boolean;
+  key: string;
+} | null {
   const raw = shortcut.trim();
   if (!raw) return null;
-  const parts = raw.split('+').map((part) => part.trim()).filter(Boolean);
+  const parts = raw
+    .split('+')
+    .map((part) => part.trim())
+    .filter(Boolean);
   if (parts.length === 0) return null;
-  const parsed = { ctrl: false, meta: false, alt: false, shift: false, key: '' };
+  const parsed = {
+    ctrl: false,
+    meta: false,
+    alt: false,
+    shift: false,
+    key: '',
+  };
   for (const partRaw of parts) {
     const part = partRaw.toLowerCase();
     if (part === 'ctrl' || part === 'control') {
@@ -222,11 +248,13 @@ function eventMatchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
     const fallback = event.key === ' ' ? 'Space' : event.key;
     key = normalizeShortcutKeyLabel(fallback);
   }
-  return event.ctrlKey === parsed.ctrl
-    && event.metaKey === parsed.meta
-    && event.altKey === parsed.alt
-    && event.shiftKey === parsed.shift
-    && key === parsed.key;
+  return (
+    event.ctrlKey === parsed.ctrl &&
+    event.metaKey === parsed.meta &&
+    event.altKey === parsed.alt &&
+    event.shiftKey === parsed.shift &&
+    key === parsed.key
+  );
 }
 
 function matchesToolbarShortcut(event: KeyboardEvent, action: ToolbarShortcutAction): boolean {
@@ -327,6 +355,352 @@ function ensureMinimalGitChangeStyles(): void {
   document.head.appendChild(style);
 }
 
+function ensureEditorContentGutterStyles(): void {
+  const styleId = 'easyview-editor-content-gutter';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    #editor {
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
+    #editor.full-width,
+    body.full-width #editor {
+      padding-left: 36px !important;
+      padding-right: 8px !important;
+    }
+    #source-editor {
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
+    .table-scrollable {
+      padding-left: 16px !important;
+      padding-right: 8px !important;
+    }
+    #editor:not(.full-width) .ProseMirror .table-wrapper {
+      max-width: 100% !important;
+    }
+    .ProseMirror > h1 .block-drag-handle.with-heading-level,
+    .ProseMirror > h2 .block-drag-handle.with-heading-level,
+    .ProseMirror > h3 .block-drag-handle.with-heading-level,
+    .ProseMirror > h4 .block-drag-handle.with-heading-level,
+    .ProseMirror > h5 .block-drag-handle.with-heading-level,
+    .ProseMirror > h6 .block-drag-handle.with-heading-level {
+      margin-left: -34px;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureTableWidthStyles(): void {
+  const styleId = 'easyview-table-width-without-minimum';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    /* Brighter table borders for better visibility */
+    .ProseMirror table {
+      border-color: rgba(160, 160, 160, 0.45) !important;
+    }
+    .ProseMirror th,
+    .ProseMirror td {
+      border-color: rgba(160, 160, 160, 0.45) !important;
+    }
+
+    /* Opaque first-row band — same look when idle and when sticky clone is shown. */
+    .ProseMirror table > tbody > tr:first-child > th,
+    .ProseMirror table > tbody > tr:first-child > td,
+    .ProseMirror tr[data-easyview-sticky="true"] > th,
+    .ProseMirror tr[data-easyview-sticky="true"] > td,
+    .easyview-sticky-table-header th,
+    .easyview-sticky-table-header td {
+      background: color-mix(
+        in srgb,
+        var(--vscode-editor-foreground, #cccccc) 7%,
+        var(--vscode-editor-background, #1e1e1e)
+      ) !important;
+      border-bottom: 1px solid rgba(160, 160, 160, 0.45) !important;
+    }
+
+    .ProseMirror table > tbody > tr:first-child > .easyview-table-cell-content,
+    .ProseMirror tr[data-easyview-sticky="true"] > .easyview-table-cell-content,
+    .easyview-sticky-table-header .easyview-table-cell-content {
+      background: inherit !important;
+    }
+
+    /* Explicit <col> widths are authoritative and must never be enlarged by
+       the intrinsic width of text already inside the cell. */
+    .ProseMirror table.table-manual-width {
+      min-width: 0 !important;
+      table-layout: fixed !important;
+    }
+
+    .ProseMirror table.table-manual-width th,
+    .ProseMirror table.table-manual-width td {
+      box-sizing: border-box;
+      min-width: 0 !important;
+      overflow: hidden;
+    }
+
+    /* Nested tables must not contribute min-content width to the host cell.
+       Host columns can be dragged arbitrarily small or large; the nested table
+       keeps its own width and scrolls horizontally inside the cell. */
+    .ProseMirror td .table-wrapper,
+    .ProseMirror th .table-wrapper {
+      width: 0 !important;
+      min-width: 100% !important;
+      max-width: 100% !important;
+      box-sizing: border-box;
+    }
+
+    .ProseMirror td .table-scrollable,
+    .ProseMirror th .table-scrollable {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    .ProseMirror .table-wrapper > .table-scrollable {
+      padding-top: 26px !important;
+      padding-left: 36px !important;
+      padding-right: 8px !important;
+    }
+
+    .ProseMirror td .table-wrapper > .table-scrollable,
+    .ProseMirror th .table-wrapper > .table-scrollable {
+      padding-right: 36px !important;
+    }
+
+    /* Row markers now live inside .table-scrollable so they follow scroll. */
+    .table-wrapper.has-focus > .table-scrollable > .table-controls > .table-grip,
+    .table-wrapper.has-focus > .table-scrollable > .table-controls > .table-grip-row,
+    .table-wrapper.has-focus > .table-scrollable > .table-controls > .table-add-row {
+      opacity: 1;
+    }
+
+    .ProseMirror .table-grip {
+      width: 14px;
+      height: 14px;
+      z-index: 6;
+    }
+
+    /* A nested table wrapper fills the host cell. Centre the nested table
+       itself so extra host-cell width appears as equal side gutters. */
+    .ProseMirror td .table-wrapper > .table-scrollable > table,
+    .ProseMirror th .table-wrapper > .table-scrollable > table {
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* See TableView.syncStickyHeader(): horizontal table scrollports prevent
+       native CSS sticky cells from following the editor's vertical scrollport. */
+    .easyview-sticky-table-header {
+      position: fixed;
+      z-index: 72;
+      pointer-events: none;
+      overflow: visible;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .easyview-sticky-table-header .easyview-sticky-table {
+      border-color: rgba(160, 160, 160, 0.45) !important;
+    }
+
+    .easyview-sticky-table-header th,
+    .easyview-sticky-table-header td {
+      border-color: rgba(160, 160, 160, 0.45) !important;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground));
+    }
+
+    /* The fixed clone receives the source table's measured pixel width and
+       computed border/cell styles in TableView. Do not force 100% here: that
+       would let Chromium redistribute columns and misalign their boundaries. */
+    .easyview-sticky-table-header .easyview-sticky-table {
+      margin: 0 !important;
+    }
+
+    .easyview-sticky-table-header td,
+    .easyview-sticky-table-header th {
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .easyview-sticky-table-header .easyview-table-cell-content {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      text-align: center;
+      background: inherit;
+    }
+
+    .ProseMirror td > .easyview-table-cell-content,
+    .ProseMirror th > .easyview-table-cell-content {
+      box-sizing: border-box;
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 0;
+    }
+
+    /* Table cells: tighten list indent so bullets sit closer to the left edge. */
+    .ProseMirror td ul,
+    .ProseMirror td ol,
+    .ProseMirror th ul,
+    .ProseMirror th ol {
+      padding-left: 12px;
+    }
+
+    .ProseMirror td li > ul.checkbox-list,
+    .ProseMirror td li > ol,
+    .ProseMirror td li > ul,
+    .ProseMirror td li[data-type=checkbox_item] > ul,
+    .ProseMirror td li[data-type=checkbox_item] > ol,
+    .ProseMirror td li[data-type=checkbox_item] > ul.checkbox-list,
+    .ProseMirror th li > ul.checkbox-list,
+    .ProseMirror th li > ol,
+    .ProseMirror th li > ul,
+    .ProseMirror th li[data-type=checkbox_item] > ul,
+    .ProseMirror th li[data-type=checkbox_item] > ol,
+    .ProseMirror th li[data-type=checkbox_item] > ul.checkbox-list {
+      padding-left: 12px;
+    }
+
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      overscroll-behavior-y: auto;
+      /* Wrap ordinary prose visually inside the manually resized column.
+         This changes layout only; it never inserts line breaks into Markdown. */
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+
+    /* Code remains an intentionally unbreakable payload. If it is wider than
+       the resized cell, the cell/code viewport can still scroll horizontally. */
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content code,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content code {
+      white-space: nowrap;
+      overflow-wrap: normal;
+      word-break: normal;
+    }
+
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content pre,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content pre,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content pre code,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content pre code {
+      white-space: pre;
+      overscroll-behavior-x: contain;
+    }
+
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content {
+      overflow-y: auto;
+      overscroll-behavior: auto;
+      scrollbar-gutter: stable;
+    }
+
+    /* Explicit row heights use the content node as the scroll viewport. The
+       native td vertical-align property cannot reposition a full-height
+       viewport, so TableCellView marks only short, non-overflowing content for
+       scoped flex alignment. Overflow remains top-aligned and scrollable. */
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="middle"],
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="middle"] {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="bottom"],
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="bottom"] {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment] > *,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment] > * {
+      flex: 0 0 auto;
+    }
+
+    /* Keep table scrollbars visually stable. VS Code supplies a darker hover
+       slider color by default; use the normal slider color in every state so
+       hovering a horizontal or vertical table scrollbar never turns it black. */
+    .ProseMirror .table-scrollable,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content,
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content {
+      scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.3)) transparent;
+      scrollbar-width: thin;
+      overflow-anchor: none;
+    }
+
+    .ProseMirror .table-scrollable::-webkit-scrollbar,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar,
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    .ProseMirror .table-scrollable::-webkit-scrollbar-track,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-track,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-track,
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-track,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .ProseMirror .table-scrollable::-webkit-scrollbar-thumb,
+    .ProseMirror .table-scrollable::-webkit-scrollbar-thumb:hover,
+    .ProseMirror .table-scrollable::-webkit-scrollbar-thumb:active,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:hover,
+    .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:active,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:hover,
+    .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:active,
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb,
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:hover,
+    .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:active,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:hover,
+    .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content::-webkit-scrollbar-thumb:active {
+      background: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.3));
+      border-radius: 5px;
+    }
+
+    .ProseMirror .table-scrollable::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    /* Column-resize cursor must stay on the active table. Applying it to
+       .ProseMirror restyles the entire document and flashes the screen. */
+    .table-wrapper.easyview-col-resize-cursor,
+    .table-wrapper.easyview-col-resize-cursor * {
+      cursor: col-resize !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function updateGitChangeRailOffset(): void {
   const scrollArea = document.getElementById('editor-scroll-area');
   const proseMirror = document.querySelector('#editor .ProseMirror') as HTMLElement | null;
@@ -341,7 +715,10 @@ function updateGitChangeRailOffset(): void {
   const referenceRect = referenceBlock.getBoundingClientRect();
   const paneInset = 6;
   const offset = Math.max(12, Math.round(referenceRect.left - scrollRect.left - paneInset));
-  proseMirror.style.setProperty('--easyview-change-rail-offset', `${offset}px`);
+  const nextOffset = `${offset}px`;
+  if (proseMirror.style.getPropertyValue('--easyview-change-rail-offset') !== nextOffset) {
+    proseMirror.style.setProperty('--easyview-change-rail-offset', nextOffset);
+  }
 }
 
 function refreshChangeRailsAfterLayout(): void {
@@ -353,6 +730,7 @@ function refreshChangeRailsAfterLayout(): void {
   refresh();
   requestAnimationFrame(refresh);
   setTimeout(refresh, 60);
+  setTimeout(refresh, 220);
 }
 
 function findFirstChangedLine(previousContent: string, nextContent: string): number | null {
@@ -406,7 +784,8 @@ function showToast(message: string) {
 }
 
 /** Same regex as provider — matches settings comment at file start */
-const SETTINGS_COMMENT_RE = /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?(?:\s+lineNumbersVisible:\s*(true|false))?\s*-->[\r\n]*/;
+const SETTINGS_COMMENT_RE =
+  /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?(?:\s+lineNumbersVisible:\s*(true|false))?\s*-->[\r\n]*/;
 
 function stripSettingsComment(content: string): string {
   return content.replace(SETTINGS_COMMENT_RE, '');
@@ -428,7 +807,7 @@ function findApproximateMarkdownPosition(
   markdown: string,
   lineText: string,
   textBeforeLine: string,
-  wordPrefix: string,
+  wordPrefix: string
 ): { line: number; character: number } {
   const rawLines = markdown.split('\n');
   const normalizedLineText = normalizeMarkdownLineForMatch(lineText);
@@ -493,18 +872,26 @@ function updateSourceSettingsComment(): void {
 
 function postEdit(content: string): void {
   if (!canPostEditsToHost) {
-    console.debug('[InLineMd] Suppressed pre-init edit sync', { length: content.length });
+    console.debug('[InLineMd] Suppressed pre-init edit sync', {
+      length: content.length,
+    });
     vscode.postMessage({
       type: 'openWithDebugLog',
       stage: 'suppressedPreInitEdit',
-      meta: { editLength: content.length, currentContentLength: currentContent.length },
+      meta: {
+        editLength: content.length,
+        currentContentLength: currentContent.length,
+      },
     });
     return;
   }
   vscode.postMessage({
     type: 'openWithDebugLog',
     stage: 'postEdit',
-    meta: { editLength: content.length, currentContentLength: currentContent.length },
+    meta: {
+      editLength: content.length,
+      currentContentLength: currentContent.length,
+    },
   });
   vscode.postMessage({
     type: 'edit',
@@ -604,14 +991,21 @@ async function copyTextToClipboard(text: string, successMessage: string): Promis
   vscode.postMessage({ type: 'copyTextToClipboard', text, successMessage });
 }
 
-async function copyOutlinePathForSelection(): Promise<void> {
-  const outline = getCurrentOutlinePath();
+async function copyOutlinePathText(outline: string): Promise<void> {
   if (!outline) {
     showToast('No outline path found');
     return;
   }
   const fileName = currentFilePath.split(/[\\/]/).pop()?.trim() || 'Unknown.md';
   await copyTextToClipboard(`文件：${fileName}\n内容位置：${outline}`, 'Copied outline path');
+}
+
+async function copyOutlinePathForSelection(): Promise<void> {
+  await copyOutlinePathText(getCurrentOutlinePath());
+}
+
+async function copyOutlinePathAtPos(pos: number): Promise<void> {
+  await copyOutlinePathText(computeHeadingBreadcrumbForPos(pos));
 }
 
 async function copyFullPathForSelection(): Promise<void> {
@@ -689,7 +1083,8 @@ function initEditor() {
   wysiwygGhostEl.style.display = 'none';
   wysiwygGhostEl.style.pointerEvents = 'none';
   wysiwygGhostEl.style.whiteSpace = 'pre';
-  wysiwygGhostEl.style.color = 'var(--vscode-inlineSuggestion-foreground, var(--vscode-editorGhostText-foreground, rgba(128, 128, 128, 0.7)))';
+  wysiwygGhostEl.style.color =
+    'var(--vscode-inlineSuggestion-foreground, var(--vscode-editorGhostText-foreground, rgba(128, 128, 128, 0.7)))';
   wysiwygGhostEl.style.opacity = '0.9';
   wysiwygGhostEl.style.zIndex = '40';
   document.body.appendChild(wysiwygGhostEl);
@@ -762,12 +1157,20 @@ function initEditor() {
 
   // Register toast callback for HeadingExtension (anchor link copy)
   setToastFunction(showToast);
+  setHeadingOutlinePathCopyHandler((headingPos) => {
+    void copyOutlinePathAtPos(headingPos);
+  });
 
   // 2. Create UI components
   const tUI = performance.now();
   const fileHeader = createFileHeader({
     postMessage: (msg) => vscode.postMessage(msg),
-    getState: () => ({ isFullWidth, isTocVisible, isTableWrap, currentContent }),
+    getState: () => ({
+      isFullWidth,
+      isTocVisible,
+      isTableWrap,
+      currentContent,
+    }),
     setState: (patch) => {
       if (patch.isFullWidth !== undefined) isFullWidth = patch.isFullWidth;
       if (patch.isTocVisible !== undefined) isTocVisible = patch.isTocVisible;
@@ -790,8 +1193,12 @@ function initEditor() {
     editorBody.parentElement?.insertBefore(fileHeader.el, editorBody);
   }
   const toolbar = new FloatingToolbar();
-  (window as any).__easyviewCopyOutlinePath = () => { void copyOutlinePathForSelection(); };
-  (window as any).__easyviewCopyFullPath = () => { void copyFullPathForSelection(); };
+  (window as any).__easyviewCopyOutlinePath = () => {
+    void copyOutlinePathForSelection();
+  };
+  (window as any).__easyviewCopyFullPath = () => {
+    void copyFullPathForSelection();
+  };
   console.log(`[InLineMd perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
   let stickyNote: StickyNoteFacade = createNoopStickyNote();
   const terminalModal = createTerminalModal({
@@ -810,14 +1217,15 @@ function initEditor() {
     return true;
   };
   let updateTocStatusBar = () => {};
+  let refreshHistoryPanel = () => {};
 
   // 3. Create EditorCore
   const tCore = performance.now();
   const editor = new EditorCore({
     extensions,
     keymaps: {
-      Tab: (_state, _dispatch, view) => view ? runNativeWysiwygTab(view, false) : false,
-      'Shift-Tab': (_state, _dispatch, view) => view ? runNativeWysiwygTab(view, true) : false,
+      Tab: (_state, _dispatch, view) => (view ? runNativeWysiwygTab(view, false) : false),
+      'Shift-Tab': (_state, _dispatch, view) => (view ? runNativeWysiwygTab(view, true) : false),
       'Mod-k': (_state, _dispatch, view) => {
         if (view) linkEditPopup.toggle(view);
         return true;
@@ -846,6 +1254,13 @@ function initEditor() {
       } else {
         renderWysiwygGhost();
       }
+
+      if (tr.docChanged && !isHistoryTransaction(tr) && tr.getMeta('addToHistory') !== false) {
+        const label = describeProseMirrorTransaction(tr);
+        if (label) editOperationLog.notePendingLabel(label, 'wysiwyg');
+      }
+      editOperationLog.sync(undoDepth(view.state), redoDepth(view.state), 'wysiwyg');
+      refreshHistoryPanel();
     },
     onContentChange(markdown) {
       _hasEditedInCurrentMode = true;
@@ -907,9 +1322,10 @@ function initEditor() {
 
   try {
     stickyNote = createStickyNoteModal({
-      getDocumentContent: () => (isSourceMode && sourceEditor
-        ? stripSettingsComment(sourceEditor.getContent())
-        : (currentContent || editor.getMarkdown())),
+      getDocumentContent: () =>
+        isSourceMode && sourceEditor
+          ? stripSettingsComment(sourceEditor.getContent())
+          : currentContent || editor.getMarkdown(),
       commitDocumentContent: (content, options) => {
         currentContent = content;
         if (isSourceMode && sourceEditor) {
@@ -937,7 +1353,7 @@ function initEditor() {
       type: 'webviewRuntimeError',
       source: 'sticky-note-init',
       message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-      stack: error instanceof Error ? error.stack ?? '' : '',
+      stack: error instanceof Error ? (error.stack ?? '') : '',
     });
     stickyNote = createNoopStickyNote();
   }
@@ -951,10 +1367,23 @@ function initEditor() {
   globalEditorView = view;
   window.addEventListener('resize', renderWysiwygGhost);
   window.addEventListener('resize', updateGitChangeRailOffset);
+  window.addEventListener('easyview-toc-layout-change', refreshChangeRailsAfterLayout);
+  window.addEventListener('easyview-editor-layout-change', refreshChangeRailsAfterLayout);
   document.getElementById('editor-scroll-area')?.addEventListener('scroll', renderWysiwygGhost, { passive: true });
-  const layoutObserver = new ResizeObserver(() => updateGitChangeRailOffset());
+  let layoutUpdateFrame: number | null = null;
+  const scheduleLayoutRailUpdate = (): void => {
+    if (layoutUpdateFrame !== null) return;
+    layoutUpdateFrame = requestAnimationFrame(() => {
+      layoutUpdateFrame = null;
+      updateGitChangeRailOffset();
+      refreshAiChangeMarkers();
+    });
+  };
+  const layoutObserver = new ResizeObserver(scheduleLayoutRailUpdate);
   const scrollAreaElement = document.getElementById('editor-scroll-area');
+  const editorBodyElement = document.getElementById('editor-body');
   if (scrollAreaElement) layoutObserver.observe(scrollAreaElement);
+  if (editorBodyElement) layoutObserver.observe(editorBodyElement);
   layoutObserver.observe(editorElement);
   editorElement.addEventListener('focusout', () => {
     wysiwygGhostRequestToken++;
@@ -964,13 +1393,17 @@ function initEditor() {
 
   // Initialize custom context menu (Cut/Copy/Paste/Paste as Text)
   const contextPasteParser = createPasteParser();
-  initContextMenu(editorElement, () => editor.view, () => contextPasteParser);
+  initContextMenu(
+    editorElement,
+    () => editor.view,
+    () => contextPasteParser
+  );
 
   // Create Find & Replace panel
   const findReplacePanel = new FindAndReplacePanel(view);
   findReplacePanel.setSourceCallbacks(
     () => sourceEditor,
-    () => isSourceMode,
+    () => isSourceMode
   );
 
   // Create Table of Contents sidebar
@@ -980,26 +1413,29 @@ function initEditor() {
   const historyPanel = new HistoryPanel({
     getView: () => editor.view,
     getDualHistory: () => dualHistory,
+    getOperationLog: () => editOperationLog,
     getIsSourceMode: () => isSourceMode,
     getSourceView: () => sourceEditor?.view ?? null,
     triggerUndo() {
       if (isSourceMode && sourceEditor) {
-        // Dispatch Ctrl+Z to source editor
-        const cmView = sourceEditor.view;
-        cmView.dispatch({ userEvent: 'undo' });
+        cmUndo(sourceEditor.view);
       } else if (editor.view) {
         undo(editor.view.state, editor.view.dispatch);
       }
     },
     triggerRedo() {
       if (isSourceMode && sourceEditor) {
-        const cmView = sourceEditor.view;
-        cmView.dispatch({ userEvent: 'redo' });
+        cmRedo(sourceEditor.view);
       } else if (editor.view) {
         redo(editor.view.state, editor.view.dispatch);
       }
     },
+    onVisibilityChange(visible) {
+      fileHeader.getHistoryBtn().classList.toggle('active', visible);
+      refreshChangeRailsAfterLayout();
+    },
   });
+  refreshHistoryPanel = () => historyPanel.refresh();
 
   // 5. Wire file header handlers
   const scrollToEditorTop = () => {
@@ -1048,7 +1484,6 @@ function initEditor() {
   });
   fileHeader.setHistoryHandler(() => {
     historyPanel.toggle();
-    fileHeader.getHistoryBtn().classList.toggle('active', historyPanel.visible);
   });
   fileHeader.setTocHandler(() => {
     toc.toggle();
@@ -1096,17 +1531,18 @@ function initEditor() {
   (window as any).__easyviewGetImageDataUrl = (originalSrc: string): Promise<string | null> => {
     const cached = clipboardImageDataCache.get(originalSrc);
     if (cached) return cached;
-    const request = requestImageBase64FromHost(originalSrc, 15000)
-      .catch(() => null);
+    const request = requestImageBase64FromHost(originalSrc, 15000).catch(() => null);
     clipboardImageDataCache.set(originalSrc, request);
     return request;
   };
 
   window.addEventListener('inlinemd:resolveImageFallback', (event: Event) => {
-    const detail = (event as CustomEvent<{
-      originalSrc?: string;
-      apply?: (resolvedSrc: string | null) => void;
-    }>).detail;
+    const detail = (
+      event as CustomEvent<{
+        originalSrc?: string;
+        apply?: (resolvedSrc: string | null) => void;
+      }>
+    ).detail;
 
     if (!detail?.originalSrc || typeof detail.apply !== 'function') return;
 
@@ -1122,7 +1558,11 @@ function initEditor() {
         title: fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document',
         isDark: theme === 'dark',
       });
-      vscode.postMessage({ type: 'exportHtml', html: result.html, images: result.images });
+      vscode.postMessage({
+        type: 'exportHtml',
+        html: result.html,
+        images: result.images,
+      });
     } catch (err) {
       console.error('[InLineMd] Export failed:', err);
       vscode.postMessage({ type: 'showInfo', text: `Export failed: ${err}` });
@@ -1137,7 +1577,10 @@ function initEditor() {
       vscode.postMessage({ type: 'exportPdfBase64', data: base64 });
     } catch (err) {
       console.error('[InLineMd] PDF export failed:', err);
-      vscode.postMessage({ type: 'showInfo', text: `PDF export failed: ${err}` });
+      vscode.postMessage({
+        type: 'showInfo',
+        text: `PDF export failed: ${err}`,
+      });
     }
   }
 
@@ -1148,14 +1591,44 @@ function initEditor() {
     return editor.getMarkdown();
   }
 
-  function triggerExportDocx() {
+  async function triggerExportDocx() {
     try {
       const title = fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document';
       const markdown = getMarkdownForExport();
-      vscode.postMessage({ type: 'exportDocx', title, markdown });
+      const mermaidImages: Array<{ source: string; pngBase64: string; width: number; height: number }> = [];
+      try {
+        const { extractMermaidSourcesFromMarkdown, collectExportMermaidPngs, looksLikeMermaid, normalizeMermaidSource } = await import('./extensions/export/pdf/PdfMermaidRenderer');
+        const { LIGHT_PALETTE } = await import('./extensions/export/pdf/PdfPalette');
+        const sources = extractMermaidSourcesFromMarkdown(markdown);
+        view.state.doc.descendants((node) => {
+          if (node.type.name === 'code_block') {
+            const lang = String(node.attrs.language || '').trim().toLowerCase();
+            const text = normalizeMermaidSource(node.textContent || '');
+            if (text && (lang === 'mermaid' || lang === 'mermaidjs' || looksLikeMermaid(text))) sources.push(text);
+          } else if (node.type.name === 'mermaid') {
+            const text = normalizeMermaidSource(node.attrs.content || '');
+            if (text) sources.push(text);
+          }
+        });
+        const { ordered } = await collectExportMermaidPngs(sources, LIGHT_PALETTE);
+        for (const png of ordered) {
+          mermaidImages.push({
+            source: png.source,
+            pngBase64: png.base64,
+            width: png.width,
+            height: png.height,
+          });
+        }
+      } catch (err) {
+        console.warn('[InLineMd] Mermaid render for DOCX failed; exporting diagrams as code:', err);
+      }
+      vscode.postMessage({ type: 'exportDocx', title, markdown, mermaidImages });
     } catch (err) {
       console.error('[InLineMd] DOCX export failed:', err);
-      vscode.postMessage({ type: 'showInfo', text: `DOCX export failed: ${err}` });
+      vscode.postMessage({
+        type: 'showInfo',
+        text: `DOCX export failed: ${err}`,
+      });
     }
   }
 
@@ -1243,9 +1716,7 @@ function initEditor() {
       const mappedLine1Based = cachedTextblockLineMap[targetOrdinal];
       const rawLine = cachedMarkdownLines[Math.max(0, mappedLine1Based - 1)] ?? '';
       const beforeIdx = textBeforeLine ? rawLine.indexOf(textBeforeLine) : -1;
-      const character = beforeIdx >= 0
-        ? beforeIdx + textBeforeLine.length
-        : approx.character;
+      const character = beforeIdx >= 0 ? beforeIdx + textBeforeLine.length : approx.character;
       return {
         line: Math.max(0, mappedLine1Based - 1),
         character: Math.max(0, character),
@@ -1256,9 +1727,10 @@ function initEditor() {
   };
 
   updateTocStatusBar = () => {
-    const markdown = isSourceMode && sourceEditor
-      ? stripSettingsComment(sourceEditor.getContent())
-      : (currentContent || editor.getMarkdown());
+    const markdown =
+      isSourceMode && sourceEditor
+        ? stripSettingsComment(sourceEditor.getContent())
+        : currentContent || editor.getMarkdown();
 
     if (isSourceMode && sourceEditor) {
       const sourceSelection = sourceEditor.view.state.selection.main;
@@ -1330,48 +1802,48 @@ function initEditor() {
 
     const requestToken = wysiwygGhostRequestToken;
     wysiwygGhostTimer = setTimeout(() => {
-      void requestTabCompletionFromHost(
-        context.approx.line,
-        context.approx.character,
-        context.wordPrefix,
-      ).then((completion) => {
-        if (requestToken !== wysiwygGhostRequestToken || !editor.view) return;
+      void requestTabCompletionFromHost(context.approx.line, context.approx.character, context.wordPrefix)
+        .then((completion) => {
+          if (requestToken !== wysiwygGhostRequestToken || !editor.view) return;
 
-        const activeSelection = editor.view.state.selection;
-        if (!activeSelection.empty || activeSelection.from !== context.anchor) return;
+          const activeSelection = editor.view.state.selection;
+          if (!activeSelection.empty || activeSelection.from !== context.anchor) return;
 
-        const insertText = completion?.insertText ?? '';
-        const currentText = editor.view.state.doc.textBetween(context.replaceFrom, context.replaceTo, '\n', '\n');
-        const displayText = insertText.startsWith(currentText)
-          ? insertText.slice(currentText.length)
-          : insertText;
+          const insertText = completion?.insertText ?? '';
+          const currentText = editor.view.state.doc.textBetween(context.replaceFrom, context.replaceTo, '\n', '\n');
+          const displayText = insertText.startsWith(currentText) ? insertText.slice(currentText.length) : insertText;
 
-        if (!displayText) {
-          hideWysiwygGhost();
-          return;
-        }
+          if (!displayText) {
+            hideWysiwygGhost();
+            return;
+          }
 
-        wysiwygGhostSuggestion = {
-          anchor: context.anchor,
-          replaceFrom: context.replaceFrom,
-          replaceTo: context.replaceTo,
-          insertText,
-          displayText,
-        };
-        renderWysiwygGhost();
-      }).catch(() => {
-        if (requestToken === wysiwygGhostRequestToken) {
-          hideWysiwygGhost();
-        }
-      });
+          wysiwygGhostSuggestion = {
+            anchor: context.anchor,
+            replaceFrom: context.replaceFrom,
+            replaceTo: context.replaceTo,
+            insertText,
+            displayText,
+          };
+          renderWysiwygGhost();
+        })
+        .catch(() => {
+          if (requestToken === wysiwygGhostRequestToken) {
+            hideWysiwygGhost();
+          }
+        });
     }, 120);
   };
 
   const requestTabCompletionFromHost = (
     line: number,
     character: number,
-    wordPrefix: string,
-  ): Promise<{ insertText: string; replaceStartCharacter?: number; replaceEndCharacter?: number } | null> => {
+    wordPrefix: string
+  ): Promise<{
+    insertText: string;
+    replaceStartCharacter?: number;
+    replaceEndCharacter?: number;
+  } | null> => {
     return new Promise((resolve) => {
       const requestId = Math.random().toString(36).slice(2, 11);
       const timeout = setTimeout(() => {
@@ -1390,17 +1862,21 @@ function initEditor() {
         }
         resolve({
           insertText: message.insertText,
-          replaceStartCharacter: typeof message.replaceStartCharacter === 'number'
-            ? message.replaceStartCharacter
-            : undefined,
-          replaceEndCharacter: typeof message.replaceEndCharacter === 'number'
-            ? message.replaceEndCharacter
-            : undefined,
+          replaceStartCharacter:
+            typeof message.replaceStartCharacter === 'number' ? message.replaceStartCharacter : undefined,
+          replaceEndCharacter:
+            typeof message.replaceEndCharacter === 'number' ? message.replaceEndCharacter : undefined,
         });
       };
 
       window.addEventListener('message', handler);
-      vscode.postMessage({ type: 'requestTabCompletion', requestId, line, character, wordPrefix });
+      vscode.postMessage({
+        type: 'requestTabCompletion',
+        requestId,
+        line,
+        character,
+        wordPrefix,
+      });
     });
   };
 
@@ -1413,7 +1889,7 @@ function initEditor() {
         pmView.state.tr.insertText(
           wysiwygGhostSuggestion.insertText,
           wysiwygGhostSuggestion.replaceFrom,
-          wysiwygGhostSuggestion.replaceTo,
+          wysiwygGhostSuggestion.replaceTo
         )
       );
       hideWysiwygGhost();
@@ -1424,26 +1900,20 @@ function initEditor() {
     const context = getWysiwygTabContext(pmView);
     if (!context) return false;
 
-    void requestTabCompletionFromHost(
-      context.approx.line,
-      context.approx.character,
-      context.wordPrefix,
-    ).then((completion) => {
-      if (!completion?.insertText || !editor.view) return;
+    void requestTabCompletionFromHost(context.approx.line, context.approx.character, context.wordPrefix).then(
+      (completion) => {
+        if (!completion?.insertText || !editor.view) return;
 
-      const activeSelection = editor.view.state.selection;
-      if (!activeSelection.empty || activeSelection.from !== context.anchor) return;
+        const activeSelection = editor.view.state.selection;
+        if (!activeSelection.empty || activeSelection.from !== context.anchor) return;
 
-      editor.view.dispatch(
-        editor.view.state.tr.insertText(
-          completion.insertText,
-          context.replaceFrom,
-          context.replaceTo,
-        )
-      );
-      hideWysiwygGhost();
-      editor.view.focus();
-    });
+        editor.view.dispatch(
+          editor.view.state.tr.insertText(completion.insertText, context.replaceFrom, context.replaceTo)
+        );
+        hideWysiwygGhost();
+        editor.view.focus();
+      }
+    );
 
     return true;
   };
@@ -1469,9 +1939,8 @@ function initEditor() {
 
   function openNativeSourceMode() {
     const sourcePosition = getNativeSourcePosition();
-    const content = isSourceMode && sourceEditor
-      ? stripSettingsComment(sourceEditor.getContent())
-      : editor.getMarkdown();
+    const content =
+      isSourceMode && sourceEditor ? stripSettingsComment(sourceEditor.getContent()) : editor.getMarkdown();
 
     wysiwygGhostRequestToken++;
     hideWysiwygGhost();
@@ -1502,9 +1971,10 @@ function initEditor() {
       }
       toolbar.forceHide();
 
-      const scrollPct = scrollArea.scrollHeight > scrollArea.clientHeight
-        ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
-        : 0;
+      const scrollPct =
+        scrollArea.scrollHeight > scrollArea.clientHeight
+          ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
+          : 0;
 
       const rawMd = editor.getMarkdown();
       const fullMd = rawMd;
@@ -1528,6 +1998,22 @@ function initEditor() {
               currentContent = content;
               postEdit(content);
             }
+          },
+          onDocumentHistoryChange: (update) => {
+            const before = update.startState.doc.toString();
+            const after = update.state.doc.toString();
+            const isHistory =
+              update.transactions.some((tr) => tr.isUserEvent('undo') || tr.isUserEvent('redo'));
+            if (!isHistory) {
+              const label = describeSourceDocChange(before, after);
+              if (label) editOperationLog.notePendingLabel(label, 'source');
+            }
+            editOperationLog.sync(
+              cmUndoDepth(update.state),
+              cmRedoDepth(update.state),
+              'source',
+            );
+            historyPanel.refresh();
           },
           onSelectionOrDocChange: () => {
             updateTocStatusBar();
@@ -1607,7 +2093,11 @@ function initEditor() {
 
       const headingLineMap: { pos: number; line: number }[] = [];
       const fullMdLines = fullMd.split('\n');
-      const headings = toc['headings'] as { level: number; text: string; pos: number }[];
+      const headings = toc['headings'] as {
+        level: number;
+        text: string;
+        pos: number;
+      }[];
       for (const h of headings) {
         const searchStr = '#'.repeat(h.level) + ' ' + h.text;
         for (let i = 0; i < fullMdLines.length; i++) {
@@ -1642,9 +2132,10 @@ function initEditor() {
         dualHistory.recordModeSwitch(stripSettingsComment(rawMdForHistory), 'source', sourceEditor!.view.state);
       }
       const cmScroller = sourceEditor!.view.scrollDOM;
-      const scrollPct = cmScroller.scrollHeight > cmScroller.clientHeight
-        ? cmScroller.scrollTop / (cmScroller.scrollHeight - cmScroller.clientHeight)
-        : 0;
+      const scrollPct =
+        cmScroller.scrollHeight > cmScroller.clientHeight
+          ? cmScroller.scrollTop / (cmScroller.scrollHeight - cmScroller.clientHeight)
+          : 0;
 
       const rawMd = sourceEditor!.getContent();
       const md = stripSettingsComment(rawMd);
@@ -1701,11 +2192,8 @@ function initEditor() {
     const isInShortcutModal = !!target?.closest('.file-header-shortcuts-modal');
     const isInCommitModal = !!target?.closest('.file-header-commit-modal');
     const isInTerminalModal = !!target?.closest('.easyview-terminal-modal');
-    const isTextInputLike = !!target && (
-      target.tagName === 'INPUT'
-      || target.tagName === 'TEXTAREA'
-      || target.tagName === 'SELECT'
-    );
+    const isTextInputLike =
+      !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
     const isFileNameEditing = !!target?.closest('.file-header-name');
 
     // Do not hijack shortcuts when editing shortcut form fields or file name.
@@ -1872,8 +2360,14 @@ function initEditor() {
     const newIsDark = isDarkTheme();
     applyThemeChange(newIsDark);
   });
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
-  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  });
+  themeObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  });
 
   // 9. Message handling
   let initReceived = false;
@@ -1903,17 +2397,14 @@ function initEditor() {
         if (message.type === 'init') {
           console.log('[InLineMd perf] init message received');
           dualHistory.clear();
+          editOperationLog.clear();
         }
         initReceived = true;
         const content = message.content || '';
-        const changedLine = !isInit
-          ? findFirstChangedLine(previousContent, content)
-          : null;
+        const changedLine = !isInit ? findFirstChangedLine(previousContent, content) : null;
         const changedTotalLines = Math.max(1, content.split('\n').length);
-        const shouldAutoFollowExternalChange = !isInit
-          && autoFollowExternalEdits
-          && !message.skipAutoScroll
-          && changedLine !== null;
+        const shouldAutoFollowExternalChange =
+          !isInit && autoFollowExternalEdits && !message.skipAutoScroll && changedLine !== null;
 
         if (message.imagePathMap) {
           editor.setImagePathMap(message.imagePathMap);
@@ -1942,6 +2433,9 @@ function initEditor() {
             if (!isTocVisible) toc.close();
             fileHeader.syncTocState(isTocVisible);
           }
+          if (typeof message.tableFirstRowStickyDefault === 'boolean') {
+            setFirstRowStickyDefault(message.tableFirstRowStickyDefault);
+          }
           if (typeof message.tableWrap === 'boolean') {
             isTableWrap = message.tableWrap;
             document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
@@ -1966,9 +2460,10 @@ function initEditor() {
 
         const tSetContent = isInit ? performance.now() : 0;
         const scrollArea = document.getElementById('editor-scroll-area');
-        const prevScrollRatio = !isInit && scrollArea && scrollArea.scrollHeight > scrollArea.clientHeight
-          ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
-          : 0;
+        const prevScrollRatio =
+          !isInit && scrollArea && scrollArea.scrollHeight > scrollArea.clientHeight
+            ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
+            : 0;
         editor.setContent(content, isInit, isInit ? undefined : { scrollIntoView: false });
         canPostEditsToHost = true;
         updateTocStatusBar();
@@ -1987,10 +2482,12 @@ function initEditor() {
         }
         refreshChangeRailsAfterLayout();
         if (Array.isArray(message.gitLineRanges) && view) {
-          view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
-            lineRanges: message.gitLineRanges,
-            content,
-          }));
+          view.dispatch(
+            view.state.tr.setMeta(GIT_CHANGE_META, {
+              lineRanges: message.gitLineRanges,
+              content,
+            })
+          );
         }
         if (isInit) {
           console.log(`[InLineMd perf] editor.setContent(init): ${(performance.now() - tSetContent).toFixed(1)}ms`);
@@ -1999,12 +2496,10 @@ function initEditor() {
           requestAnimationFrame(() => {
             const scrollArea = document.getElementById('editor-scroll-area');
             if (scrollArea) {
-              const cursorLine = typeof (message as any).initialCursorLine === 'number'
-                ? (message as any).initialCursorLine
-                : 0;
-              const totalLines = typeof (message as any).initialTotalLines === 'number'
-                ? (message as any).initialTotalLines
-                : 1;
+              const cursorLine =
+                typeof (message as any).initialCursorLine === 'number' ? (message as any).initialCursorLine : 0;
+              const totalLines =
+                typeof (message as any).initialTotalLines === 'number' ? (message as any).initialTotalLines : 1;
               const safeTotal = Math.max(1, totalLines);
               const safeLine = Math.min(Math.max(0, cursorLine), safeTotal - 1);
               const ratioDenominator = Math.max(1, safeTotal - 1);
@@ -2035,10 +2530,12 @@ function initEditor() {
           if (messageContent !== null && messageContent !== currentContent) {
             break;
           }
-          view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
-            lineRanges: Array.isArray(message.lineRanges) ? message.lineRanges : [],
-            content: messageContent ?? currentContent,
-          }));
+          view.dispatch(
+            view.state.tr.setMeta(GIT_CHANGE_META, {
+              lineRanges: Array.isArray(message.lineRanges) ? message.lineRanges : [],
+              content: messageContent ?? currentContent,
+            })
+          );
         }
         break;
 
@@ -2054,7 +2551,8 @@ function initEditor() {
       }
 
       case 'commitMessageGenerationFailed': {
-        const messageText = typeof message.message === 'string' ? message.message : 'Failed to generate commit message.';
+        const messageText =
+          typeof message.message === 'string' ? message.message : 'Failed to generate commit message.';
         fileHeader.setCommitError(messageText);
         showToast(messageText);
         break;
@@ -2158,7 +2656,18 @@ function initEditor() {
     }
   });
 
+  const isResizeObserverLoopDiagnostic = (message: string): boolean =>
+    message === 'ResizeObserver loop completed with undelivered notifications.' ||
+    message === 'ResizeObserver loop limit exceeded';
+
   window.addEventListener('error', (event) => {
+    if (isResizeObserverLoopDiagnostic(event.message)) {
+      // Chromium reports this as a window error even though it is a recoverable
+      // layout diagnostic. Keep it out of the user-facing VS Code error dialog.
+      console.warn(`[InLineMd] ${event.message}`);
+      return;
+    }
+
     vscode.postMessage({
       type: 'webviewRuntimeError',
       source: 'window-error',
@@ -2173,7 +2682,7 @@ function initEditor() {
       type: 'webviewRuntimeError',
       source: 'unhandled-rejection',
       message: reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason),
-      stack: reason instanceof Error ? reason.stack ?? '' : '',
+      stack: reason instanceof Error ? (reason.stack ?? '') : '',
     });
   });
 
@@ -2188,12 +2697,14 @@ function initEditor() {
   } else {
     vscode.postMessage({ type: 'ready' });
     const readyRetry = setInterval(() => {
-      if (initReceived) { clearInterval(readyRetry); return; }
+      if (initReceived) {
+        clearInterval(readyRetry);
+        return;
+      }
       vscode.postMessage({ type: 'ready' });
     }, 500);
     setTimeout(() => clearInterval(readyRetry), 10000);
   }
-
 }
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────────
@@ -2202,10 +2713,14 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     ensurePlaceholderHorizontalFlowStyles();
     ensureMinimalGitChangeStyles();
+    ensureEditorContentGutterStyles();
+    ensureTableWidthStyles();
     initEditor();
   });
 } else {
   ensurePlaceholderHorizontalFlowStyles();
   ensureMinimalGitChangeStyles();
+  ensureEditorContentGutterStyles();
+  ensureTableWidthStyles();
   initEditor();
 }

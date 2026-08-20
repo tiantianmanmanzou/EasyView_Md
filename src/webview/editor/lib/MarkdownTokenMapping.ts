@@ -57,7 +57,15 @@ export const tokenMapping: Record<string, any> = {
     },
   },
   table: { block: 'table' },
-  tr: { block: 'table_row' },
+  tr: {
+    block: 'table_row',
+    // HTML table reconstruction carries row-only editor state as token
+    // attributes. The generic mapping must read it; otherwise a saved
+    // `data-easyview-sticky="true"` is discarded on the next file reload.
+    getAttrs(token: any) {
+      return { sticky: token.attrGet('data-easyview-sticky') === 'true' };
+    },
+  },
   th: {
     block: 'table_header',
     getAttrs(token: any) {

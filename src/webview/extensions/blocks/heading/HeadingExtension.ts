@@ -29,14 +29,63 @@ import {
 // ─── Toast helper (imported lazily to avoid circular deps) ──────────────────
 
 let showToastFn: ((msg: string) => void) | null = null;
+let copyHeadingOutlinePathFn: ((headingPos: number) => void) | null = null;
+let headingPointerDown: { x: number; y: number } | null = null;
 
 /** Register a toast function from the UI layer */
 export function setToastFunction(fn: (msg: string) => void) {
   showToastFn = fn;
 }
 
+/** Register outline-path copy for heading title clicks (same payload as toolbar >>). */
+export function setHeadingOutlinePathCopyHandler(fn: (headingPos: number) => void) {
+  copyHeadingOutlinePathFn = fn;
+}
+
 function showToast(msg: string) {
   if (showToastFn) showToastFn(msg);
+}
+
+function ensureHeadingCopyStyles(): void {
+  const styleId = 'easyview-heading-copy-styles';
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .ProseMirror h1,
+    .ProseMirror h2,
+    .ProseMirror h3,
+    .ProseMirror h4,
+    .ProseMirror h5,
+    .ProseMirror h6 {
+      cursor: pointer;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function headingPosFromEvent(view: EditorView, event: MouseEvent): number | null {
+  const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+  if (!coords) return null;
+  const $pos = view.state.doc.resolve(Math.min(coords.pos, view.state.doc.content.size));
+  for (let depth = $pos.depth; depth > 0; depth--) {
+    if ($pos.node(depth).type.name === 'heading') {
+      return $pos.before(depth);
+    }
+  }
+  return null;
+}
+
+function shouldCopyHeadingOutlinePath(event: MouseEvent): boolean {
+  if (event.button !== 0 || event.detail !== 1) return false;
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false;
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  if (target.closest('.heading-actions, .heading-anchor, .heading-fold, .block-drag-handle')) {
+    return false;
+  }
+  return Boolean(target.closest('h1, h2, h3, h4, h5, h6'));
 }
 
 // ─── Heading Extension ──────────────────────────────────────────────────────
@@ -67,7 +116,7 @@ export class HeadingExtension extends Extension {
         toDOM(node) {
           return [
             `h${node.attrs.level}`,
-            { class: 'heading-content', dir: 'auto' },
+            { class: 'heading-content', dir: 'auto', title: 'Copy outline path' },
             0,
           ];
         },
@@ -106,6 +155,10 @@ export class HeadingExtension extends Extension {
   get serializerNodes(): Record<string, SerializerNodeHandler> {
     return {
       heading(state, node) {
+        if (node.content.size === 0) {
+          state.closeBlock(node);
+          return;
+        }
         state.write('#'.repeat(node.attrs.level) + ' ');
         state.renderInline(node);
         state.closeBlock(node);
@@ -116,6 +169,8 @@ export class HeadingExtension extends Extension {
   // ── Private: Heading Plugin ──
 
   private headingPlugin(): Plugin[] {
+    ensureHeadingCopyStyles();
+
     const widgetsPlugin = new Plugin({
       key: new PluginKey('headingWidgets'),
       state: {
@@ -132,6 +187,29 @@ export class HeadingExtension extends Extension {
       props: {
         decorations(state) {
           return this.getState(state);
+        },
+        handleDOMEvents: {
+          mousedown(_view, event) {
+            if (!(event instanceof MouseEvent)) return false;
+            headingPointerDown =
+              event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+            return false;
+          },
+          click(view, event) {
+            const start = headingPointerDown;
+            headingPointerDown = null;
+            if (!(event instanceof MouseEvent)) return false;
+            if (!copyHeadingOutlinePathFn || !start || !shouldCopyHeadingOutlinePath(event)) {
+              return false;
+            }
+            const dx = event.clientX - start.x;
+            const dy = event.clientY - start.y;
+            if (dx * dx + dy * dy > 16) return false;
+            const headingPos = headingPosFromEvent(view, event);
+            if (headingPos === null) return false;
+            copyHeadingOutlinePathFn(headingPos);
+            return false;
+          },
         },
       },
     });

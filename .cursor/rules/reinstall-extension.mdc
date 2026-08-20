@@ -1,0 +1,16 @@
+---
+description: After EasyView_Md code changes, rebuild and reinstall the VS Code extension without asking
+alwaysApply: true
+---
+
+# Rebuild and reinstall after changes
+
+When extension/editor code in this repo is changed (host, webview, export, etc.), **do not ask** whether to reinstall. Directly:
+
+1. `npm run build`
+2. `npm run package`
+3. `code --install-extension <generated-vsix> --force`
+
+Use the VS Code `code` CLI. `--force` overwrites the already installed EasyView_Md. After install, tell the user to reload the VS Code window (or close and reopen the Markdown file) so the new bundle loads.
+
+Do this at the end of the task, after the code changes are complete. Skip only for pure Q&A or docs-only edits that do not affect the installed extension.

@@ -12,6 +12,7 @@ import { getHeadingAnchors } from '../../blocks/heading/AnchorPlugin';
 import { scheduleAutoEditComment } from '../../blocks/html-block/HtmlBlockExtension';
 import { showHeadingPicker } from './SlashMenuHeadingPicker';
 import { showImageUrlPopup } from './SlashMenuImagePopup';
+import { getFirstRowStickyDefault } from '../../blocks/table/TablePreferences';
 import type { SlashMenuItem } from './SlashMenu';
 
 // ─── Helper: replace paragraph with node(s) ─────────────────────────────────
@@ -125,7 +126,7 @@ export const defaultSlashItems: SlashMenuItem[] = [
         dataCells.push(schema.nodes.table_cell.createAndFill()!);
       }
       replaceWith(view, from, to, schema.nodes.table.create(null, [
-        schema.nodes.table_row.create(null, headerCells),
+        schema.nodes.table_row.create({ sticky: getFirstRowStickyDefault() }, headerCells),
         schema.nodes.table_row.create(null, dataCells),
       ]));
     },

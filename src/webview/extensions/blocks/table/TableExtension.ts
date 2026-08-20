@@ -10,13 +10,12 @@ import type { NodeSpec, Schema } from 'prosemirror-model';
 import type { NodeViewConstructor } from 'prosemirror-view';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { columnResizing, tableEditing } from 'prosemirror-tables';
-import {
-  Extension,
-  type SerializerNodeHandler,
-} from '../../../editor/EditorExtension';
+import { Extension, type SerializerNodeHandler } from '../../../editor/EditorExtension';
 import { gripSelectionPlugin } from './GripSelectionPlugin';
 import { tableKeywordsPlugin } from './TableKeywordsPlugin';
 import { TableView } from './TableView';
+import { TableCellView } from './TableCellView';
+import { columnResizeGuardPlugin, withoutRootResizeCursor } from './columnResizeGuard';
 
 // ─── Table Extension ─────────────────────────────────────────────────────────
 
@@ -38,11 +37,31 @@ export class TableExtension extends Extension {
         },
       },
       table_row: {
+        attrs: {
+          height: { default: null },
+          sticky: { default: false },
+        },
         content: '(table_cell | table_header)*',
         tableRole: 'row',
-        parseDOM: [{ tag: 'tr' }],
-        toDOM() {
-          return ['tr', 0];
+        parseDOM: [
+          {
+            tag: 'tr',
+            getAttrs(dom: HTMLElement) {
+              const height = Number(dom.getAttribute('data-easyview-row-height'));
+              return {
+                height: Number.isFinite(height) && height > 0 ? Math.round(height) : null,
+                sticky: dom.getAttribute('data-easyview-sticky') === 'true',
+              };
+            },
+          },
+        ],
+        toDOM(node) {
+          const height =
+            typeof node.attrs.height === 'number' && node.attrs.height > 0 ? Math.round(node.attrs.height) : null;
+          return ['tr', {
+            ...(height ? { 'data-easyview-row-height': String(height) } : {}),
+            ...(node.attrs.sticky ? { 'data-easyview-sticky': 'true' } : {}),
+          }, 0];
         },
       },
       table_cell: {
@@ -59,17 +78,17 @@ export class TableExtension extends Extension {
         parseDOM: [
           {
             tag: 'td',
-            getAttrs(dom: HTMLTableCellElement) {
-              const widthAttr = dom.getAttribute('data-colwidth');
-              const widths = widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
-                ? widthAttr.split(',').map((s) => Number(s))
-                : null;
+            getAttrs(dom: HTMLElement) {
+              const cell = dom as HTMLTableCellElement;
+              const widthAttr = cell.getAttribute('data-colwidth');
+              const widths =
+                widthAttr && /^\d+(,\d+)*$/.test(widthAttr) ? widthAttr.split(',').map((s) => Number(s)) : null;
               return {
-                colspan: dom.colSpan,
-                rowspan: dom.rowSpan,
-                colwidth: widths && widths.length === dom.colSpan ? widths : null,
-                alignment: dom.style.textAlign || null,
-                verticalAlignment: dom.style.verticalAlign || null,
+                colspan: cell.colSpan,
+                rowspan: cell.rowSpan,
+                colwidth: widths && widths.length === cell.colSpan ? widths : null,
+                alignment: cell.style.textAlign || null,
+                verticalAlignment: cell.style.verticalAlign || null,
               };
             },
           },
@@ -100,17 +119,17 @@ export class TableExtension extends Extension {
         parseDOM: [
           {
             tag: 'th',
-            getAttrs(dom: HTMLTableCellElement) {
-              const widthAttr = dom.getAttribute('data-colwidth');
-              const widths = widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
-                ? widthAttr.split(',').map((s) => Number(s))
-                : null;
+            getAttrs(dom: HTMLElement) {
+              const cell = dom as HTMLTableCellElement;
+              const widthAttr = cell.getAttribute('data-colwidth');
+              const widths =
+                widthAttr && /^\d+(,\d+)*$/.test(widthAttr) ? widthAttr.split(',').map((s) => Number(s)) : null;
               return {
-                colspan: dom.colSpan,
-                rowspan: dom.rowSpan,
-                colwidth: widths && widths.length === dom.colSpan ? widths : null,
-                alignment: dom.style.textAlign || null,
-                verticalAlignment: dom.style.verticalAlign || null,
+                colspan: cell.colSpan,
+                rowspan: cell.rowSpan,
+                colwidth: widths && widths.length === cell.colSpan ? widths : null,
+                alignment: cell.style.textAlign || null,
+                verticalAlignment: cell.style.verticalAlign || null,
               };
             },
           },
@@ -143,19 +162,24 @@ export class TableExtension extends Extension {
 
   get nodeViews(): Record<string, NodeViewConstructor> {
     return {
-      table: (node) => new TableView(node, 25),
+      table: (node) => new TableView(node, 32),
+      table_cell: (node) => new TableCellView(node),
+      table_header: (node) => new TableCellView(node),
     };
   }
 
   plugins(_schema: Schema): Plugin[] {
     return [
-      columnResizing({
-        handleWidth: 8,
-        cellMinWidth: 48,
-        defaultCellMinWidth: 25,
-        lastColumnResizable: true,
-        View: TableView,
-      }),
+      columnResizeGuardPlugin(),
+      withoutRootResizeCursor(
+        columnResizing({
+          handleWidth: 8,
+          cellMinWidth: 32,
+          defaultCellMinWidth: 32,
+          lastColumnResizable: true,
+          View: TableView,
+        })
+      ),
       tableEditing(),
       this.tableFocusPlugin(),
       gripSelectionPlugin(),
@@ -173,7 +197,9 @@ export class TableExtension extends Extension {
   private tableFocusPlugin(): Plugin {
     const key = new PluginKey('tableFocus');
 
-    function findFocusedTable(state: import('prosemirror-state').EditorState): { pos: number; node: import('prosemirror-model').Node } | null {
+    function findFocusedTable(
+      state: import('prosemirror-state').EditorState
+    ): { pos: number; node: import('prosemirror-model').Node } | null {
       const { $from } = state.selection;
       for (let d = $from.depth; d > 0; d--) {
         const node = $from.node(d);
@@ -191,7 +217,9 @@ export class TableExtension extends Extension {
           const found = findFocusedTable(state);
           if (!found) return DecorationSet.empty;
           return DecorationSet.create(state.doc, [
-            Decoration.node(found.pos, found.pos + found.node.nodeSize, { class: 'has-focus' }),
+            Decoration.node(found.pos, found.pos + found.node.nodeSize, {
+              class: 'has-focus',
+            }),
           ]);
         },
         apply(tr, decorationSet, _oldState, newState) {
@@ -199,7 +227,9 @@ export class TableExtension extends Extension {
           const found = findFocusedTable(newState);
           if (!found) return DecorationSet.empty;
           return DecorationSet.create(newState.doc, [
-            Decoration.node(found.pos, found.pos + found.node.nodeSize, { class: 'has-focus' }),
+            Decoration.node(found.pos, found.pos + found.node.nodeSize, {
+              class: 'has-focus',
+            }),
           ]);
         },
       },

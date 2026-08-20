@@ -9,6 +9,7 @@ export interface EasyViewTableCellMeta {
 export interface EasyViewTableMetaEntry {
   shape: number[];
   cells: EasyViewTableCellMeta[];
+  rowHeights?: number[];
 }
 
 export interface EasyViewTableMeta {
@@ -20,6 +21,11 @@ const TABLE_META_RE = /\n{0,2}<!--\s*easyview:table-meta(?:\s+|\r?\n)([\s\S]*?)\
 
 function hasPositiveColwidths(value: unknown): value is number[] {
   return Array.isArray(value) && value.some((width) => typeof width === 'number' && width > 0);
+}
+
+function normalizeRowHeight(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return Math.max(36, Math.min(1200, Math.round(value)));
 }
 
 export function stripEasyViewTableMeta(markdown: string): {
@@ -55,10 +61,15 @@ export function collectEasyViewTableMeta(doc: ProsemirrorNode): EasyViewTableMet
 
     const shape: number[] = [];
     const cells: EasyViewTableCellMeta[] = [];
+    const rowHeights: Array<number | null> = [];
+    let hasRowHeights = false;
 
-    node.forEach((row, rowIndex) => {
+    node.forEach((row, _rowOffset, rowIndex) => {
       shape.push(row.childCount);
-      row.forEach((cell, cellIndex) => {
+      const height = normalizeRowHeight(row.attrs.height);
+      rowHeights.push(height);
+      if (height !== null) hasRowHeights = true;
+      row.forEach((cell, _cellOffset, cellIndex) => {
         if (hasPositiveColwidths(cell.attrs.colwidth)) {
           cells.push({
             row: rowIndex,
@@ -69,8 +80,12 @@ export function collectEasyViewTableMeta(doc: ProsemirrorNode): EasyViewTableMet
       });
     });
 
-    if (cells.length > 0) {
-      tables.push({ shape, cells });
+    if (cells.length > 0 || hasRowHeights) {
+      tables.push({
+        shape,
+        cells,
+        ...(hasRowHeights ? { rowHeights: rowHeights.map((height) => height ?? 0) } : {}),
+      });
     }
 
     return true;
@@ -91,44 +106,40 @@ export function appendEasyViewTableMeta(markdown: string, meta: EasyViewTableMet
 export function applyEasyViewTableMeta(doc: ProsemirrorNode, meta: EasyViewTableMeta | null): ProsemirrorNode {
   if (!meta?.tables?.length) return doc;
 
+  const tableMeta = meta;
   let tableIndex = 0;
   let changed = false;
 
   function processNode(node: ProsemirrorNode): ProsemirrorNode {
     if (node.type.name === 'table') {
-      const currentMeta = tableIndex < meta.tables.length ? meta.tables[tableIndex] : null;
+      const currentMeta = tableIndex < tableMeta.tables.length ? tableMeta.tables[tableIndex] : null;
       tableIndex += 1;
 
+      const shapeMatches =
+        currentMeta?.shape.length === node.childCount &&
+        currentMeta.shape.every((cellCount, rowIndex) => node.child(rowIndex)?.childCount === cellCount);
       const processedRows: ProsemirrorNode[] = [];
-      let rowChanged = false;
+      let childChanged = false;
       node.forEach((row) => {
         const nextRow = processNode(row);
         processedRows.push(nextRow);
-        if (nextRow !== row) rowChanged = true;
+        if (nextRow !== row) childChanged = true;
       });
 
-      let nextTable = rowChanged ? node.copy(Fragment.fromArray(processedRows)) : node;
-      if (!currentMeta) return nextTable;
-
-      const shapeMatches =
-        currentMeta.shape.length === nextTable.childCount &&
-        currentMeta.shape.every((cellCount, rowIndex) => nextTable.child(rowIndex)?.childCount === cellCount);
-
-      if (!shapeMatches) return nextTable;
-
+      let nextTable = childChanged ? node.copy(Fragment.fromArray(processedRows)) : node;
+      if (!currentMeta || !shapeMatches) return nextTable;
       const updatedRows: ProsemirrorNode[] = [];
-      let widthChanged = false;
+      let tableChanged = false;
 
-      nextTable.forEach((row, rowIndex) => {
+      nextTable.forEach((row, _rowOffset, rowIndex) => {
         const cellMetaByIndex = new Map<number, EasyViewTableCellMeta>();
         currentMeta.cells
           .filter((cellMeta) => cellMeta.row === rowIndex)
           .forEach((cellMeta) => cellMetaByIndex.set(cellMeta.cell, cellMeta));
 
         const nextCells: ProsemirrorNode[] = [];
-        let localChanged = false;
-
-        row.forEach((cell, cellIndex) => {
+        let rowChanged = false;
+        row.forEach((cell, _cellOffset, cellIndex) => {
           const cellMeta = cellMetaByIndex.get(cellIndex);
           if (!cellMeta || !hasPositiveColwidths(cellMeta.colwidth)) {
             nextCells.push(cell);
@@ -147,22 +158,25 @@ export function applyEasyViewTableMeta(doc: ProsemirrorNode, meta: EasyViewTable
             return;
           }
 
-          localChanged = true;
-          widthChanged = true;
+          rowChanged = true;
           nextCells.push(cell.type.create({ ...cell.attrs, colwidth: normalized }, cell.content, cell.marks));
         });
 
-        if (localChanged) {
-          updatedRows.push(row.type.create(row.attrs, nextCells, row.marks));
+        const height = normalizeRowHeight(currentMeta.rowHeights?.[rowIndex]);
+        const rowAttrs = height === null ? row.attrs : { ...row.attrs, height };
+        const heightChanged = height !== null && row.attrs.height !== height;
+        if (rowChanged || heightChanged) {
+          updatedRows.push(row.type.create(rowAttrs, nextCells, row.marks));
+          tableChanged = true;
         } else {
           updatedRows.push(row);
         }
       });
 
-      if (widthChanged) {
+      if (tableChanged) {
         changed = true;
         nextTable = nextTable.type.create(nextTable.attrs, updatedRows, nextTable.marks);
-      } else if (rowChanged) {
+      } else if (childChanged) {
         changed = true;
       }
 

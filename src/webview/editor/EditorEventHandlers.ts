@@ -13,7 +13,21 @@ import type { EditorView } from 'prosemirror-view';
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import type { MarkdownParser } from 'prosemirror-markdown';
 
+import { CellSelection } from 'prosemirror-tables';
+
 import { schema } from './EditorSchema';
+import {
+  insertNestedTableInCell,
+  isInsideTableCell,
+  looksLikeSpreadsheetTsv,
+  parseClipboardAsNestedTable,
+  shouldPasteClipboardAsNestedTable,
+} from './lib/ClipboardTablePaste';
+import {
+  getSelectionAnchorElement,
+  pinScrollDuringPaste,
+  preserveScrollAround,
+} from './lib/ScrollPreserve';
 import { getMarkRange } from './lib/MarkRange';
 import type { EditorCoreConfig } from './EditorCore';
 
@@ -233,59 +247,101 @@ export function handlePaste(
 
   const text = event.clipboardData?.getData('text/plain');
   const html = event.clipboardData?.getData('text/html');
+  const clipboardLooksLikeSheet = shouldPasteClipboardAsNestedTable(html, text, view.state.schema);
 
-  const clipboardDataUrl =
-    html?.match(/src=["'](data:image\/[a-zA-Z0-9.+-]+;base64,[^"']+)["']/i)?.[1]
-    ?? text?.match(/!\[[^\]]*]\(\s*(data:image\/[a-zA-Z0-9.+-]+;base64,[^)]+)\s*\)/i)?.[1]
-    ?? text?.match(/^(data:image\/[a-zA-Z0-9.+-]+;base64,\S+)$/i)?.[1];
+  const { $from } = view.state.selection;
+  const inCodeBlock = $from.parent.type.name === 'code_block';
+  const cellSelection =
+    view.state.selection instanceof CellSelection ? view.state.selection : null;
+  const pasteIntoSingleCell = cellSelection
+    ? cellSelection.$anchorCell.pos === cellSelection.$headCell.pos
+    : isInsideTableCell($from);
+  const cellPasteAnchor = pasteIntoSingleCell ? getSelectionAnchorElement(view) : null;
 
-  if (clipboardDataUrl) {
-    event.preventDefault();
-    event.stopPropagation();
-    const { from } = view.state.selection;
-    const mimeType = clipboardDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/i)?.[1] || 'image/png';
-    window.dispatchEvent(new CustomEvent('inlinemd:pasteImage', {
-      detail: {
-        dataUrl: clipboardDataUrl,
-        mimeType,
-        name: 'image',
-        pos: from,
-      },
-    }));
-    return true;
+  // Keep the current cell in place when large clipboard content expands the layout.
+  if (pasteIntoSingleCell) {
+    pinScrollDuringPaste(cellPasteAnchor);
   }
 
-  const imageItems = Array.from(event.clipboardData?.items || []).filter(
-    (item) => item.kind === 'file' && item.type.startsWith('image/'),
-  );
-  if (imageItems.length > 0) {
-    const file = imageItems[0].getAsFile();
-    if (file) {
+  // Excel / Sheets put both a real HTML/TSV table and a bitmap screenshot on the
+  // clipboard. Prefer the structural table — especially inside a cell, where we
+  // want a nested table rather than an image asset.
+  if (pasteIntoSingleCell && clipboardLooksLikeSheet) {
+    const nested = parseClipboardAsNestedTable(html, text, view.state.schema);
+    if (nested && insertNestedTableInCell(view, nested)) {
       event.preventDefault();
       event.stopPropagation();
+      return true;
+    }
+  }
 
+  // Skip image paste when spreadsheet table data is available.
+  if (!clipboardLooksLikeSheet) {
+    const clipboardDataUrl =
+      html?.match(/src=["'](data:image\/[a-zA-Z0-9.+-]+;base64,[^"']+)["']/i)?.[1]
+      ?? text?.match(/!\[[^\]]*]\(\s*(data:image\/[a-zA-Z0-9.+-]+;base64,[^)]+)\s*\)/i)?.[1]
+      ?? text?.match(/^(data:image\/[a-zA-Z0-9.+-]+;base64,\S+)$/i)?.[1];
+
+    if (clipboardDataUrl) {
+      event.preventDefault();
+      event.stopPropagation();
       const { from } = view.state.selection;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-        if (!dataUrl.startsWith('data:image/')) return;
-        window.dispatchEvent(new CustomEvent('inlinemd:pasteImage', {
-          detail: {
-            dataUrl,
-            mimeType: file.type || 'image/png',
-            name: file.name || 'image.png',
-            pos: from,
-          },
-        }));
-      };
-      reader.readAsDataURL(file);
+      const mimeType = clipboardDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/i)?.[1] || 'image/png';
+      window.dispatchEvent(new CustomEvent('inlinemd:pasteImage', {
+        detail: {
+          dataUrl: clipboardDataUrl,
+          mimeType,
+          name: 'image',
+          pos: from,
+        },
+      }));
+      return true;
+    }
+
+    const imageItems = Array.from(event.clipboardData?.items || []).filter(
+      (item) => item.kind === 'file' && item.type.startsWith('image/'),
+    );
+    if (imageItems.length > 0) {
+      const file = imageItems[0].getAsFile();
+      if (file) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const { from } = view.state.selection;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+          if (!dataUrl.startsWith('data:image/')) return;
+          window.dispatchEvent(new CustomEvent('inlinemd:pasteImage', {
+            detail: {
+              dataUrl,
+              mimeType: file.type || 'image/png',
+              name: file.name || 'image.png',
+              pos: from,
+            },
+          }));
+        };
+        reader.readAsDataURL(file);
+        return true;
+      }
+    }
+  }
+
+  // Outside a cell, still insert spreadsheet clipboard as a real table instead of
+  // letting later handlers / plugins treat it as plain text.
+  if (!pasteIntoSingleCell && clipboardLooksLikeSheet) {
+    const table = parseClipboardAsNestedTable(html, text, view.state.schema);
+    if (table) {
+      event.preventDefault();
+      event.stopPropagation();
+      view.dispatch(
+        view.state.tr.replaceSelectionWith(table).scrollIntoView()
+      );
       return true;
     }
   }
 
   if (!text) return false;
-  const { $from } = view.state.selection;
-  const inCodeBlock = $from.parent.type.name === 'code_block';
 
   // Single-line markdown link: [text](url)
   if (!inCodeBlock && !text.includes('\n')) {
@@ -303,6 +359,9 @@ export function handlePaste(
   if (!inCodeBlock && text.includes('\n')) {
     const lines = text.split('\n');
     if (lines.length > 1) {
+      // Keep spreadsheet/table clipboard as table structure (PM / tableEditing).
+      if (clipboardLooksLikeSheet) return false;
+
       const isExternalHTML =
         html && !html.includes('ProseMirror') && !html.includes('code-block');
       if (
@@ -316,9 +375,14 @@ export function handlePaste(
         schema.nodes.paragraph.create(null, line ? schema.text(line) : null)
       );
       const fragment = schema.nodes.doc.create(null, nodes);
-      view.dispatch(
-        view.state.tr.replaceSelection(fragment.slice(0, fragment.content.size))
-      );
+      const slice = fragment.slice(0, fragment.content.size);
+      if (pasteIntoSingleCell) {
+        preserveScrollAround(cellPasteAnchor, () => {
+          view.dispatch(view.state.tr.replaceSelection(slice));
+        });
+      } else {
+        view.dispatch(view.state.tr.replaceSelection(slice));
+      }
       return true;
     }
   }
@@ -348,9 +412,14 @@ export function handlePaste(
   if (looksLikeMarkdown) {
     const doc = pasteParser.parse(text);
     if (doc) {
-      view.dispatch(
-        view.state.tr.replaceSelection(doc.slice(0, doc.content.size))
-      );
+      const slice = doc.slice(0, doc.content.size);
+      if (pasteIntoSingleCell) {
+        preserveScrollAround(cellPasteAnchor, () => {
+          view.dispatch(view.state.tr.replaceSelection(slice));
+        });
+      } else {
+        view.dispatch(view.state.tr.replaceSelection(slice));
+      }
       return true;
     }
   }

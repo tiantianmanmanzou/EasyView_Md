@@ -34,6 +34,10 @@ import { docToMarkdown } from './lib/MarkdownSerializer';
 
 import { EditorImageManager } from './EditorImageManager';
 import {
+  isSelectionInsideTableCell,
+  preserveTableSelectionViewport,
+} from './lib/ScrollPreserve';
+import {
   handleClickOn,
   handleClick,
   preserveImageSelection,
@@ -51,7 +55,7 @@ export interface EditorCoreConfig {
   keymaps?: Record<string, (...args: any[]) => boolean>;
 
   /** Called after every transaction — use for toolbar / ToC / image toolbar updates */
-  onDispatch?: (view: EditorView, tr: Transaction) => void;
+  onDispatch?: (view: EditorView, tr: Transaction, oldState: EditorState) => void;
 
   /** Called when document content changes — use for syncing back to VS Code */
   onContentChange?: (markdown: string) => void;
@@ -488,40 +492,51 @@ export class EditorCore {
       }
 
       _isMouseDragging = isMouseActive;
-      const newState = this._view.state.apply(tr);
+      const oldState = this._view.state;
+      const newState = oldState.apply(tr);
+      const preserveTableViewport =
+        tr.docChanged && isSelectionInsideTableCell(this._view.state);
 
-      // Layer 2: proxy for actual drag ranges (mouse moved + range selection)
-      const isDragRange = !!(isMouseActive && _mouseHasMoved && !newState.selection.empty);
+      const applyStateUpdate = () => {
+        // Layer 2: proxy for actual drag ranges (mouse moved + range selection)
+        const isDragRange = !!(isMouseActive && _mouseHasMoved && !newState.selection.empty);
 
-      if (isDragRange && !this._inProxyDispatch) {
-        const domObserver = (this._view as any).domObserver;
-        if (domObserver) {
-          const origCurSel = domObserver.currentSelection;
-          const liveSel = window.getSelection()!;
-          domObserver.currentSelection = {
-            get anchorNode() { return liveSel.anchorNode; },
-            get anchorOffset() { return liveSel.anchorOffset; },
-            get focusNode() { return liveSel.focusNode; },
-            get focusOffset() { return liveSel.focusOffset; },
-            set(s: any) { origCurSel.set(s); },
-            clear() { origCurSel.clear(); },
-            eq(s: any) { return origCurSel.eq(s); },
-          };
-          this._inProxyDispatch = true;
-          this._view.updateState(newState);
-          this._inProxyDispatch = false;
-          domObserver.currentSelection = origCurSel;
-          domObserver.setCurSelection();
+        if (isDragRange && !this._inProxyDispatch) {
+          const domObserver = (this._view as any).domObserver;
+          if (domObserver) {
+            const origCurSel = domObserver.currentSelection;
+            const liveSel = window.getSelection()!;
+            domObserver.currentSelection = {
+              get anchorNode() { return liveSel.anchorNode; },
+              get anchorOffset() { return liveSel.anchorOffset; },
+              get focusNode() { return liveSel.focusNode; },
+              get focusOffset() { return liveSel.focusOffset; },
+              set(s: any) { origCurSel.set(s); },
+              clear() { origCurSel.clear(); },
+              eq(s: any) { return origCurSel.eq(s); },
+            };
+            this._inProxyDispatch = true;
+            this._view.updateState(newState);
+            this._inProxyDispatch = false;
+            domObserver.currentSelection = origCurSel;
+            domObserver.setCurSelection();
+          } else {
+            this._view.updateState(newState);
+          }
         } else {
           this._view.updateState(newState);
         }
+      };
+
+      if (preserveTableViewport) {
+        preserveTableSelectionViewport(this._view, applyStateUpdate);
       } else {
-        this._view.updateState(newState);
+        applyStateUpdate();
       }
       _isMouseDragging = false;
 
       // UI callback
-      this.config.onDispatch?.(this._view, tr);
+      this.config.onDispatch?.(this._view, tr, oldState);
 
       // Content sync — debounced to avoid race conditions with VS Code applyEdit
       if (!this._isUpdatingFromExtension && tr.docChanged) {

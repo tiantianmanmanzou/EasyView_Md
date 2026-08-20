@@ -17,6 +17,10 @@ import { appendEasyViewTableMeta, collectEasyViewTableMeta } from './TableStyleM
 // ─── Node Serializers ──────────────────────────────────────────────────────
 
 function serializeHeading(state: MarkdownSerializerState, node: ProsemirrorNode) {
+  if (node.content.size === 0) {
+    state.closeBlock(node);
+    return;
+  }
   state.write('#'.repeat(node.attrs.level) + ' ');
   state.renderInline(node);
   state.closeBlock(node);
@@ -122,42 +126,44 @@ function serializeTableAsHtml(state: MarkdownSerializerState, node: ProsemirrorN
     return hasBlock;
   }
 
+  function renderCellHtml(cell: ProsemirrorNode, tag: string, cellAttrs: string): string {
+    const cellDoc = cell.type.schema.node('doc', null, cell.content.content);
+    const cellMd = serializer.serialize(cellDoc).trim();
+    const hasBlockContent = cellHasBlockContent(cell);
+
+    if (!cellMd) {
+      return `<${tag}${cellAttrs}></${tag}>`;
+    }
+    if (!hasBlockContent && !cellMd.includes('\n')) {
+      return `<${tag}${cellAttrs}>${cellMd}</${tag}>`;
+    }
+    if (!hasBlockContent) {
+      return `<${tag}${cellAttrs}>\n${cellMd}</${tag}>`;
+    }
+    // Leading blank line preserves block markdown inside HTML cells; keep closing
+    // tag on the content line so </td></tr> does not consume extra source lines.
+    return `<${tag}${cellAttrs}>\n\n${cellMd}</${tag}>`;
+  }
+
   state.write('<table>\n');
 
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
-    state.write('<tr>\n');
-    const renderedCells: string[] = [];
+    const stickyAttr = row.attrs.sticky ? ' data-easyview-sticky="true"' : '';
+    let rowHtml = `<tr${stickyAttr}>`;
 
     for (let c = 0; c < row.childCount; c++) {
       const cell = row.child(c);
-      const tag = (r === 0 && isHeader) ? 'th' : 'td';
+      const tag = r === 0 && isHeader ? 'th' : 'td';
       const align = cell.attrs.alignment;
       const verticalAlign = cell.attrs.verticalAlignment;
       const alignAttr = align ? ` align="${align}"` : '';
       const valignAttr = verticalAlign ? ` valign="${verticalAlign}"` : '';
       const cellAttrs = `${alignAttr}${valignAttr}`;
-
-      // Serialize cell content as markdown using the main serializer
-      const cellDoc = cell.type.schema.node('doc', null, cell.content.content);
-      const cellMd = serializer.serialize(cellDoc).trim();
-      const hasBlockContent = cellHasBlockContent(cell);
-
-      if (!cellMd) {
-        renderedCells.push(`<${tag}${cellAttrs}></${tag}>`);
-      } else if (!hasBlockContent && !cellMd.includes('\n')) {
-        renderedCells.push(`<${tag}${cellAttrs}>${cellMd}</${tag}>`);
-      } else if (!hasBlockContent) {
-        renderedCells.push(`<${tag}${cellAttrs}>\n${cellMd}\n</${tag}>`);
-      } else {
-        // Keep one leading blank line for block markdown inside HTML table cells.
-        renderedCells.push(`<${tag}${cellAttrs}>\n\n${cellMd}\n</${tag}>`);
-      }
+      rowHtml += renderCellHtml(cell, tag, cellAttrs);
     }
 
-    state.write(renderedCells.join(''));
-    state.write('\n');
-    state.write('</tr>\n');
+    state.write(`${rowHtml}</tr>\n`);
   }
 
   state.write('</table>');
@@ -178,7 +184,9 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
   let hasComplex = false;
   let hasManualWidths = false;
   let hasVerticalAlignments = false;
+  let hasStickyRows = false;
   for (const row of rows) {
+    if (row.attrs.sticky) hasStickyRows = true;
     for (let c = 0; c < row.childCount; c++) {
       const cell = row.child(c);
       if (Array.isArray(cell.attrs.colwidth) && cell.attrs.colwidth.some((width: number) => typeof width === 'number' && width > 0)) {
@@ -193,7 +201,7 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
     }
   }
 
-  if (hasComplex || hasManualWidths || hasVerticalAlignments) {
+  if (hasComplex || hasManualWidths || hasVerticalAlignments || hasStickyRows) {
     serializeTableAsHtml(state, node, rows);
     return;
   }
@@ -645,12 +653,43 @@ export const serializer = new MarkdownSerializer(
   markSerializers as any
 );
 
+/** Collapse standalone HTML table tags onto adjacent content lines when saving. */
+export function compactHtmlTableMarkdown(markdown: string): string {
+  const lines = markdown.split('\n');
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (/^<\/(?:td|th)>\s*$/.test(line) && out.length > 0) {
+      out[out.length - 1] += line.trim();
+      continue;
+    }
+
+    if (/^<\/tr>\s*$/.test(line) && out.length > 0) {
+      out[out.length - 1] += '</tr>';
+      continue;
+    }
+
+    if (/^<tr(?:\s[^>]*)?>\s*$/.test(line) && i + 1 < lines.length) {
+      out.push(`<tr>${lines[++i].replace(/^\s+/, '')}`);
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join('\n');
+}
+
 /**
  * Serialize a ProseMirror document to Markdown.
  */
 export function docToMarkdown(doc: ProsemirrorNode): string {
-  return appendEasyViewTableMeta(
-    serializer.serialize(doc, { tightLists: true }),
-    collectEasyViewTableMeta(doc)
+  return compactHtmlTableMarkdown(
+    appendEasyViewTableMeta(
+      serializer.serialize(doc, { tightLists: true }),
+      collectEasyViewTableMeta(doc),
+    ),
   );
 }

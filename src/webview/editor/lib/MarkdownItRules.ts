@@ -8,6 +8,11 @@
  */
 
 import type MarkdownIt from 'markdown-it';
+import {
+  isPandocHighlightCloseTag,
+  isPandocHighlightOpenTag,
+  stripPandocHighlightMarkup,
+} from '../../../host/pandocHighlightMarkup';
 
 // ─── Regex constants ─────────────────────────────────────────────────────────
 
@@ -645,5 +650,45 @@ export function applyCustomRules(md: MarkdownIt): void {
       }
       state.tokens[i].children = newChildren;
     }
+  });
+
+  md.core.ruler.after('html_inline_tags', 'unwrap_pandoc_mark_spans', (state) => {
+    for (const token of state.tokens) {
+      if (token.type !== 'inline' || !token.children) continue;
+      const nextChildren: any[] = [];
+      const openTags: string[] = [];
+      for (const child of token.children) {
+        if (child.type === 'html_inline') {
+          const html = child.content;
+          if (isPandocHighlightOpenTag(html)) {
+            const tag = html.trim().match(/^<(span|mark)\b/i)?.[1]?.toLowerCase();
+            if (tag) openTags.push(tag);
+            continue;
+          }
+          if (openTags.length > 0 && isPandocHighlightCloseTag(html, openTags[openTags.length - 1])) {
+            openTags.pop();
+            continue;
+          }
+          const stripped = stripPandocHighlightMarkup(html);
+          if (stripped !== html) {
+            if (!stripped) continue;
+            if (!/<[^>]+>/.test(stripped)) {
+              const text = new state.Token('text', '', 0);
+              text.content = stripped;
+              nextChildren.push(text);
+              continue;
+            }
+            child.content = stripped;
+          }
+        }
+        nextChildren.push(child);
+      }
+      token.children = nextChildren;
+    }
+
+    state.tokens = state.tokens.filter((token) => {
+      if (token.type !== 'html_block') return true;
+      return stripPandocHighlightMarkup(token.content).trim().length > 0;
+    });
   });
 }

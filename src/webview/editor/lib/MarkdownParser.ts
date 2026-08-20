@@ -14,8 +14,10 @@ import { schema } from '../EditorSchema';
 import { parseMarkdownWithFrontmatter } from './Frontmatter';
 import { applyCustomRules } from './MarkdownItRules';
 import { applyTableRules } from './MarkdownTableRules';
+import { parseMarkdownWithHtmlTables } from './HtmlTableParser';
 import { tokenMapping } from './MarkdownTokenMapping';
 import { applyEasyViewTableMeta, stripEasyViewTableMeta } from './TableStyleMetadata';
+import { stripPandocHighlightMarkup } from '../../../host/pandocHighlightMarkup';
 
 // ─── markdown-it instance ───────────────────────────────────────────────────
 
@@ -142,10 +144,10 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
 
   // Normalize table column counts before parsing (markdown-it requires
   // header and separator to have the same number of columns)
-  const normalizedContent = normalizeTableColumns(content);
+  const normalizedContent = normalizeTableColumns(stripPandocHighlightMarkup(content));
 
-  // Parse main content
-  let contentDoc = parser.parse(normalizedContent);
+  // Parse main content (HTML tables via DOM; everything else via markdown-it)
+  let contentDoc = parseMarkdownWithHtmlTables(normalizedContent, parser);
   const t2 = performance.now();
 
   if (!contentDoc) {
@@ -192,7 +194,7 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
 export function extractTextblockLineMap(markdown: string): number[] {
   const { content: markdownWithoutTableMeta } = stripEasyViewTableMeta(markdown);
   const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(markdownWithoutTableMeta);
-  const normalizedContent = normalizeTableColumns(content);
+  const normalizedContent = normalizeTableColumns(stripPandocHighlightMarkup(content));
   const tokens = lineMapMarkdownIt.parse(normalizedContent, {});
 
   let frontmatterOffset = 0;

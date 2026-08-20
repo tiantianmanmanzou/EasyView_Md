@@ -20,6 +20,7 @@ import {
 import { type PdfPalette } from './PdfPalette';
 import { highlightCode } from './PdfCodeHighlighting';
 import { splitEmoji, splitCodeSegmentsForEmoji, wrapWithEmojiFont, lightenHex, getEmojiColor, getPdfSymbolFont } from './PdfEmojiUtils';
+import { lookupMermaidMapValue, looksLikeMermaid } from './mermaidSource';
 
 type Content = any;
 
@@ -511,10 +512,15 @@ function convertHeading(node: ProsemirrorNode, ctx: ConvertContext): Content {
     uniqueSlug = `${slug}-${counter++}`;
   }
   ctx.usedIds.add(uniqueSlug);
+  const headingColor = ctx.palette.pageBackground.toLowerCase() === '#ffffff'
+    ? '#000000'
+    : ctx.palette.text;
   return {
     text: inlines,
     fontSize: style.fontSize,
     bold: true,
+    italics: false,
+    color: headingColor,
     margin: style.margin,
     tocItem: true,
     tocMargin: [level === 1 ? 0 : (level - 1) * 10, 0, 0, 0] as any,
@@ -526,10 +532,9 @@ function convertHeading(node: ProsemirrorNode, ctx: ConvertContext): Content {
 async function convertBlockquote(node: ProsemirrorNode, ctx: ConvertContext): Promise<Content> {
   const children = await convertChildren(node, ctx);
   return {
-    unbreakable: true,
     table: {
       widths: ['*'],
-      body: [[{ stack: children, color: ctx.palette.textMedium, italics: true }]],
+      body: [[{ stack: children, color: ctx.palette.textMedium }]],
     },
     layout: blockquoteLayout(ctx.palette),
     margin: [0, 4, 0, 4] as [number, number, number, number],
@@ -551,7 +556,7 @@ async function convertCodeBlock(node: ProsemirrorNode, ctx: ConvertContext): Pro
   const codeFont = getCodeFont(text);
 
   // Check if this is a mermaid diagram
-  if (language === 'mermaid' || language === 'mermaidjs') {
+  if (language === 'mermaid' || language === 'mermaidjs' || looksLikeMermaid(text)) {
     return convertMermaidBlock(text, ctx);
   }
 
@@ -642,19 +647,14 @@ function convertMermaidBlock(text: string, ctx: ConvertContext): Content {
   // A4 height (841.89) - top margin (25) - bottom margin (50) - diagram margins (16)
   const MAX_HEIGHT = 750;
 
-  const pngData = ctx.mermaidPngMap?.get(text);
+  const pngData = lookupMermaidMapValue(text, ctx.mermaidPngMap);
   if (pngData) {
     const result: any = {
       image: pngData.base64,
       alignment: 'center' as const,
       margin: [0, 8, 0, 8] as [number, number, number, number],
+      fit: [CONTENT_WIDTH, MAX_HEIGHT],
     };
-    // Use original size; fit proportionally if exceeds page width OR height
-    if (pngData.width > CONTENT_WIDTH || pngData.height > MAX_HEIGHT) {
-      result.fit = [CONTENT_WIDTH, MAX_HEIGHT];
-    } else {
-      result.width = pngData.width;
-    }
     return result;
   }
   // Do not pass raw SVG to pdfmake. Mermaid may emit SVG that browsers can
@@ -682,6 +682,23 @@ function convertMermaidBlock(text: string, ctx: ConvertContext): Content {
 function convertMermaidNode(node: ProsemirrorNode, ctx: ConvertContext): Content {
   const text = node.attrs.content || '';
   return convertMermaidBlock(text, ctx);
+}
+
+function createBulletMarker(ctx: ConvertContext): Content {
+  return {
+    canvas: [
+      {
+        type: 'ellipse',
+        x: 4,
+        y: 6.5,
+        r1: 1.5,
+        r2: 1.5,
+        color: ctx.palette.text,
+      },
+    ],
+    width: 12,
+    height: 11,
+  };
 }
 
 /**
@@ -712,7 +729,7 @@ async function convertBulletList(node: ProsemirrorNode, ctx: ConvertContext): Pr
     const content = await convertListItemContent(child, ctx);
     rows.push({
       columns: [
-        { width: 15, text: '•', fontSize: 11, color: ctx.palette.textMedium },
+        { width: 12, ...createBulletMarker(ctx) },
         { width: '*', ...(typeof content === 'string' ? { text: content } : content) },
       ],
       columnGap: 4,

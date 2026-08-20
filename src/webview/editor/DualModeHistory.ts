@@ -100,4 +100,12 @@ export class DualModeHistory {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
   }
+
+  getUndoStack(): readonly ModeSnapshot[] {
+    return this.undoStack;
+  }
+
+  getRedoStack(): readonly ModeSnapshot[] {
+    return this.redoStack;
+  }
 }

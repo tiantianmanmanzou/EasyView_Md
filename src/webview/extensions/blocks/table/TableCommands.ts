@@ -36,6 +36,7 @@ import {
 } from "./TableQueries";
 import { collapseSelection } from "./CollapseSelection";
 import { RowSelection } from "./RowSelection";
+import { getFirstRowStickyDefault } from "./TablePreferences";
 import { ColumnSelection } from "./ColumnSelection";
 
 export function createTable({
@@ -105,7 +106,7 @@ export function createTableInner(
   for (let index = 0; index < rowsCount; index += 1) {
     rows.push(
       types.row.createChecked(
-        null,
+        withHeaderRow && index === 0 ? { sticky: getFirstRowStickyDefault() } : null,
         withHeaderRow && index === 0 ? headerCells : cells
       )
     );
@@ -516,6 +517,26 @@ export function addRowAndMoveSelection({
  * @param attrs The attributes to set
  * @returns The command
  */
+/** Toggle persistent sticky rendering for the table's first row. */
+export function setFirstRowSticky(sticky: boolean): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+
+    const rect = selectedRect(state);
+    const firstRowPos = rect.tableStart;
+    const firstRow = state.doc.nodeAt(firstRowPos);
+    if (!firstRow || firstRow.type.name !== 'table_row') return false;
+
+    if (dispatch) {
+      dispatch(state.tr.setNodeMarkup(firstRowPos, undefined, {
+        ...firstRow.attrs,
+        sticky,
+      }));
+    }
+    return true;
+  };
+}
+
 export function setColumnAttr({
   index,
   alignment,
@@ -528,6 +549,33 @@ export function setColumnAttr({
   return (state, dispatch) => {
     if (dispatch) {
       const cells = getCellsInColumn(index)(state) || [];
+      let transaction = state.tr;
+      cells.forEach((pos) => {
+        const node = state.doc.nodeAt(pos);
+        transaction = transaction.setNodeMarkup(pos, undefined, {
+          ...node?.attrs,
+          ...(alignment !== undefined ? { alignment } : {}),
+          ...(verticalAlignment !== undefined ? { verticalAlignment } : {}),
+        });
+      });
+      dispatch(transaction);
+    }
+    return true;
+  };
+}
+
+export function setRowAttr({
+  index,
+  alignment,
+  verticalAlignment,
+}: {
+  index: number;
+  alignment?: string | null;
+  verticalAlignment?: string | null;
+}): Command {
+  return (state, dispatch) => {
+    if (dispatch) {
+      const cells = getCellsInRow(index)(state) || [];
       let transaction = state.tr;
       cells.forEach((pos) => {
         const node = state.doc.nodeAt(pos);

@@ -253,6 +253,112 @@ function readStoredExternalFollowEnabled(): boolean {
   return true;
 }
 
+function ensureFileHeaderCompactStyles(): void {
+  const styleId = 'easyview-file-header-compact-styles';
+  if (document.getElementById(styleId)) return;
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    .file-header-bar {
+      padding: 2.4px 12px;
+      min-height: 0;
+    }
+    .file-header-name {
+      font-size: 15.6px;
+      padding: 0 4.8px;
+      line-height: 1.2;
+    }
+    .file-header-actions {
+      gap: 2.4px;
+      min-width: 0;
+    }
+    .file-header-btn {
+      height: 26.4px;
+      padding: 0 4.8px;
+      font-size: 13.2px;
+    }
+    .file-header-btn svg {
+      width: 16.8px;
+      height: 16.8px;
+    }
+    .file-header-zoom {
+      gap: 1.2px;
+      margin-left: 2.4px;
+    }
+    .file-header-zoom-btn {
+      width: 26.4px;
+      min-width: 26.4px;
+      height: 26.4px;
+    }
+    .file-header-zoom-label {
+      min-width: 38.4px;
+      height: 26.4px;
+      font-size: 13.2px;
+    }
+    .file-header-accent-wrap {
+      position: relative;
+    }
+    .file-header-accent-select {
+      height: 26.4px;
+      min-width: 86.4px;
+      padding: 0 7.2px;
+      font-size: 13.2px;
+      font-family: inherit;
+      display: inline-flex;
+      align-items: center;
+      gap: 7.2px;
+      cursor: pointer;
+      color-scheme: inherit;
+      background: var(--vscode-input-background, var(--vscode-editor-background, transparent));
+      color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+      border: 1px solid var(--vscode-input-border, var(--vscode-dropdown-border, rgba(128, 128, 128, 0.35)));
+      border-radius: 4.8px;
+      box-shadow: none;
+    }
+    body:not([data-mdpre-accent="default"])[data-mdpre-accent] .file-header-accent-select {
+      border-color: var(--vscode-input-border, var(--vscode-dropdown-border, rgba(128, 128, 128, 0.35))) !important;
+      box-shadow: none !important;
+      color: var(--mdpre-accent-text, var(--mdpre-accent));
+    }
+    .file-header-accent-select svg {
+      width: 12px;
+      height: 12px;
+      margin-left: auto;
+      flex-shrink: 0;
+      opacity: 0.72;
+    }
+    .file-header-accent-menu {
+      min-width: 153.6px;
+    }
+    .file-header-accent-option[data-value="blue"] { color: #2563eb !important; }
+    .file-header-accent-option[data-value="orangeRed"] { color: #ea580c !important; }
+    .file-header-accent-option[data-value="green"] { color: #15803d !important; }
+    .file-header-accent-option[data-value="purple"] { color: #7c3aed !important; }
+    .file-header-accent-option[data-value="cherryRed"] { color: #a6113a !important; }
+    body.mdpre-dark .file-header-accent-option[data-value="blue"] { color: #60a5fa !important; }
+    body.mdpre-dark .file-header-accent-option[data-value="orangeRed"] { color: #fb923c !important; }
+    body.mdpre-dark .file-header-accent-option[data-value="green"] { color: #4ade80 !important; }
+    body.mdpre-dark .file-header-accent-option[data-value="purple"] { color: #a78bfa !important; }
+    body.mdpre-dark .file-header-accent-option[data-value="cherryRed"] { color: #ff1f4f !important; }
+    .file-header-accent-option.active {
+      font-weight: 650;
+    }
+    body.mdpre-light {
+      --vscode-dropdown-background: #ffffff;
+      --vscode-dropdown-foreground: #1f2328;
+      --vscode-dropdown-border: #d0d7de;
+    }
+    body.mdpre-light .file-header-accent-select {
+      background: var(--vscode-editor-background, #ffffff);
+      border-color: var(--vscode-input-border, #d0d7de);
+    }
+    body.mdpre-light[data-mdpre-accent="default"] .file-header-accent-select {
+      color: var(--vscode-editor-foreground, #1f2328);
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function ensureCommitModalStyles(): void {
   const styleId = 'easyview-commit-modal-styles';
   if (document.getElementById(styleId)) return;
@@ -476,6 +582,7 @@ export interface FileHeader {
 
 export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const { postMessage, getState, setState, onSettingsChange } = deps;
+  ensureFileHeaderCompactStyles();
   ensureCommitModalStyles();
   type ThemeMode = 'light' | 'dark';
   type AccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple' | 'cherryRed';
@@ -628,6 +735,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setState({ isFullWidth: newFullWidth });
     document.getElementById('editor')?.classList.toggle('full-width', newFullWidth);
     syncWidthButton(newFullWidth);
+    window.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
     postCurrentEdit();
     onSettingsChange();
   });
@@ -670,6 +778,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     zoomLabel.textContent = `${zoomLevel}%`;
     const scrollArea = document.getElementById('editor-scroll-area');
     if (scrollArea) scrollArea.style.fontSize = `${zoomLevel}%`;
+    window.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
     zoomOutBtn.classList.toggle('disabled', zoomLevel <= ZOOM_MIN);
     zoomInBtn.classList.toggle('disabled', zoomLevel >= ZOOM_MAX);
   }
@@ -777,6 +886,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const themeToggleBtn = document.createElement('button');
   themeToggleBtn.className = 'file-header-btn';
   let themeMode: ThemeMode = detectThemeMode();
+  let accentThemeUiSync: (() => void) | null = null;
   function applyThemeMode(mode: ThemeMode) {
     themeMode = mode;
     document.body.classList.toggle('mdpre-light', mode === 'light');
@@ -794,6 +904,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     window.dispatchEvent(new CustomEvent('inlinemd:themeChanged', {
       detail: { mode, isDark: mode === 'dark' },
     }));
+    accentThemeUiSync?.();
   }
   themeToggleBtn.addEventListener('click', () => {
     applyThemeMode(themeMode === 'dark' ? 'light' : 'dark');
@@ -817,29 +928,75 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   syncExternalFollowButton(externalFollowEnabled);
   rightGroup.appendChild(externalFollowBtn);
 
-  const accentSelect = document.createElement('select');
+  const accentWrap = document.createElement('div');
+  accentWrap.className = 'file-header-export-wrapper file-header-accent-wrap';
+  const accentSelect = document.createElement('button');
+  accentSelect.type = 'button';
   accentSelect.className = 'file-header-accent-select';
   accentSelect.title = 'Choose editor text color theme';
-  for (const theme of accentThemes) {
-    const option = document.createElement('option');
-    option.value = theme.value;
-    option.textContent = theme.label;
-    accentSelect.appendChild(option);
+  const accentLabel = document.createElement('span');
+  accentSelect.appendChild(accentLabel);
+  accentSelect.insertAdjacentHTML(
+    'beforeend',
+    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
+  );
+  const accentMenu = document.createElement('div');
+  accentMenu.className = 'file-header-dropdown file-header-accent-menu';
+  const accentOptionEls = new Map<AccentTheme, HTMLButtonElement>();
+  const accentThemeColors: Record<Exclude<AccentTheme, 'default'>, { light: string; dark: string }> = {
+    blue: { light: '#2563eb', dark: '#60a5fa' },
+    orangeRed: { light: '#ea580c', dark: '#fb923c' },
+    green: { light: '#15803d', dark: '#4ade80' },
+    purple: { light: '#7c3aed', dark: '#a78bfa' },
+    cherryRed: { light: '#a6113a', dark: '#ff1f4f' },
+  };
+  function accentOptionColor(theme: AccentTheme): string {
+    if (theme === 'default') return '';
+    return accentThemeColors[theme][themeMode];
   }
   function applyAccentTheme(theme: AccentTheme) {
     document.body.dataset.mdpreAccent = theme;
-    accentSelect.value = theme;
+    const selected = accentThemes.find((item) => item.value === theme) ?? accentThemes[0];
+    accentLabel.textContent = selected.label;
+    accentSelect.style.color = accentOptionColor(theme);
+    for (const item of accentThemes) {
+      const optionEl = accentOptionEls.get(item.value);
+      if (!optionEl) continue;
+      optionEl.classList.toggle('active', item.value === theme);
+      optionEl.style.color = accentOptionColor(item.value);
+    }
     try {
       localStorage.setItem('mdpre-zalman-accent-theme', theme);
     } catch {
       // Webview storage can be unavailable in restricted contexts.
     }
   }
-  accentSelect.addEventListener('change', () => {
-    applyAccentTheme(accentSelect.value as AccentTheme);
+  for (const theme of accentThemes) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'file-header-dropdown-item file-header-accent-option';
+    option.dataset.value = theme.value;
+    option.textContent = theme.label;
+    option.addEventListener('click', (event) => {
+      event.stopPropagation();
+      applyAccentTheme(theme.value);
+      accentMenu.classList.remove('open');
+    });
+    accentOptionEls.set(theme.value, option);
+    accentMenu.appendChild(option);
+  }
+  accentSelect.addEventListener('click', (event) => {
+    event.stopPropagation();
+    exportDropdown.classList.remove('open');
+    accentMenu.classList.toggle('open');
   });
+  accentThemeUiSync = () => {
+    applyAccentTheme((document.body.dataset.mdpreAccent as AccentTheme) || readStoredAccentTheme());
+  };
   applyAccentTheme(readStoredAccentTheme());
-  rightGroup.appendChild(accentSelect);
+  accentWrap.appendChild(accentSelect);
+  accentWrap.appendChild(accentMenu);
+  rightGroup.appendChild(accentWrap);
 
   const settingsBtn = document.createElement('button');
   settingsBtn.className = 'file-header-btn';
@@ -1055,6 +1212,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       exportDropdown.classList.remove('open');
+      accentMenu.classList.remove('open');
       closeShortcutModal();
       if (!commitModalBusy) commitBackdrop.classList.remove('open');
     }
@@ -1063,12 +1221,14 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   // Toggle dropdown on button click
   exportBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    accentMenu.classList.remove('open');
     exportDropdown.classList.toggle('open');
   });
 
   // Close dropdown on outside click
   document.addEventListener('click', () => {
     exportDropdown.classList.remove('open');
+    accentMenu.classList.remove('open');
   });
 
   const refreshShortcutAwareTitles = (): void => {

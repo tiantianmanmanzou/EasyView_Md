@@ -58,7 +58,7 @@ const heading: NodeSpec = {
   toDOM(node) {
     return [
       `h${node.attrs.level}`,
-      { class: 'heading-content', dir: 'auto' },
+      { class: 'heading-content', dir: 'auto', title: 'Copy outline path' },
       0
     ];
   },

@@ -9,6 +9,7 @@ import * as tableCommands from './TableCommands';
 import { getEditorView } from '../../../index';
 import { isHeaderEnabled, isRowSelection } from './TableQueries';
 import { selectedRect } from 'prosemirror-tables';
+import { rememberFirstRowStickyDefault } from './TablePreferences';
 
 export class TableGripToolbar {
   private el: HTMLDivElement;
@@ -181,6 +182,19 @@ export class TableGripToolbar {
         isHeader,
         () => { this.toggleHeaderRow(); }
       ));
+
+      let isSticky = false;
+      if (view) {
+        try {
+          isSticky = view.state.doc.nodeAt(selectedRect(view.state).tableStart)?.attrs.sticky === true;
+        } catch {}
+      }
+      toolbar.appendChild(this.createToggleButton(
+        'Keep first row visible',
+        this.stickyRowIcon(),
+        isSticky,
+        () => { this.toggleFirstRowSticky(); }
+      ));
       toolbar.appendChild(this.createSeparator());
     }
 
@@ -191,6 +205,38 @@ export class TableGripToolbar {
 
     toolbar.appendChild(this.createButton('Add row below', this.addBelowIcon(), () => {
       this.addRowBefore(this.currentIndex + 1);
+    }));
+
+    // Separator
+    toolbar.appendChild(this.createSeparator());
+
+    // Horizontal alignment buttons
+    toolbar.appendChild(this.createButton('Align left', this.alignLeftIcon(), () => {
+      this.setRowAlignment(this.currentIndex, 'left');
+    }));
+
+    toolbar.appendChild(this.createButton('Align center', this.alignCenterIcon(), () => {
+      this.setRowAlignment(this.currentIndex, 'center');
+    }));
+
+    toolbar.appendChild(this.createButton('Align right', this.alignRightIcon(), () => {
+      this.setRowAlignment(this.currentIndex, 'right');
+    }));
+
+    // Separator
+    toolbar.appendChild(this.createSeparator());
+
+    // Vertical alignment buttons
+    toolbar.appendChild(this.createButton('Align top', this.alignTopIcon(), () => {
+      this.setRowVerticalAlignment(this.currentIndex, 'top');
+    }));
+
+    toolbar.appendChild(this.createButton('Align middle', this.alignMiddleIcon(), () => {
+      this.setRowVerticalAlignment(this.currentIndex, 'middle');
+    }));
+
+    toolbar.appendChild(this.createButton('Align bottom', this.alignBottomIcon(), () => {
+      this.setRowVerticalAlignment(this.currentIndex, 'bottom');
     }));
 
     // Separator
@@ -318,12 +364,18 @@ export class TableGripToolbar {
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-orientation', 'horizontal');
 
-    // Delete table button
+    // Copy table through the editor clipboard pipeline, retaining both the
+    // rich table payload and EasyView's Markdown/plain-text representation.
+    toolbar.appendChild(this.createButton('Copy table', this.copyIcon(), () => {
+      this.copyTable();
+    }));
+
+    toolbar.appendChild(this.createSeparator());
+
     toolbar.appendChild(this.createButton('Delete table', this.deleteIcon(), () => {
       this.deleteTable();
     }));
 
-    // Separator
     toolbar.appendChild(this.createSeparator());
 
     // Export CSV button (with text "CSV")
@@ -398,6 +450,20 @@ export class TableGripToolbar {
     tableCommands.toggleHeader("row")(view.state, view.dispatch);
   }
 
+  private toggleFirstRowSticky() {
+    const view = getEditorView();
+    if (!view) return;
+    try {
+      const isSticky = view.state.doc.nodeAt(selectedRect(view.state).tableStart)?.attrs.sticky === true;
+      const nextSticky = !isSticky;
+      tableCommands.setFirstRowSticky(nextSticky)(view.state, view.dispatch);
+      // Keep the user's last explicit choice as the default for newly created tables.
+      rememberFirstRowStickyDefault(nextSticky);
+      this.render();
+      if (this.currentGrip) requestAnimationFrame(() => this.updatePosition(this.currentGrip!));
+    } catch {}
+  }
+
   private addRowBefore(rowIndex: number) {
     const view = getEditorView();
     if (!view) return;
@@ -422,6 +488,18 @@ export class TableGripToolbar {
     const view = getEditorView();
     if (!view) return;
     tableCommands.setColumnAttr({ index: colIndex, verticalAlignment })(view.state, view.dispatch);
+  }
+
+  private setRowAlignment(rowIndex: number, alignment: 'left' | 'center' | 'right') {
+    const view = getEditorView();
+    if (!view) return;
+    tableCommands.setRowAttr({ index: rowIndex, alignment })(view.state, view.dispatch);
+  }
+
+  private setRowVerticalAlignment(rowIndex: number, verticalAlignment: 'top' | 'middle' | 'bottom') {
+    const view = getEditorView();
+    if (!view) return;
+    tableCommands.setRowAttr({ index: rowIndex, verticalAlignment })(view.state, view.dispatch);
   }
 
   private adjustColumnWidth(colIndex: number, delta: number) {
@@ -547,6 +625,16 @@ export class TableGripToolbar {
     }, 0);
   }
 
+  private copyTable() {
+    const view = getEditorView();
+    if (!view) return;
+
+    tableCommands.selectTable()(view.state, view.dispatch);
+    view.focus();
+    document.execCommand('copy');
+    this.hide();
+  }
+
   private deleteTable() {
     const view = getEditorView();
     if (!view) return;
@@ -638,6 +726,10 @@ export class TableGripToolbar {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 6a1 1 0 0 1 1-1h2v14H6a1 1 0 0 1-1-1V6Zm14 0v12a1 1 0 0 1-1 1h-2V5h2a1 1 0 0 1 1 1Zm-8 3a1 1 0 1 1 2 0v2h2a1 1 0 1 1 0 2h-2v2a1 1 0 1 1-2 0v-2H9a1 1 0 1 1 0-2h2V9Z"/></svg>`;
   }
 
+  private copyIcon() {
+    return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+  }
+
   private exportCSVIcon() {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M7.29289 10.2929C7.68342 9.90237 8.31658 9.90237 8.70711 10.2929L12 13.5858L15.2929 10.2929C15.6834 9.90237 16.3166 9.90237 16.7071 10.2929C17.0976 10.6834 17.0976 11.3166 16.7071 11.7071L12.7071 15.7071C12.3166 16.0976 11.6834 16.0976 11.2929 15.7071L7.29289 11.7071C6.90237 11.3166 6.90237 10.6834 7.29289 10.2929Z"></path><path d="M11 7C11 6.44772 11.4477 6 12 6C12.5523 6 13 6.44772 13 7V13C13 13.5523 12.5523 14 12 14C11.4477 14 11 13.5523 11 13V7Z"></path><path d="M18 17C18.5523 17 19 17.4477 19 18C19 18.5523 18.5523 19 18 19L6 19C5.44772 19 5 18.5523 5 18C5 17.4477 5.44772 17 6 17L12 17H18Z"></path></svg>`;
   }
@@ -648,6 +740,10 @@ export class TableGripToolbar {
 
   private headerIcon() {
     return `<svg fill="currentColor" width="20px" height="20px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 4h12c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zm0 2v12h12V6H6zm2 2h2v3h4V8h2v8h-2v-3H10v3H8V8z"/></svg>`;
+  }
+
+  private stickyRowIcon() {
+    return `<svg fill="currentColor" width="20px" height="20px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm2 1v2h10V5H7Zm-2 7a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>`;
   }
 
   destroy() {

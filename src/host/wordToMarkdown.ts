@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { PNG } from 'pngjs';
+import { stripPandocHighlightMarkup } from './pandocHighlightMarkup';
 
 type CommandError = Error & { code?: string | number; stderr?: string };
 
@@ -226,7 +227,9 @@ async function convertWordFile(sourceUri: vscode.Uri): Promise<vscode.Uri> {
     ]);
 
     const converted = await fs.readFile(tempMarkdownPath, 'utf8');
-    const markdown = rewriteExtractedMediaPaths(converted, tempMediaDirectory, assetDirectoryName);
+    const markdown = stripPandocHighlightMarkup(
+      rewriteExtractedMediaPaths(converted, tempMediaDirectory, assetDirectoryName),
+    );
     await moveExtractedMedia(tempMediaDirectory, assetDirectory);
     await fs.writeFile(outputPath, markdown, 'utf8');
     return outputUri;

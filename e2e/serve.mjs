@@ -41,7 +41,14 @@ const server = createServer((req, res) => {
 
   // Main test harness page
   if (url.pathname === '/' || url.pathname === '/index.html') {
-    const markdown = url.searchParams.get('md') || '';
+    const src = url.searchParams.get('src');
+    let markdown = url.searchParams.get('md') || '';
+    if (src) {
+      const filePath = src.startsWith('/') ? src : join(fixturesDir, src);
+      if (existsSync(filePath)) {
+        markdown = readFileSync(filePath, 'utf8');
+      }
+    }
     const html = buildHarness(markdown);
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(html);

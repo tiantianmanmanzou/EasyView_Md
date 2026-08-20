@@ -26,7 +26,7 @@ import { getPageConfig, CONTENT_WIDTH } from './PdfStyles';
 import { type PdfPalette, LIGHT_PALETTE, DARK_PALETTE } from './PdfPalette';
 
 // Extracted modules
-import { collectMermaidSvgs, convertMermaidSvgsToPng } from './PdfMermaidRenderer';
+import { collectMermaidPngsFromDoc } from './PdfMermaidRenderer';
 import { collectMathImages } from './PdfMathRenderer';
 import { type ConvertContext, convertNode } from './PdfNodeConverters';
 
@@ -164,22 +164,17 @@ export async function generatePdfBase64(
   // - Image loading (network/DOM)
   // - Mermaid SVG rendering (DOM-based)
   // - Math expression rendering (DOM-based)
-  const [imageMap, mermaidSvgMap, mathImageMap] = await Promise.all([
+  const [imageMap, mermaidPngMap, mathImageMap] = await Promise.all([
     loadAllImages(doc, loadImageFromHost),
-    collectMermaidSvgs(doc, palette),
+    collectMermaidPngsFromDoc(doc, palette),
     collectMathImages(doc, palette.text),
   ]);
 
   console.log(`[InLineMd PDF] parallel pre-processing: ${(performance.now() - t0).toFixed(0)}ms`);
 
-  // Convert mermaid SVGs to PNG (depends on mermaidSvgMap)
-  const t1 = performance.now();
-  const mermaidPngMap = await convertMermaidSvgsToPng(mermaidSvgMap, palette.pageBackground);
-  console.log(`[InLineMd PDF] mermaid SVG→PNG: ${(performance.now() - t1).toFixed(0)}ms`);
-
   // Build the pdfmake document definition
   const t2 = performance.now();
-  const dd = await buildDocDefinition(doc, imageMap, mermaidSvgMap, mermaidPngMap, mathImageMap, options, palette);
+  const dd = await buildDocDefinition(doc, imageMap, new Map(), mermaidPngMap, mathImageMap, options, palette);
   console.log(`[InLineMd PDF] build doc definition: ${(performance.now() - t2).toFixed(0)}ms`);
 
   // Generate PDF and return as base64 (pdfmake v0.3.x: async API)

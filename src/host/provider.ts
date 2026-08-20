@@ -8,6 +8,7 @@ import { consumePendingCursorForUri } from './openCursorContext';
 import { consumePendingDocumentContentForUri } from './openDocumentSnapshot';
 import { logOpenWithDebug } from './openWithDebug';
 import { disposeTerminalForPanel } from './terminalSessionManager';
+import { registerNativeOutlineNavigationGuard } from './nativeOutlineNavigation';
 
 function getDefaultTerminalFontFamily(): string {
   if (process.platform === 'darwin') {
@@ -57,6 +58,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         supportsMultipleEditorsPerDocument: true,
       }
     );
+    const outlineNavigationGuard = registerNativeOutlineNavigationGuard(context, MarkdownEditorProvider.viewType);
 
     const exportHtmlLightCommand = vscode.commands.registerCommand('inlineMd.exportHtmlLight', () => {
       if (provider.activePanel) {
@@ -103,7 +105,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
     );
 
-    return vscode.Disposable.from(editorDisposable, exportHtmlLightCommand, exportHtmlDarkCommand, exportPdfLightCommand, exportPdfDarkCommand, undoCommand, redoCommand, revealCursorCommand);
+    return vscode.Disposable.from(editorDisposable, outlineNavigationGuard, exportHtmlLightCommand, exportHtmlDarkCommand, exportPdfLightCommand, exportPdfDarkCommand, undoCommand, redoCommand, revealCursorCommand);
   }
 
   public static async reloadPanelsForDocument(uri: vscode.Uri, contentOverride?: string): Promise<boolean> {
@@ -118,6 +120,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
   private getSettingsKey(document: vscode.TextDocument): string {
     return `mdpre-zalman.editorSettings:${document.uri.toString()}`;
+  }
+
+  private getTableFirstRowStickyDefault(): boolean {
+    return this.context.workspaceState.get<boolean>('easyviewMd.tableFirstRowStickyDefault', false);
+  }
+
+  private async setTableFirstRowStickyDefault(sticky: boolean): Promise<void> {
+    await this.context.workspaceState.update('easyviewMd.tableFirstRowStickyDefault', sticky);
   }
 
   private hasPanelsForDocument(uri: vscode.Uri): boolean {
@@ -166,6 +176,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         fullWidth: settings.fullWidth,
         tocVisible: settings.tocVisible,
         tableWrap: settings.tableWrap,
+        tableFirstRowStickyDefault: this.getTableFirstRowStickyDefault(),
         imagePathMap,
         gitLineRanges,
         initialCursorLine,
@@ -313,6 +324,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       refreshGitChanges: () => postGitChanges(),
       getEditorSettings: () => readStoredSettings(document.getText()),
       updateEditorSettings: updateStoredSettings,
+      getTableFirstRowStickyDefault: () => this.getTableFirstRowStickyDefault(),
+      setTableFirstRowStickyDefault: (sticky: boolean) => this.setTableFirstRowStickyDefault(sticky),
     };
 
     // Extension -> Webview: sync on external document changes
@@ -397,6 +410,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       fullWidth: settings.fullWidth,
       tocVisible: settings.tocVisible,
       tableWrap: settings.tableWrap,
+      tableFirstRowStickyDefault: this.getTableFirstRowStickyDefault(),
       imagePathMap,
       gitLineRanges: initialGitLineRanges,
       initialCursorLine,

@@ -17,11 +17,32 @@ const table: NodeSpec = {
 };
 
 const table_row: NodeSpec = {
+  attrs: {
+    height: { default: null },
+    sticky: { default: false },
+  },
   content: '(table_cell | table_header)*',
   tableRole: 'row',
-  parseDOM: [{ tag: 'tr' }],
-  toDOM() {
-    return ['tr', 0];
+  parseDOM: [
+    {
+      tag: 'tr',
+      getAttrs(dom: HTMLTableRowElement) {
+        const height = Number(dom.getAttribute('data-easyview-row-height'));
+        return {
+          height: Number.isFinite(height) && height > 0 ? Math.round(height) : null,
+          sticky: dom.getAttribute('data-easyview-sticky') === 'true',
+        };
+      },
+    },
+  ],
+  toDOM(node) {
+    const height = typeof node.attrs.height === 'number' && node.attrs.height > 0
+      ? Math.round(node.attrs.height)
+      : null;
+    return ['tr', {
+      ...(height ? { 'data-easyview-row-height': String(height) } : {}),
+      ...(node.attrs.sticky ? { 'data-easyview-sticky': 'true' } : {}),
+    }, 0];
   },
 };
 

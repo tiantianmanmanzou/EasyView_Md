@@ -6,10 +6,25 @@
  */
 
 import { Plugin, PluginKey } from 'prosemirror-state';
+import { CellSelection } from 'prosemirror-tables';
 import { Slice, type Schema } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { Extension } from '../../../editor/EditorExtension';
 import { serializer } from '../../../editor/lib/MarkdownSerializer';
+import {
+  flattenMergedTablesInFragment,
+  unwrapCellWrapperTableFragment,
+  unwrapCellWrapperTablesInClipboardHtml,
+  unmergeTablesInClipboardHtml,
+} from '../../../editor/lib/ClipboardTablePaste';
+import { isScrollToSelectionSuppressed } from '../../../editor/lib/ScrollPreserve';
+
+function markCellCopyHtml(html: string): string {
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  const table = document.querySelector('table');
+  table?.setAttribute('data-easyview-cell-copy', '1');
+  return document.body.innerHTML;
+}
 
 type ImageDataUrlResolver = (originalSrc: string) => Promise<string | null>;
 
@@ -100,6 +115,27 @@ function copySelectedImages(view: EditorView, event: ClipboardEvent, sequence: n
   return true;
 }
 
+function rewriteCellWrapperCopy(view: EditorView, event: ClipboardEvent): boolean {
+  const { selection } = view.state;
+  if (!(selection instanceof CellSelection)) return false;
+  if (selection.$anchorCell.pos !== selection.$headCell.pos) return false;
+
+  const copied = selection.content();
+  const unwrapped = unwrapCellWrapperTableFragment(copied.content);
+  if (unwrapped === copied.content) return false;
+
+  const { dom, text } = view.serializeForClipboard(
+    new Slice(unwrapped, 0, 0),
+  );
+  event.preventDefault();
+  if (event.clipboardData) {
+    event.clipboardData.clearData();
+    event.clipboardData.setData('text/html', markCellCopyHtml(dom.innerHTML));
+    event.clipboardData.setData('text/plain', text);
+  }
+  return true;
+}
+
 export class ClipboardExtension extends Extension {
   get name() {
     return 'clipboard';
@@ -111,10 +147,29 @@ export class ClipboardExtension extends Extension {
       new Plugin({
         key: new PluginKey('clipboardTextSerializer'),
         props: {
+          handleScrollToSelection() {
+            // Large in-cell pastes pin scrollports; ignore PM's follow-caret scroll.
+            return isScrollToSelectionSuppressed();
+          },
+          transformPastedHTML(html) {
+            if (html.includes('ProseMirror')) {
+              return unwrapCellWrapperTablesInClipboardHtml(html);
+            }
+            return unmergeTablesInClipboardHtml(html);
+          },
+          transformPasted(slice) {
+            return new Slice(
+              flattenMergedTablesInFragment(slice.content),
+              slice.openStart,
+              slice.openEnd,
+            );
+          },
           handleDOMEvents: {
             copy(view, event) {
-              if (!selectionContainsImage(view)) return false;
-              return copySelectedImages(view, event as ClipboardEvent, copySequence);
+              if (selectionContainsImage(view)) {
+                return copySelectedImages(view, event as ClipboardEvent, copySequence);
+              }
+              return rewriteCellWrapperCopy(view, event as ClipboardEvent);
             },
           },
           clipboardTextSerializer(slice) {

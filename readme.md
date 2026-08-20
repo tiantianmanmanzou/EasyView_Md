@@ -6,22 +6,25 @@
 
 ### Demo Part 1
 
-![](./assets/demo_part1.gif)
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/assets/demo_part1.gif)
 
 ### Demo Part 2
 
-![](./assets/demo_part2.gif)
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/assets/demo_part2.gif)
 
 ### Demo Part 3
 
-![](./assets/demo_part3.gif)
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/assets/demo_part3.gif)
 
 EasyView_Md is a feature-rich Markdown editor for VS Code. Markdown files can remain in the native VS Code editor, or be opened manually in the visual editor when richer editing tools are needed.
 
-## What's New in 2.0.0
+## What's New in 2.0.3
 
+- **PDF to Markdown conversion** — right-click a `.pdf` file and select `Convert to Markdown with Easyview_Md`. The extension creates an editable `.md` file beside the PDF, extracts images into a matching `.assets` folder, and falls back to page images when the PDF has no extractable text.
 - **Word to Markdown conversion** — right-click a `.docx` or `.doc` file and select `Convert to Markdown with Easyview_Md`. The converted Markdown is created beside the source file, with extracted images stored in a matching `.assets` folder.
-- **Reliable Word image conversion** — Word image dimensions are retained using native Markdown image attributes, and transparent PNGs are flattened onto a white background for consistent rendering.
+- **Reliable document images** — Word and PDF image assets are written as relative references where possible, and transparent PNGs are flattened onto a white background for consistent rendering.
+- **More reliable visual tables** — nested tables, cell editing, table scrolling, column resizing, and Markdown/HTML table serialization have been strengthened for complex documents.
+- **Improved native-editor workflow** — Markdown stays compatible with the native VS Code editor, including outline navigation and a one-click return from visual editing to source editing.
 - **Portable image paste** — when Markdown or HTML containing Base64 images is pasted into the native VS Code editor, images are written to the current document's `.assets` folder and replaced with relative image references.
 - **Rich copy with images** — copying a selection containing images keeps formatted HTML and embeds image data, so pasting into other rich-text editors retains the selected text and images.
 - **Improved DOCX and PDF export** — DOCX export keeps H1-H4 headings black and bold without adding blank body paragraphs; PDF export includes bundled Chinese and symbol fonts for more reliable CJK, emoji, diagram, and special-character output.
@@ -176,6 +179,17 @@ Convert Word files directly from VS Code Explorer:
 
 The conversion keeps document headings, tables, image alt text and dimensions. PNG images with transparency are converted to an opaque white background. `.docx` conversion requires [Pandoc](https://pandoc.org/); legacy `.doc` conversion additionally requires LibreOffice (`soffice`).
 
+### PDF to Markdown
+
+Convert PDF files directly from VS Code Explorer:
+
+1. Right-click a `.pdf` file.
+2. Select **Convert to Markdown with Easyview_Md**.
+3. EasyView_Md writes an editable `.md` file beside the PDF and puts extracted images in `<document>.assets`.
+4. If the PDF has no extractable text, EasyView_Md creates page-image references instead.
+
+PDF conversion requires the Poppler command-line utilities: `pdftotext`, `pdfimages`, and `pdftoppm`.
+
 ### Other Block Types
 
 - **Horizontal rule** — divider line
@@ -271,6 +285,7 @@ The conversion keeps document headings, tables, image alt text and dimensions. P
 | ---------------------- | -------------------------------------------------------- |
 | `Open with EasyView_Md` | Open current markdown file in the optional custom editor |
 | `Convert to Markdown with Easyview_Md` | Convert a `.docx` or `.doc` file from Explorer into Markdown |
+| `Convert to Markdown with Easyview_Md` | Convert a `.pdf` file from Explorer into Markdown |
 | `Export to HTML (Light)` | Export as HTML with light theme                          |
 | `Export to HTML (Dark)` | Export as HTML with dark theme                           |
 | `Export to PDF (Light)` | Export as PDF with light theme                           |

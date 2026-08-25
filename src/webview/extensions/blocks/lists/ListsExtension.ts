@@ -10,7 +10,7 @@
 import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
 import { wrappingInputRule, type InputRule } from 'prosemirror-inputrules';
 import type { NodeSpec, Schema, Node as ProsemirrorNode } from 'prosemirror-model';
-import type { Command } from 'prosemirror-commands';
+import type { Command } from 'prosemirror-state';
 import { chainCommands } from 'prosemirror-commands';
 import type { EditorView } from 'prosemirror-view';
 import { wrapInList, splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list';
@@ -46,7 +46,7 @@ export class ListsExtension extends Extension {
         parseDOM: [
           {
             tag: 'ol',
-            getAttrs(dom: HTMLOListElement) {
+            getAttrs(dom: HTMLElement) {
               return {
                 order: dom.hasAttribute('start')
                   ? +dom.getAttribute('start')!
@@ -79,7 +79,7 @@ export class ListsExtension extends Extension {
           {
             tag: 'ul',
             priority: 60,
-            getAttrs(dom: HTMLUListElement) {
+            getAttrs(dom: HTMLElement) {
               const items = dom.querySelectorAll(':scope > li');
               for (const li of items) {
                 if (li.querySelector(':scope > input[type="checkbox"]')) return {};
@@ -101,7 +101,7 @@ export class ListsExtension extends Extension {
         parseDOM: [
           {
             tag: 'li[data-type="checkbox_item"]',
-            getAttrs(dom: HTMLLIElement) {
+            getAttrs(dom: HTMLElement) {
               const val = dom.dataset.checked;
               if (val === 'inapplicable') return { checked: 'inapplicable' };
               return { checked: val === 'true' };
@@ -111,7 +111,7 @@ export class ListsExtension extends Extension {
           {
             tag: 'li',
             priority: 60,
-            getAttrs(dom: HTMLLIElement) {
+            getAttrs(dom: HTMLElement) {
               const checkbox = dom.querySelector(':scope > input[type="checkbox"]');
               if (!checkbox) return false;
               return { checked: (checkbox as HTMLInputElement).checked || checkbox.hasAttribute('checked') };
@@ -165,10 +165,19 @@ export class ListsExtension extends Extension {
   }
 
   keymaps(schema: Schema): Record<string, Command> {
+    const toggleList = (listType: any, itemType: any): Command => (state, dispatch) => {
+      const { $from } = state.selection;
+      for (let depth = $from.depth; depth > 0; depth--) {
+        if ($from.node(depth).type === listType) {
+          return liftListItem(itemType)(state, dispatch);
+        }
+      }
+      return wrapInList(listType)(state, dispatch);
+    };
     return {
-      'Shift-Ctrl-7': wrapInList(schema.nodes.checkbox_list),
-      'Shift-Ctrl-8': wrapInList(schema.nodes.bullet_list),
-      'Shift-Ctrl-9': wrapInList(schema.nodes.ordered_list),
+      'Shift-Ctrl-7': toggleList(schema.nodes.checkbox_list, schema.nodes.checkbox_item),
+      'Shift-Ctrl-8': toggleList(schema.nodes.bullet_list, schema.nodes.list_item),
+      'Shift-Ctrl-9': toggleList(schema.nodes.ordered_list, schema.nodes.list_item),
       'Mod-[': (state, dispatch) => {
         return chainCommands(
           liftListItem(schema.nodes.list_item),

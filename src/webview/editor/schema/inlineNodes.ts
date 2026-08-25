@@ -20,7 +20,7 @@ const image: NodeSpec = {
   parseDOM: [
     {
       tag: 'img[src]',
-      getAttrs(dom: HTMLImageElement) {
+      getAttrs(dom: HTMLElement) {
         return {
           src: dom.getAttribute('src'),
           originalSrc: dom.getAttribute('data-original-src'),
@@ -59,7 +59,7 @@ const video: NodeSpec = {
   parseDOM: [
     {
       tag: 'video[src]',
-      getAttrs(dom: HTMLVideoElement) {
+      getAttrs(dom: HTMLElement) {
         return {
           src: dom.getAttribute('src'),
           originalSrc: dom.getAttribute('data-original-src'),
@@ -95,7 +95,7 @@ const audio: NodeSpec = {
   parseDOM: [
     {
       tag: 'audio[src]',
-      getAttrs(dom: HTMLAudioElement) {
+      getAttrs(dom: HTMLElement) {
         return {
           src: dom.getAttribute('src'),
           originalSrc: dom.getAttribute('data-original-src'),

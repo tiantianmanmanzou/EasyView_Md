@@ -79,6 +79,10 @@ export class TableOfContents {
     this.attachScrollListener();
   }
 
+  getHeadings(): Array<{ level: number; text: string; pos: number }> {
+    return this.headings.map(({ level, text, pos }) => ({ level, text, pos }));
+  }
+
   private ensureStyles(): void {
     if (document.getElementById('easyview-toc-tree-styles')) return;
     const style = document.createElement('style');
@@ -779,8 +783,9 @@ export class TableOfContents {
     });
 
     // Auto-scroll active item into view within TOC sidebar (Outline does this)
-    if (activeItem) {
-      activeItem.scrollIntoView({
+    const activeElement = activeItem as HTMLElement | null;
+    if (activeElement) {
+      activeElement.scrollIntoView({
         block: 'nearest',
         behavior: 'smooth',
       });

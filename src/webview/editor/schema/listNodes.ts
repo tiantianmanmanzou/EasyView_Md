@@ -22,7 +22,7 @@ const ordered_list: NodeSpec = {
   parseDOM: [
     {
       tag: 'ol',
-      getAttrs(dom: HTMLOListElement) {
+      getAttrs(dom: HTMLElement) {
         return { order: dom.hasAttribute('start') ? +dom.getAttribute('start')! : 1 };
       },
     },
@@ -52,7 +52,7 @@ const checkbox_list: NodeSpec = {
       tag: 'ul',
       // Higher priority than bullet_list to match first
       priority: 60,
-      getAttrs(dom: HTMLUListElement) {
+      getAttrs(dom: HTMLElement) {
         // Only match if at least one <li> has an <input type="checkbox">
         const items = dom.querySelectorAll(':scope > li');
         for (const li of items) {
@@ -76,7 +76,7 @@ const checkbox_item: NodeSpec = {
   parseDOM: [
     {
       tag: 'li[data-type="checkbox_item"]',
-      getAttrs(dom: HTMLLIElement) {
+      getAttrs(dom: HTMLElement) {
         const val = dom.dataset.checked;
         if (val === 'inapplicable') return { checked: 'inapplicable' };
         return { checked: val === 'true' };
@@ -86,7 +86,7 @@ const checkbox_item: NodeSpec = {
     {
       tag: 'li',
       priority: 60,
-      getAttrs(dom: HTMLLIElement) {
+      getAttrs(dom: HTMLElement) {
         const checkbox = dom.querySelector(':scope > input[type="checkbox"]');
         if (!checkbox) return false;
         return { checked: (checkbox as HTMLInputElement).checked || checkbox.hasAttribute('checked') };

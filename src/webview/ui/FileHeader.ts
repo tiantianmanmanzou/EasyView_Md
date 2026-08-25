@@ -3,8 +3,10 @@
  * Extracted from index.ts as a standalone UI component.
  */
 
+import type { WebviewToHostMessage } from '../../shared/protocol';
+
 export interface FileHeaderDeps {
-  postMessage: (msg: any) => void;
+  postMessage: (msg: WebviewToHostMessage) => void;
   getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; currentContent: string };
   setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean }>) => void;
   onSettingsChange: () => void;

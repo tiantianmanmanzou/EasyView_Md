@@ -108,7 +108,7 @@ export function findAndReplacePlugin() {
           return DecorationSet.empty;
         }
 
-        const decorations = pluginState.results.map((result, index) => {
+        const decorations = pluginState.results.map((result: { from: number; to: number }, index: number) => {
           const isCurrentResult = index === pluginState.currentIndex;
           const className = isCurrentResult
             ? 'find-result current-result'

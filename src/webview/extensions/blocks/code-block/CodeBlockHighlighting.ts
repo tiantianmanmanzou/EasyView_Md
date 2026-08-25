@@ -10,6 +10,7 @@ import type { Transaction } from "prosemirror-state";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import refractor from "refractor/core";
+import type { RefractorNode } from "refractor";
 import { getLoaderForLanguage, getRefractorLangForLanguage } from "../../../editor/lib/CodeLanguages";
 import { isCode, isMermaid, isPlainTextCode } from "../../../editor/lib/CodeDetection";
 import { findBlockNodes } from "../../../editor/lib/NodeFinder";
@@ -19,7 +20,7 @@ type ParsedNode = {
   classes: string[];
 };
 
-const cache: Record<number, { node: Node; decorations: Decoration[] }> = {};
+const cache: Record<number, { node: Node; decorations: Decoration[]; highlighted: boolean }> = {};
 const languagesToImport = new Set<string>();
 const languagePromises: Record<
   string,
@@ -77,7 +78,7 @@ function getDecorations({
   ).filter((item) => isCode(item.node) && !isMermaid(item.node));
 
   function parseNodes(
-    nodes: refractor.RefractorNode[],
+    nodes: RefractorNode[],
     classNames: string[] = []
   ): {
     text: string;

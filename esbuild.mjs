@@ -14,11 +14,7 @@ const common = {
 
 async function ensureDistAssets() {
   await fs.mkdir('dist', { recursive: true });
-  try {
-    await fs.access('dist/webview.css');
-  } catch {
-    throw new Error('dist/webview.css is required. This fork keeps the recovered package CSS as the stylesheet source.');
-  }
+  await fs.copyFile('src/webview/webview.css', 'dist/webview.css');
 
   const fontsDir = path.join('dist', 'fonts');
   try {

@@ -30,7 +30,8 @@ class Cache {
   static set(key: string, value: string) {
     this.data.set(key, value);
     if (this.data.size > this.maxSize) {
-      this.data.delete(this.data.keys().next().value);
+      const oldest = this.data.keys().next().value;
+      if (oldest !== undefined) this.data.delete(oldest);
     }
   }
 
@@ -46,7 +47,8 @@ class BpmnLayoutCache {
   static set(key: string, value: string) {
     this.data.set(key, value);
     if (this.data.size > this.maxSize) {
-      this.data.delete(this.data.keys().next().value);
+      const oldest = this.data.keys().next().value;
+      if (oldest !== undefined) this.data.delete(oldest);
     }
   }
 
@@ -260,7 +262,7 @@ class ExternalDiagramRenderer {
         return;
       }
 
-      const viewerCanvas = viewer.get('canvas');
+      const viewerCanvas = viewer.get('canvas') as { zoom: (level: string, center?: string) => void };
       viewerCanvas.zoom('fit-viewport', 'auto');
     } catch (error) {
       if (token !== this.renderToken) return;

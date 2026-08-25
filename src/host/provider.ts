@@ -3,6 +3,7 @@ import * as path from 'path';
 import { SETTINGS_COMMENT_RE, extractSettings, repairSerializedMarkdownContent, type EditorSettings } from './providerUtils';
 import { buildImagePathMap } from './providerImageManager';
 import { handleWebviewMessage, MessageHandlerContext } from './providerMessageHandler';
+import { isWebviewToHostMessage } from '../shared/protocol';
 import { computeGitLineRanges, type GitLineRange } from './gitChangeTracker';
 import { consumePendingCursorForUri } from './openCursorContext';
 import { consumePendingDocumentContentForUri } from './openDocumentSnapshot';
@@ -367,6 +368,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Webview -> Extension: handle messages from ProseMirror
     const messageSubscription = webviewPanel.webview.onDidReceiveMessage(async (message) => {
+      if (!isWebviewToHostMessage(message)) {
+        console.warn('[InLineMd] Ignoring unknown webview message:', message?.type);
+        return;
+      }
       await handleWebviewMessage(messageCtx, message);
     });
 

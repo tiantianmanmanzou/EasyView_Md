@@ -129,7 +129,7 @@ export function findBlockEdgeFrom(
 
     // Then scan down into the next node
     for (;;) {
-      const inside = dir > 0 ? next!.firstChild : next!.lastChild;
+      const inside: ProsemirrorNode | null = dir > 0 ? next!.firstChild : next!.lastChild;
       if (!inside) {
         if (next!.isAtom && !next!.isText && !NodeSelection.isSelectable(next!)) {
           $pos = $pos.doc.resolve(pos + next!.nodeSize * dir);

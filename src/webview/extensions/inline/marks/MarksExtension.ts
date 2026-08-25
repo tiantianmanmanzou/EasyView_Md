@@ -93,6 +93,20 @@ export class MarksExtension extends Extension {
           return ['code', { class: 'inline-code', spellcheck: 'false' }, 0];
         },
       },
+      text_color: {
+        attrs: { color: { default: '#000000' } },
+        parseDOM: [
+          {
+            tag: 'span[style*="color"]',
+            getAttrs(dom: HTMLElement) {
+              return { color: dom.style.color || null };
+            },
+          },
+        ],
+        toDOM(mark) {
+          return ['span', { style: `color: ${mark.attrs.color}` }, 0];
+        },
+      },
       highlight: {
         attrs: { color: { default: null } },
         parseDOM: [
@@ -123,7 +137,7 @@ export class MarksExtension extends Extension {
         parseDOM: [
           {
             tag: 'a[href]',
-            getAttrs(dom: HTMLAnchorElement) {
+            getAttrs(dom: HTMLElement) {
               return {
                 href: dom.getAttribute('href'),
                 title: dom.getAttribute('title'),
@@ -171,12 +185,12 @@ export class MarksExtension extends Extension {
 
   keymaps(schema: Schema): Record<string, Command> {
     return {
-      'Mod-b': toggleMark(schema.marks.strong),
-      'Mod-i': toggleMark(schema.marks.em),
-      'Mod-u': toggleMark(schema.marks.underline),
-      'Mod-d': toggleMark(schema.marks.strikethrough),
-      'Mod-e': toggleMark(schema.marks.code_inline),
-      'Mod-Shift-h': toggleMark(schema.marks.highlight),
+      'Ctrl-b': toggleMark(schema.marks.strong),
+      'Ctrl-i': toggleMark(schema.marks.em),
+      'Ctrl-u': toggleMark(schema.marks.underline),
+      'Ctrl-d': toggleMark(schema.marks.strikethrough),
+      'Ctrl-e': toggleMark(schema.marks.code_inline),
+      'Ctrl-Shift-h': toggleMark(schema.marks.highlight),
     };
   }
 
@@ -238,6 +252,15 @@ export class MarksExtension extends Extension {
           return content.endsWith('`') ? ' ' + ticks : ticks;
         },
         escape: false,
+      },
+      text_color: {
+        open(_state, mark) {
+          return `<span style=\"color: ${mark.attrs.color}\">`;
+        },
+        close() {
+          return '</span>';
+        },
+        mixable: true,
       },
       highlight: {
         open: '==',

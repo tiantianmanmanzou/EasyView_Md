@@ -12,7 +12,7 @@ import {
   isPandocHighlightCloseTag,
   isPandocHighlightOpenTag,
   stripPandocHighlightMarkup,
-} from '../../../host/pandocHighlightMarkup';
+} from '../../../shared/pandocHighlightMarkup';
 
 // ─── Regex constants ─────────────────────────────────────────────────────────
 

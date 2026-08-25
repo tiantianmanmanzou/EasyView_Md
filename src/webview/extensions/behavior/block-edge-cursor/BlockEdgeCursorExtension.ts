@@ -13,6 +13,9 @@
  */
 
 import {
+  type Command,
+  type EditorState,
+  type Transaction,
   Plugin,
   PluginKey,
   TextSelection,
@@ -550,11 +553,8 @@ function arrow(axis: 'horiz' | 'vert', dir: number) {
   // ArrowUp/Left → entering gap from below → side = 'after' (RIGHT edge of prev block)
   const side: CursorSide = dir > 0 ? 'before' : 'after';
 
-  return function (
-    state: any,
-    dispatch: any,
-    view: EditorView
-  ): boolean {
+  return function (state: EditorState, dispatch: ((tr: Transaction) => void) | undefined, view?: EditorView): boolean {
+    if (!view) return false;
     const sel = state.selection;
     const $start = dir > 0 ? sel.$to : sel.$from;
     let mustMove = sel.empty;

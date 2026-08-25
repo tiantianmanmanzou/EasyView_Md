@@ -13,7 +13,7 @@ interface StickyNoteModalOptions {
   getDocumentContent: () => string;
   commitDocumentContent: (content: string, options?: { save: boolean }) => void;
   requestTabCompletion?: (request: TabCompletionRequest) => Promise<{
-    insertText?: string;
+    insertText: string;
     replaceStartCharacter?: number;
     replaceEndCharacter?: number;
   } | null>;

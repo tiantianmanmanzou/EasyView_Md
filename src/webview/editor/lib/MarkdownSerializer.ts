@@ -150,16 +150,29 @@ function serializeTableAsHtml(state: MarkdownSerializerState, node: ProsemirrorN
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
     const stickyAttr = row.attrs.sticky ? ' data-easyview-sticky="true"' : '';
-    let rowHtml = `<tr${stickyAttr}>`;
+    const rowHeightAttr =
+      typeof row.attrs.height === 'number' && row.attrs.height > 0
+        ? ` data-easyview-row-height="${Math.round(row.attrs.height)}"`
+        : '';
+    let rowHtml = `<tr${stickyAttr}${rowHeightAttr}>`;
 
     for (let c = 0; c < row.childCount; c++) {
       const cell = row.child(c);
       const tag = r === 0 && isHeader ? 'th' : 'td';
       const align = cell.attrs.alignment;
       const verticalAlign = cell.attrs.verticalAlignment;
+      const rowspanAttr = cell.attrs.rowspan > 1 ? ` rowspan="${cell.attrs.rowspan}"` : '';
+      const colspanAttr = cell.attrs.colspan > 1 ? ` colspan="${cell.attrs.colspan}"` : '';
+      const duplicateMergedAttr = cell.attrs.duplicateMerged ? ' data-easyview-duplicate-merged="true"' : '';
+      const autoMergedAttr = cell.attrs.autoMerged ? ' data-easyview-auto-merged="true"' : '';
+      const mergeGroupAttr = cell.attrs.mergeGroup ? ` data-easyview-merge-group="${cell.attrs.mergeGroup}"` : '';
+      const colwidthAttr =
+        Array.isArray(cell.attrs.colwidth) && cell.attrs.colwidth.some((width: number) => width > 0)
+          ? ` data-colwidth="${cell.attrs.colwidth.map((width: number) => Math.round(width)).join(',')}"`
+          : '';
       const alignAttr = align ? ` align="${align}"` : '';
       const valignAttr = verticalAlign ? ` valign="${verticalAlign}"` : '';
-      const cellAttrs = `${alignAttr}${valignAttr}`;
+      const cellAttrs = `${rowspanAttr}${colspanAttr}${duplicateMergedAttr}${autoMergedAttr}${mergeGroupAttr}${colwidthAttr}${alignAttr}${valignAttr}`;
       rowHtml += renderCellHtml(cell, tag, cellAttrs);
     }
 
@@ -191,6 +204,9 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
       const cell = row.child(c);
       if (Array.isArray(cell.attrs.colwidth) && cell.attrs.colwidth.some((width: number) => typeof width === 'number' && width > 0)) {
         hasManualWidths = true;
+      }
+      if (cell.attrs.rowspan > 1 || cell.attrs.colspan > 1 || cell.attrs.duplicateMerged || cell.attrs.mergeGroup) {
+        hasComplex = true;
       }
       if (cell.attrs.verticalAlignment) {
         hasVerticalAlignments = true;
@@ -404,7 +420,7 @@ function serializeInlineHtml(node: ProsemirrorNode): string {
         math_block(s, n) { s.write('$$'); s.text(n.textContent, false); s.write('$$'); },
         video(s, n) { s.write(`[Video](${n.attrs.src || ''})`); },
         audio(s, n) { s.write(`[Audio](${n.attrs.src || ''})`); },
-      } as any,
+      },
       markSerializers as any
     );
     // Cell content is block+ — recursively collect inline content from all blocks

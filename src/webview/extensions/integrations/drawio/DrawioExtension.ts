@@ -27,7 +27,7 @@ export class DrawioExtension extends Extension {
         parseDOM: [
           {
             tag: 'div[data-type="drawio"]',
-            getAttrs(dom: HTMLDivElement) {
+            getAttrs(dom: HTMLElement) {
               return {
                 src: dom.dataset.src || '',
                 title: dom.dataset.title || 'Draw.io Diagram',

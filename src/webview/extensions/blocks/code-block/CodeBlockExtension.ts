@@ -8,7 +8,7 @@
 import { textblockTypeInputRule, type InputRule } from 'prosemirror-inputrules';
 import type { NodeSpec, Schema } from 'prosemirror-model';
 import type { Plugin } from 'prosemirror-state';
-import type { Command } from 'prosemirror-commands';
+import type { Command } from 'prosemirror-state';
 import { setBlockType } from 'prosemirror-commands';
 import {
   Extension,
@@ -40,7 +40,7 @@ export class CodeBlockExtension extends Extension {
           {
             tag: 'pre',
             preserveWhitespace: 'full' as const,
-            getAttrs(dom: HTMLPreElement) {
+            getAttrs(dom: HTMLElement) {
               const code = dom.querySelector('code');
               const className = code?.className || '';
               const match = className.match(/language-(\w+)/);

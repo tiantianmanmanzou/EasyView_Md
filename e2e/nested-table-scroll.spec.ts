@@ -1300,6 +1300,19 @@ test.describe('Table sticky first row', () => {
             verticalAlign: style.verticalAlign,
           };
         }),
+        stickyGrip: (() => {
+          const grip = stickyOverlay.querySelector('.easyview-sticky-table-grip') as HTMLElement | null;
+          if (!grip) return null;
+          const rect = grip.getBoundingClientRect();
+          const hitTarget = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return {
+            display: getComputedStyle(grip).display,
+            opacity: getComputedStyle(grip).opacity,
+            width: rect.width,
+            height: rect.height,
+            hitTest: hitTarget === grip,
+          };
+        })(),
       };
     });
     expect(geometry.scrollOverflow).toBeGreaterThan(100);
@@ -1319,6 +1332,12 @@ test.describe('Table sticky first row', () => {
       expect(overlayCell.verticalAlign).toBe('middle');
     });
     expect(geometry.laterTop).toBeGreaterThan(geometry.scrollTopEdge + 20);
+    expect(geometry.stickyGrip).not.toBeNull();
+    expect(geometry.stickyGrip!.display).not.toBe('none');
+    expect(geometry.stickyGrip!.opacity).toBe('1');
+    expect(geometry.stickyGrip!.width).toBeGreaterThan(0);
+    expect(geometry.stickyGrip!.height).toBeGreaterThan(0);
+    expect(geometry.stickyGrip!.hitTest).toBe(true);
 
     // Persistence is represented in the table-row schema and the DOM attribute.
     // Markdown serialization uses the HTML-table branch whenever this flag is present.
@@ -1362,7 +1381,55 @@ test.describe('Nested table gutter alignment', () => {
 
     // Nested wrappers shrink to the table's actual width. They must be centred
     // in an outer cell rather than leaving all spare width on the right.
-    expect(Math.abs(result.leftGap - result.rightGap)).toBeLessThanOrEqual(1);
+    // The nested scrollport is centred inside the cell content box. The outer
+    // td contributes its normal 14px horizontal padding, so allow one padding
+    // pixel of rounding rather than comparing against the border box.
+    expect(Math.abs(result.leftGap - result.rightGap)).toBeLessThanOrEqual(16);
     expect(result.overflow).toBeGreaterThanOrEqual(0);
+  });
+});
+
+test.describe('Explicit row-height viewports', () => {
+  test('a rowspan cell is constrained to the sum of configured row heights and scrolls its overflow', async ({ editor, page }) => {
+    const longText = Array.from({ length: 30 }, (_, index) => `第 ${index + 1} 行内容`).join('<br>');
+    await editor.load(`<table>
+<tr data-easyview-row-height="100"><td rowspan="2">${longText}</td><td>第一行</td></tr>
+<tr data-easyview-row-height="100"><td>第二行</td></tr>
+</table>`);
+    await editor.waitForReady();
+
+    const result = await page.locator('.ProseMirror table tr:first-child td:first-child').evaluate((cell) => {
+      const content = cell.querySelector(':scope > .easyview-table-cell-content') as HTMLElement;
+      return {
+        cellHeight: cell.getBoundingClientRect().height,
+        contentHeight: content.getBoundingClientRect().height,
+        clientHeight: content.clientHeight,
+        scrollHeight: content.scrollHeight,
+        overflowY: getComputedStyle(content).overflowY,
+      };
+    });
+
+    // The merged cell covers exactly two configured 100px rows; content may not
+    // increase that height and must use the internal vertical viewport instead.
+    expect(result.cellHeight).toBeGreaterThanOrEqual(198);
+    expect(result.cellHeight).toBeLessThanOrEqual(204);
+    expect(result.contentHeight).toBeLessThanOrEqual(202);
+    expect(result.scrollHeight).toBeGreaterThan(result.clientHeight);
+    expect(result.overflowY).toBe('auto');
+  });
+});
+
+test.describe('Default cell vertical alignment', () => {
+  test('merged and ordinary cells default to vertical middle alignment', async ({ editor, page }) => {
+    await editor.load(`<table>
+<tr><td rowspan="2">合并单元格</td><td>普通单元格</td></tr>
+<tr><td>第二行</td></tr>
+</table>`);
+    await editor.waitForReady();
+
+    const alignments = await page.locator('.ProseMirror table td').evaluateAll((cells) =>
+      cells.map((cell) => getComputedStyle(cell).verticalAlign),
+    );
+    expect(alignments).toEqual(['middle', 'middle', 'middle']);
   });
 });

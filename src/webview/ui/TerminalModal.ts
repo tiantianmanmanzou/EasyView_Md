@@ -1,4 +1,4 @@
-import { Terminal } from '@xterm/xterm';
+import { Terminal, type FontWeight } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 
 export interface TerminalAppearance {
@@ -187,11 +187,11 @@ export interface TerminalModal {
   close: () => void;
   isOpen: () => boolean;
   updateAppearance: (appearance?: TerminalAppearance) => void;
-  handleMessage: (message: any) => boolean;
+  handleMessage: (message: HostToWebviewMessage) => boolean;
 }
 
 export function createTerminalModal(options: {
-  postMessage: (message: any) => void;
+  postMessage: (message: WebviewToHostMessage) => void;
   appearance?: TerminalAppearance;
   onVisibilityChange?: (visible: boolean) => void;
 }): TerminalModal {
@@ -327,8 +327,8 @@ export function createTerminalModal(options: {
     terminal.options.fontFamily = fontFamily;
     terminal.options.fontSize = fontSize;
     terminal.options.lineHeight = lineHeight;
-    terminal.options.fontWeight = fontWeight;
-    terminal.options.fontWeightBold = appearance.fontWeightBold || 'bold';
+    terminal.options.fontWeight = fontWeight as FontWeight;
+    terminal.options.fontWeightBold = (appearance.fontWeightBold || 'bold') as FontWeight;
     terminal.options.letterSpacing = typeof appearance.letterSpacing === 'number' ? appearance.letterSpacing : 0;
     terminal.options.theme = {
       background: colors.background,
@@ -362,7 +362,7 @@ export function createTerminalModal(options: {
     const fontsApi = (document as Document & { fonts?: FontFaceSet }).fonts;
     if (!fontsApi || typeof fontsApi.load !== 'function') return;
     void fontsApi.load(`${weight} ${size}px ${family}`).then(() => {
-      scheduleFitSequence();
+      scheduleFitSequence('fontReady');
       requestAnimationFrame(() => {
         terminal?.refresh(0, Math.max(0, (terminal?.rows || 1) - 1));
       });
@@ -381,8 +381,8 @@ export function createTerminalModal(options: {
       fontFamily: resolveTerminalFontFamily(),
       fontSize: getEffectiveFontSize(),
       lineHeight: typeof appearance.lineHeight === 'number' && appearance.lineHeight > 0 ? appearance.lineHeight : 1,
-      fontWeight: appearance.fontWeight || 'normal',
-      fontWeightBold: appearance.fontWeightBold || 'bold',
+      fontWeight: (appearance.fontWeight || 'normal') as FontWeight,
+      fontWeightBold: (appearance.fontWeightBold || 'bold') as FontWeight,
       letterSpacing: typeof appearance.letterSpacing === 'number' ? appearance.letterSpacing : 0,
     });
     terminal.loadAddon(fitAddon);
@@ -397,7 +397,7 @@ export function createTerminalModal(options: {
     });
     resizeObserver = new ResizeObserver(() => {
       if (!terminal || !fitAddon || !openState) return;
-      scheduleFitSequence();
+      scheduleFitSequence('resize');
     });
     resizeObserver.observe(host);
   };
@@ -666,7 +666,7 @@ export function createTerminalModal(options: {
     if (openState) scheduleFitSequence('windowResize');
   });
 
-  const handleMessage = (message: any): boolean => {
+  const handleMessage = (message: HostToWebviewMessage): boolean => {
     switch (message?.type) {
       case 'terminalOpened':
         if (!openState) return true;
@@ -719,3 +719,4 @@ export function createTerminalModal(options: {
     handleMessage,
   };
 }
+import type { HostToWebviewMessage, WebviewToHostMessage } from '../../shared/protocol';

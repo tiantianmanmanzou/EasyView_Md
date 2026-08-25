@@ -16,8 +16,11 @@ export function syncTableCellVerticalAlignmentLayout(
 ): void {
   if (!content) return;
 
-  const verticalAlignment = cell.style.verticalAlign;
-  const hasFixedRowHeight = cell.hasAttribute("data-easyview-row-resized");
+  // Middle alignment is the table default even when ProseMirror has no
+  // serialized `vertical-align` style on the cell DOM.
+  const verticalAlignment = cell.style.verticalAlign || "middle";
+  const hasFixedRowHeight = cell.hasAttribute("data-easyview-row-resized") ||
+    cell.parentElement?.hasAttribute("data-easyview-row-height") === true;
   const availableHeight = content.clientHeight;
   const contentFits =
     availableHeight > 0 && content.scrollHeight <= availableHeight + 1;
@@ -99,6 +102,13 @@ export class TableCellView implements NodeView {
 
     this.dom.colSpan = colspan || 1;
     this.dom.rowSpan = rowspan || 1;
+    const isMergedCell = (colspan || 1) > 1 || (rowspan || 1) > 1;
+    if (isMergedCell) {
+      this.dom.setAttribute("data-easyview-merged-cell", "true");
+    } else {
+      this.dom.removeAttribute("data-easyview-merged-cell");
+    }
+    this.dom.toggleAttribute("data-easyview-rowspan-merged", (rowspan || 1) > 1);
     const hasExplicitColumnWidth =
       Array.isArray(colwidth) &&
       colwidth.some(
@@ -114,9 +124,27 @@ export class TableCellView implements NodeView {
       "data-easyview-column-resized",
       hasExplicitColumnWidth,
     );
+    if (node.attrs.duplicateMerged) {
+      this.dom.setAttribute("data-easyview-duplicate-merged", "true");
+    } else {
+      this.dom.removeAttribute("data-easyview-duplicate-merged");
+    }
+    if (node.attrs.autoMerged) {
+      this.dom.setAttribute("data-easyview-auto-merged", "true");
+    } else {
+      this.dom.removeAttribute("data-easyview-auto-merged");
+    }
+    if (node.attrs.mergeGroup) {
+      this.dom.setAttribute("data-easyview-merge-group", node.attrs.mergeGroup);
+    } else {
+      this.dom.removeAttribute("data-easyview-merge-group");
+    }
 
-    this.dom.style.textAlign = alignment || "";
-    this.dom.style.verticalAlign = verticalAlignment || "";
+    // Vertical middle is the table default for every cell. Explicit top/bottom
+    // alignment remains available through the toolbar; a scrollable fixed-row
+    // viewport still stays top-aligned only when its content overflows.
+    this.dom.style.textAlign = isMergedCell ? "left" : (alignment || "");
+    this.dom.style.verticalAlign = isMergedCell ? "middle" : (verticalAlignment || "middle");
     syncTableCellVerticalAlignmentLayout(this.dom, this.contentDOM);
   }
 }

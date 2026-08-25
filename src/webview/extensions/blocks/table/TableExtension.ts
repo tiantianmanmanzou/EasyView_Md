@@ -7,7 +7,7 @@
 
 import { Plugin, PluginKey } from 'prosemirror-state';
 import type { NodeSpec, Schema } from 'prosemirror-model';
-import type { NodeViewConstructor } from 'prosemirror-view';
+import type { NodeViewConstructor, EditorView } from 'prosemirror-view';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { columnResizing, tableEditing } from 'prosemirror-tables';
 import { Extension, type SerializerNodeHandler } from '../../../editor/EditorExtension';
@@ -15,7 +15,7 @@ import { gripSelectionPlugin } from './GripSelectionPlugin';
 import { tableKeywordsPlugin } from './TableKeywordsPlugin';
 import { TableView } from './TableView';
 import { TableCellView } from './TableCellView';
-import { columnResizeGuardPlugin, withoutRootResizeCursor } from './columnResizeGuard';
+import { columnResizeGuardPlugin, withoutRootResizeCursor } from './ColumnResizeGuard';
 
 // ─── Table Extension ─────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ export class TableExtension extends Extension {
 
   get nodeViews(): Record<string, NodeViewConstructor> {
     return {
-      table: (node) => new TableView(node, 32),
+      table: (node, view) => new TableView(node, 32, view),
       table_cell: (node) => new TableCellView(node),
       table_header: (node) => new TableCellView(node),
     };

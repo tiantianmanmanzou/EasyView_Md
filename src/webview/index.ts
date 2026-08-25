@@ -56,6 +56,12 @@ import {
 } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
 import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
+import { stripSettingsComment } from './editor/lib/EditorSettings';
+import { ExportController } from './controllers/ExportController';
+import { SourceModeController } from './controllers/SourceModeController';
+import { LayoutController } from './controllers/LayoutController';
+import { ShortcutController } from './controllers/ShortcutController';
+import { EditorBootstrap } from './controllers/EditorBootstrap';
 
 // UI
 import { FloatingToolbar } from './extensions/behavior/toolbar/ToolbarFloating';
@@ -63,7 +69,6 @@ import { linkEditPopup } from './extensions/behavior/toolbar/ToolbarLinkPopup';
 import { imageToolbar } from './extensions/inline/image/ImageToolbar';
 import { FindAndReplacePanel } from './extensions/behavior/find-replace/FindReplacePanel';
 import { TableOfContents } from './extensions/blocks/heading/TableOfContents';
-import { generateStandaloneHtml } from './extensions/export/html/ExportHtml';
 import { createSourceEditor } from './editor/SourceEditor';
 import { DualModeHistory } from './editor/DualModeHistory';
 import { EditOperationLog } from './editor/EditOperationLog';
@@ -72,14 +77,16 @@ import { createFileHeader, type ToolbarShortcutAction, type ToolbarShortcutConfi
 import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
 import { createTerminalModal, type TerminalAppearance } from './ui/TerminalModal';
+import type { HostToWebviewMessage, VscodeWebviewApi } from '../shared/protocol';
+import { handleHostMessageSideEffect } from './hostMessageRouter';
 
 // ─── VS Code API ────────────────────────────────────────────────────────────
 
 // @ts-expect-error — acquireVsCodeApi is injected by VS Code webview
-const vscode = acquireVsCodeApi();
+const vscode = acquireVsCodeApi() as VscodeWebviewApi;
 
 // Expose VS Code API globally for extensions (TableCommands CSV export, etc.)
-(window as any).__vscodeApi = vscode;
+window.__vscodeApi = vscode;
 
 // Global reference to EditorView for TableView and table commands access
 let globalEditorView: EditorView | null = null;
@@ -100,6 +107,9 @@ let isTableWrap = false; // default: disabled
 let isSourceMode = false;
 let canPostEditsToHost = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
+let sourceModeController: SourceModeController | null = null;
+const toggleSourceMode = (): void => { sourceModeController?.toggleSourceMode(); };
+const openNativeSourceMode = (): void => { sourceModeController?.openNativeSourceMode(); };
 let terminalAppearance: TerminalAppearance = {};
 const dualHistory = new DualModeHistory();
 const editOperationLog = new EditOperationLog();
@@ -113,6 +123,7 @@ let toolbarShortcuts: ToolbarShortcutConfig = {
   toggleTableWrap: 'Alt+D',
   toggleExternalFollow: 'Alt+F',
   toggleTheme: 'Alt+R',
+  toggleTerminal: 'Alt+T',
   toggleStickyNote: 'Alt+N',
   openSourceMode: 'Alt+Q',
   copyOutlinePath: 'Alt+Shift+O',
@@ -408,6 +419,7 @@ function ensureTableWidthStyles(): void {
     .ProseMirror th,
     .ProseMirror td {
       border-color: rgba(160, 160, 160, 0.45) !important;
+      vertical-align: middle;
     }
 
     /* Opaque first-row band — same look when idle and when sticky clone is shown. */
@@ -507,6 +519,20 @@ function ensureTableWidthStyles(): void {
       box-shadow: none;
     }
 
+    /* The normal table grip starts hidden until table focus. The sticky copy
+       is an always-visible vertical-scroll anchor and remains interactive. */
+    .easyview-sticky-table-grip {
+      position: absolute;
+      z-index: 8;
+      pointer-events: auto;
+      opacity: 1 !important;
+      border-radius: 50%;
+      background: var(--vscode-focusBorder, #007fd4);
+      border: none;
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+
     .easyview-sticky-table-header .easyview-sticky-table {
       border-color: rgba(160, 160, 160, 0.45) !important;
     }
@@ -554,6 +580,48 @@ function ensureTableWidthStyles(): void {
       min-height: 0;
     }
 
+    /* Merged cells use their full rectangle as a flex viewport so short text
+       is vertically centred by default, just like normal cells. */
+    .ProseMirror td[data-easyview-merged-cell="true"],
+    .ProseMirror th[data-easyview-merged-cell="true"] {
+      vertical-align: middle !important;
+      text-align: left !important;
+    }
+    .ProseMirror td[data-easyview-merged-cell="true"] > .easyview-table-cell-content,
+    .ProseMirror th[data-easyview-merged-cell="true"] > .easyview-table-cell-content {
+      display: flex !important;
+      flex-direction: column;
+      justify-content: center;
+      align-items: stretch;
+      width: 100% !important;
+      min-height: 100%;
+      height: 100% !important;
+      max-height: none !important;
+      overflow: visible !important;
+      scrollbar-gutter: auto !important;
+      text-align: left !important;
+      white-space: normal !important;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+
+    /* A rowspan cell spans several logical rows. Remove its content from the
+       table sizing flow so the merged area is governed by those rows rather
+       than by a long paragraph, while retaining vertical centring and scroll. */
+    .ProseMirror td[data-easyview-rowspan-merged],
+    .ProseMirror th[data-easyview-rowspan-merged] {
+      position: relative;
+    }
+    .ProseMirror td[data-easyview-rowspan-merged] > .easyview-table-cell-content,
+    .ProseMirror th[data-easyview-rowspan-merged] > .easyview-table-cell-content {
+      position: absolute !important;
+      inset: 10px 14px !important;
+      min-height: 0;
+      height: auto !important;
+      overflow-y: auto !important;
+      overflow-x: auto;
+    }
+
     /* Table cells: tighten list indent so bullets sit closer to the left edge. */
     .ProseMirror td ul,
     .ProseMirror td ol,
@@ -580,12 +648,14 @@ function ensureTableWidthStyles(): void {
     .ProseMirror td[data-easyview-column-resized] > .easyview-table-cell-content,
     .ProseMirror th[data-easyview-column-resized] > .easyview-table-cell-content {
       width: 100%;
+      min-width: 0;
       max-width: 100%;
       overflow-x: auto;
       overscroll-behavior-x: contain;
       overscroll-behavior-y: auto;
-      /* Wrap ordinary prose visually inside the manually resized column.
-         This changes layout only; it never inserts line breaks into Markdown. */
+      /* Preserve the normal table-reading flow: ordinary text wraps to the
+         explicit column width, then a fixed row-height viewport scrolls
+         vertically when its content no longer fits. */
       white-space: normal;
       overflow-wrap: anywhere;
       word-break: normal;
@@ -608,8 +678,13 @@ function ensureTableWidthStyles(): void {
       overscroll-behavior-x: contain;
     }
 
+    .ProseMirror tr[data-easyview-row-height] > td > .easyview-table-cell-content,
+    .ProseMirror tr[data-easyview-row-height] > th > .easyview-table-cell-content,
     .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content,
     .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content {
+      position: absolute;
+      min-height: 0;
+      max-height: none;
       overflow-y: auto;
       overscroll-behavior: auto;
       scrollbar-gutter: stable;
@@ -619,6 +694,8 @@ function ensureTableWidthStyles(): void {
        native td vertical-align property cannot reposition a full-height
        viewport, so TableCellView marks only short, non-overflowing content for
        scoped flex alignment. Overflow remains top-aligned and scrollable. */
+    .ProseMirror tr[data-easyview-row-height] > td > .easyview-table-cell-content[data-easyview-vertical-alignment="middle"],
+    .ProseMirror tr[data-easyview-row-height] > th > .easyview-table-cell-content[data-easyview-vertical-alignment="middle"],
     .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="middle"],
     .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="middle"] {
       display: flex;
@@ -626,6 +703,8 @@ function ensureTableWidthStyles(): void {
       justify-content: center;
     }
 
+    .ProseMirror tr[data-easyview-row-height] > td > .easyview-table-cell-content[data-easyview-vertical-alignment="bottom"],
+    .ProseMirror tr[data-easyview-row-height] > th > .easyview-table-cell-content[data-easyview-vertical-alignment="bottom"],
     .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="bottom"],
     .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment="bottom"] {
       display: flex;
@@ -633,6 +712,8 @@ function ensureTableWidthStyles(): void {
       justify-content: flex-end;
     }
 
+    .ProseMirror tr[data-easyview-row-height] > td > .easyview-table-cell-content[data-easyview-vertical-alignment] > *,
+    .ProseMirror tr[data-easyview-row-height] > th > .easyview-table-cell-content[data-easyview-vertical-alignment] > *,
     .ProseMirror td[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment] > *,
     .ProseMirror th[data-easyview-row-resized] > .easyview-table-cell-content[data-easyview-vertical-alignment] > * {
       flex: 0 0 auto;
@@ -706,15 +787,14 @@ function updateGitChangeRailOffset(): void {
   const proseMirror = document.querySelector('#editor .ProseMirror') as HTMLElement | null;
   if (!scrollArea || !proseMirror) return;
 
-  const referenceBlock =
-    (proseMirror.querySelector(':scope > *:not(.table-wrapper)') as HTMLElement | null) ??
-    (proseMirror.firstElementChild as HTMLElement | null) ??
-    proseMirror;
-
   const scrollRect = scrollArea.getBoundingClientRect();
-  const referenceRect = referenceBlock.getBoundingClientRect();
   const paneInset = 6;
-  const offset = Math.max(12, Math.round(referenceRect.left - scrollRect.left - paneInset));
+  // Anchor the change rail to the editor content edge, not to the first
+  // rendered block. A wide table can have its first visible text column near
+  // the center of the viewport while the editor content itself still starts
+  // at the left gutter; using that block's rect moves the rail into the table.
+  const contentLeft = proseMirror.getBoundingClientRect().left;
+  const offset = Math.max(12, Math.round(contentLeft - scrollRect.left - paneInset));
   const nextOffset = `${offset}px`;
   if (proseMirror.style.getPropertyValue('--easyview-change-rail-offset') !== nextOffset) {
     proseMirror.style.setProperty('--easyview-change-rail-offset', nextOffset);
@@ -746,6 +826,32 @@ function findFirstChangedLine(previousContent: string, nextContent: string): num
   }
 
   return minCount + 1;
+}
+
+function getScrollPositionKey(content: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `easyview-md-scroll:${(hash >>> 0).toString(16)}`;
+}
+
+function restoreEditorScrollPosition(scrollArea: HTMLElement, content: string): void {
+  const raw = localStorage.getItem(getScrollPositionKey(content));
+  const top = raw === null ? NaN : Number(raw);
+  if (!Number.isFinite(top) || top <= 0) return;
+  const restore = () => {
+    const max = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+    scrollArea.scrollTop = Math.min(top, max);
+  };
+  requestAnimationFrame(restore);
+  setTimeout(restore, 80);
+  setTimeout(restore, 240);
+}
+
+function persistEditorScrollPosition(scrollArea: HTMLElement, content: string): void {
+  localStorage.setItem(getScrollPositionKey(content), String(Math.max(0, scrollArea.scrollTop)));
 }
 
 function scrollWysiwygToApproxLine(line: number, totalLines: number): void {
@@ -781,14 +887,6 @@ function showToast(message: string) {
     toast.classList.remove('visible');
     setTimeout(() => toast.remove(), 200);
   }, 2000);
-}
-
-/** Same regex as provider — matches settings comment at file start */
-const SETTINGS_COMMENT_RE =
-  /^<!--\s*fullWidth:\s*(true|false)(?:\s+tocVisible:\s*(true|false))?(?:\s+tableWrap:\s*(true|false))?(?:\s+lineNumbersVisible:\s*(true|false))?\s*-->[\r\n]*/;
-
-function stripSettingsComment(content: string): string {
-  return content.replace(SETTINGS_COMMENT_RE, '');
 }
 
 function normalizeMarkdownLineForMatch(line: string): string {
@@ -1193,6 +1291,7 @@ function initEditor() {
     editorBody.parentElement?.insertBefore(fileHeader.el, editorBody);
   }
   const toolbar = new FloatingToolbar();
+  window.addEventListener('easyview-table-cell-popup-open', () => toolbar.forceHide());
   (window as any).__easyviewCopyOutlinePath = () => {
     void copyOutlinePathForSelection();
   };
@@ -1226,7 +1325,7 @@ function initEditor() {
     keymaps: {
       Tab: (_state, _dispatch, view) => (view ? runNativeWysiwygTab(view, false) : false),
       'Shift-Tab': (_state, _dispatch, view) => (view ? runNativeWysiwygTab(view, true) : false),
-      'Mod-k': (_state, _dispatch, view) => {
+      'Ctrl-k': (_state, _dispatch, view) => {
         if (view) linkEditPopup.toggle(view);
         return true;
       },
@@ -1369,22 +1468,27 @@ function initEditor() {
   window.addEventListener('resize', updateGitChangeRailOffset);
   window.addEventListener('easyview-toc-layout-change', refreshChangeRailsAfterLayout);
   window.addEventListener('easyview-editor-layout-change', refreshChangeRailsAfterLayout);
-  document.getElementById('editor-scroll-area')?.addEventListener('scroll', renderWysiwygGhost, { passive: true });
-  let layoutUpdateFrame: number | null = null;
-  const scheduleLayoutRailUpdate = (): void => {
-    if (layoutUpdateFrame !== null) return;
-    layoutUpdateFrame = requestAnimationFrame(() => {
-      layoutUpdateFrame = null;
-      updateGitChangeRailOffset();
-      refreshAiChangeMarkers();
-    });
-  };
-  const layoutObserver = new ResizeObserver(scheduleLayoutRailUpdate);
-  const scrollAreaElement = document.getElementById('editor-scroll-area');
-  const editorBodyElement = document.getElementById('editor-body');
-  if (scrollAreaElement) layoutObserver.observe(scrollAreaElement);
-  if (editorBodyElement) layoutObserver.observe(editorBodyElement);
-  layoutObserver.observe(editorElement);
+  const editorScrollArea = document.getElementById('editor-scroll-area');
+  editorScrollArea?.addEventListener('scroll', renderWysiwygGhost, { passive: true });
+  if (editorScrollArea) {
+    editorScrollArea.addEventListener('scroll', () => {
+      persistEditorScrollPosition(editorScrollArea, currentContent || editor.getMarkdown());
+    }, { passive: true });
+    restoreEditorScrollPosition(editorScrollArea, currentContent || editor.getMarkdown());
+  }
+  const layoutController = new LayoutController({
+    editorElement,
+    scrollArea: document.getElementById('editor-scroll-area'),
+    editorBody: document.getElementById('editor-body'),
+    isSourceMode: () => isSourceMode,
+    getSourceEditor: () => sourceEditor,
+    updateGitChangeRailOffset,
+    refreshAiChangeMarkers,
+    refreshChangeRailsAfterLayout,
+    getView: () => editor.view,
+    isDarkTheme,
+  }, isDark);
+
   editorElement.addEventListener('focusout', () => {
     wysiwygGhostRequestToken++;
     hideWysiwygGhost();
@@ -1438,26 +1542,8 @@ function initEditor() {
   refreshHistoryPanel = () => historyPanel.refresh();
 
   // 5. Wire file header handlers
-  const scrollToEditorTop = () => {
-    if (isSourceMode && sourceEditor?.view?.scrollDOM) {
-      sourceEditor.view.scrollDOM.scrollTo({ top: 0, behavior: 'auto' });
-    } else {
-      document.getElementById('editor-scroll-area')?.scrollTo({ top: 0, behavior: 'auto' });
-    }
-  };
-
-  const scrollToEditorBottom = () => {
-    if (isSourceMode && sourceEditor?.view?.scrollDOM) {
-      const scroller = sourceEditor.view.scrollDOM;
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
-    } else {
-      const scroller = document.getElementById('editor-scroll-area');
-      if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
-    }
-  };
-
-  fileHeader.setScrollTopHandler(() => scrollToEditorTop());
-  fileHeader.setScrollBottomHandler(() => scrollToEditorBottom());
+  fileHeader.setScrollTopHandler(() => layoutController.scrollTop());
+  fileHeader.setScrollBottomHandler(() => layoutController.scrollBottom());
 
   fileHeader.setStageHandler(() => {
     editor.flushSync();
@@ -1496,147 +1582,17 @@ function initEditor() {
     toggleAllHeadings(view, isAllCollapsed);
   });
 
-  const requestImageBase64FromHost = (originalSrc: string, timeoutMs = 10000): Promise<string | null> => {
-    return new Promise((resolve) => {
-      const requestId = Math.random().toString(36).slice(2, 11);
-      let settled = false;
-
-      const cleanup = () => {
-        window.removeEventListener('message', handler);
-      };
-
-      const handler = (event: MessageEvent) => {
-        const msg = event.data;
-        if (msg?.type !== 'imageBase64Response' || msg.requestId !== requestId) return;
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(msg.base64 || null);
-      };
-
-      window.addEventListener('message', handler);
-      vscode.postMessage({ type: 'getImageBase64', requestId, originalSrc });
-
-      setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        console.warn('[InLineMd] Image request TIMED OUT:', originalSrc, requestId);
-        resolve(null);
-      }, timeoutMs);
-    });
-  };
-
-  const clipboardImageDataCache = new Map<string, Promise<string | null>>();
-  (window as any).__easyviewGetImageDataUrl = (originalSrc: string): Promise<string | null> => {
-    const cached = clipboardImageDataCache.get(originalSrc);
-    if (cached) return cached;
-    const request = requestImageBase64FromHost(originalSrc, 15000).catch(() => null);
-    clipboardImageDataCache.set(originalSrc, request);
-    return request;
-  };
-
-  window.addEventListener('inlinemd:resolveImageFallback', (event: Event) => {
-    const detail = (
-      event as CustomEvent<{
-        originalSrc?: string;
-        apply?: (resolvedSrc: string | null) => void;
-      }>
-    ).detail;
-
-    if (!detail?.originalSrc || typeof detail.apply !== 'function') return;
-
-    void requestImageBase64FromHost(detail.originalSrc, 12000)
-      .then((base64) => detail.apply?.(base64))
-      .catch(() => detail.apply?.(null));
+  const exportController = new ExportController({
+    editor,
+    view,
+    fileHeader,
+    vscode,
+    isSourceMode: () => isSourceMode,
+    getSourceEditor: () => sourceEditor,
   });
+  exportController.installImageResolutionBridge();
+  exportController.registerFileHeaderHandlers();
 
-  // Export handler
-  async function triggerExport(theme: 'light' | 'dark' = 'light') {
-    try {
-      const result = await generateStandaloneHtml(view, {
-        title: fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document',
-        isDark: theme === 'dark',
-      });
-      vscode.postMessage({
-        type: 'exportHtml',
-        html: result.html,
-        images: result.images,
-      });
-    } catch (err) {
-      console.error('[InLineMd] Export failed:', err);
-      vscode.postMessage({ type: 'showInfo', text: `Export failed: ${err}` });
-    }
-  }
-  // PDF export: generate PDF via pdfmake directly in webview
-  async function triggerExportPdf(theme: 'light' | 'dark' = 'light') {
-    try {
-      const { generatePdfBase64 } = await import('./extensions/export/pdf/PdfMakeExport');
-      const title = fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document';
-      const base64 = await generatePdfBase64(view.state.doc, { title, theme }, requestImageBase64FromHost);
-      vscode.postMessage({ type: 'exportPdfBase64', data: base64 });
-    } catch (err) {
-      console.error('[InLineMd] PDF export failed:', err);
-      vscode.postMessage({
-        type: 'showInfo',
-        text: `PDF export failed: ${err}`,
-      });
-    }
-  }
-
-  function getMarkdownForExport(): string {
-    if (isSourceMode && sourceEditor) {
-      return stripSettingsComment(sourceEditor.getContent());
-    }
-    return editor.getMarkdown();
-  }
-
-  async function triggerExportDocx() {
-    try {
-      const title = fileHeader.el.querySelector('.file-header-name')?.textContent?.trim() || 'Document';
-      const markdown = getMarkdownForExport();
-      const mermaidImages: Array<{ source: string; pngBase64: string; width: number; height: number }> = [];
-      try {
-        const { extractMermaidSourcesFromMarkdown, collectExportMermaidPngs, looksLikeMermaid, normalizeMermaidSource } = await import('./extensions/export/pdf/PdfMermaidRenderer');
-        const { LIGHT_PALETTE } = await import('./extensions/export/pdf/PdfPalette');
-        const sources = extractMermaidSourcesFromMarkdown(markdown);
-        view.state.doc.descendants((node) => {
-          if (node.type.name === 'code_block') {
-            const lang = String(node.attrs.language || '').trim().toLowerCase();
-            const text = normalizeMermaidSource(node.textContent || '');
-            if (text && (lang === 'mermaid' || lang === 'mermaidjs' || looksLikeMermaid(text))) sources.push(text);
-          } else if (node.type.name === 'mermaid') {
-            const text = normalizeMermaidSource(node.attrs.content || '');
-            if (text) sources.push(text);
-          }
-        });
-        const { ordered } = await collectExportMermaidPngs(sources, LIGHT_PALETTE);
-        for (const png of ordered) {
-          mermaidImages.push({
-            source: png.source,
-            pngBase64: png.base64,
-            width: png.width,
-            height: png.height,
-          });
-        }
-      } catch (err) {
-        console.warn('[InLineMd] Mermaid render for DOCX failed; exporting diagrams as code:', err);
-      }
-      vscode.postMessage({ type: 'exportDocx', title, markdown, mermaidImages });
-    } catch (err) {
-      console.error('[InLineMd] DOCX export failed:', err);
-      vscode.postMessage({
-        type: 'showInfo',
-        text: `DOCX export failed: ${err}`,
-      });
-    }
-  }
-
-  fileHeader.setExportHtmlLightHandler(() => triggerExport('light'));
-  fileHeader.setExportHtmlDarkHandler(() => triggerExport('dark'));
-  fileHeader.setExportPdfLightHandler(() => triggerExportPdf('light'));
-  fileHeader.setExportPdfDarkHandler(() => triggerExportPdf('dark'));
-  fileHeader.setExportDocxHandler(() => triggerExportDocx());
 
   hideWysiwygGhost = () => {
     wysiwygGhostSuggestion = null;
@@ -1919,407 +1875,61 @@ function initEditor() {
   };
 
   // 6. Source mode toggle
-  function getNativeSourcePosition(): { line: number; character: number } {
-    if (isSourceMode && sourceEditor) {
-      const state = sourceEditor.view.state;
-      const head = state.selection.main.head;
-      const line = state.doc.lineAt(head);
-      return {
-        line: Math.max(0, line.number - 1),
-        character: Math.max(0, head - line.from),
-      };
-    }
-
-    if (editor.view) {
-      return getWysiwygApproxSourcePosition(editor.view);
-    }
-
-    return { line: 0, character: 0 };
-  }
-
-  function openNativeSourceMode() {
-    const sourcePosition = getNativeSourcePosition();
-    const content =
-      isSourceMode && sourceEditor ? stripSettingsComment(sourceEditor.getContent()) : editor.getMarkdown();
-
-    wysiwygGhostRequestToken++;
-    hideWysiwygGhost();
-    editor.flushSync();
-    currentContent = content;
-
-    vscode.postMessage({
-      type: 'openNativeSourceMode',
-      content,
-      fullWidth: isFullWidth,
-      tocVisible: isTocVisible,
-      tableWrap: isTableWrap,
-      line: sourcePosition.line,
-      character: sourcePosition.character,
-    });
-  }
-
-  function toggleSourceMode() {
-    const scrollArea = document.getElementById('editor-scroll-area')!;
-    const editorEl = document.getElementById('editor')!;
-
-    if (!isSourceMode) {
-      wysiwygGhostRequestToken++;
-      hideWysiwygGhost();
-      // WYSIWYG → Source
-      if (!_skipDualHistoryRecord) {
-        dualHistory.recordModeSwitch(editor.getMarkdown(), 'wysiwyg', editor.view?.state);
-      }
-      toolbar.forceHide();
-
-      const scrollPct =
-        scrollArea.scrollHeight > scrollArea.clientHeight
-          ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
-          : 0;
-
-      const rawMd = editor.getMarkdown();
-      const fullMd = rawMd;
-
-      editorEl.style.display = 'none';
-      let sourceContainer = document.getElementById('source-editor');
-      if (!sourceContainer) {
-        sourceContainer = document.createElement('div');
-        sourceContainer.id = 'source-editor';
-        scrollArea.appendChild(sourceContainer);
-      }
-      sourceContainer.style.display = 'block';
-
-      if (!sourceEditor) {
-        sourceEditor = createSourceEditor({
-          parent: sourceContainer,
-          onChange: (rawContent) => {
-            _hasEditedInCurrentMode = true;
-            const content = stripSettingsComment(rawContent);
-            if (content !== currentContent) {
-              currentContent = content;
-              postEdit(content);
-            }
-          },
-          onDocumentHistoryChange: (update) => {
-            const before = update.startState.doc.toString();
-            const after = update.state.doc.toString();
-            const isHistory =
-              update.transactions.some((tr) => tr.isUserEvent('undo') || tr.isUserEvent('redo'));
-            if (!isHistory) {
-              const label = describeSourceDocChange(before, after);
-              if (label) editOperationLog.notePendingLabel(label, 'source');
-            }
-            editOperationLog.sync(
-              cmUndoDepth(update.state),
-              cmRedoDepth(update.state),
-              'source',
-            );
-            historyPanel.refresh();
-          },
-          onSelectionOrDocChange: () => {
-            updateTocStatusBar();
-          },
-          requestTabCompletion({ line, character, wordPrefix }) {
-            return requestTabCompletionFromHost(line, character, wordPrefix);
-          },
-          onUndoExhausted() {
-            const rawMd = sourceEditor!.getContent();
-            const md = stripSettingsComment(rawMd);
-            dualHistory.skipIdenticalUndos(md);
-            const snapshot = dualHistory.crossModeUndo(md, 'source');
-            if (!snapshot) return false;
-            if (snapshot.mode === 'wysiwyg') {
-              _skipDualHistoryRecord = true;
-              toggleSourceMode();
-              _skipDualHistoryRecord = false;
-            } else if (snapshot.editorState) {
-              // Restore exact saved CM6 state (with full undo history)
-              sourceEditor!.view.setState(snapshot.editorState);
-              currentContent = snapshot.markdown;
-              postEdit(snapshot.markdown);
-            } else {
-              // Fallback: restore content via setContent
-              sourceEditor!.setContent(snapshot.markdown);
-              currentContent = snapshot.markdown;
-              postEdit(snapshot.markdown);
-            }
-            return true;
-          },
-          onRedoExhausted() {
-            const rawMd = sourceEditor!.getContent();
-            const md = stripSettingsComment(rawMd);
-            const snapshot = dualHistory.crossModeRedo(md, 'source');
-            if (!snapshot) return false;
-            if (snapshot.mode === 'wysiwyg') {
-              _skipDualHistoryRecord = true;
-              toggleSourceMode();
-              _skipDualHistoryRecord = false;
-            } else if (snapshot.editorState) {
-              sourceEditor!.view.setState(snapshot.editorState);
-              currentContent = snapshot.markdown;
-              postEdit(snapshot.markdown);
-            }
-            return true;
-          },
-        });
-      }
-      // Only update source content if it actually changed — preserves CM6 undo stack
-      if (sourceEditor.getContent() !== fullMd) {
-        sourceEditor.setContent(fullMd);
-      }
-      updateTocStatusBar();
-      sourceEditor.focus();
-
-      requestAnimationFrame(() => {
-        // Force CodeMirror to recalculate visible ranges after container becomes visible
-        sourceEditor!.view.requestMeasure();
-        const cmScroller = sourceEditor!.view.scrollDOM;
-        if (cmScroller.scrollHeight > cmScroller.clientHeight) {
-          cmScroller.scrollTop = scrollPct * (cmScroller.scrollHeight - cmScroller.clientHeight);
-        }
-      });
-
-      // TOC source mode
-      toc.sourceClickHandler = (heading) => {
-        if (!sourceEditor) return;
-        const text = sourceEditor.getContent();
-        const prefix = '#'.repeat(heading.level) + ' ';
-        const idx = text.indexOf(prefix + heading.text);
-        if (idx !== -1) {
-          const line = text.slice(0, idx).split('\n').length;
-          sourceEditor.scrollToLine(line);
-          sourceEditor.focus();
-        }
-      };
-
-      const headingLineMap: { pos: number; line: number }[] = [];
-      const fullMdLines = fullMd.split('\n');
-      const headings = toc['headings'] as {
-        level: number;
-        text: string;
-        pos: number;
-      }[];
-      for (const h of headings) {
-        const searchStr = '#'.repeat(h.level) + ' ' + h.text;
-        for (let i = 0; i < fullMdLines.length; i++) {
-          if (fullMdLines[i].startsWith(searchStr)) {
-            headingLineMap.push({ pos: h.pos, line: i + 1 });
-            break;
-          }
-        }
-      }
-
-      toc.enterSourceMode(() => {
-        if (!sourceEditor) return -1;
-        let activePos = -1;
-        for (const entry of headingLineMap) {
-          const offset = sourceEditor.getLineTopOffset(entry.line);
-          if (offset === -1) continue;
-          if (offset > 20) break;
-          activePos = entry.pos;
-        }
-        return activePos;
-      }, sourceEditor.view.scrollDOM);
-
-      isSourceMode = true;
-      updateTocStatusBar();
-      _hasEditedInCurrentMode = false;
-      _modeEntryContent = rawMd; // snapshot for cross-mode undo guard
-      fileHeader.getSourceBtn().classList.add('active');
-    } else {
-      // Source → WYSIWYG
-      const rawMdForHistory = sourceEditor!.getContent();
-      if (!_skipDualHistoryRecord) {
-        dualHistory.recordModeSwitch(stripSettingsComment(rawMdForHistory), 'source', sourceEditor!.view.state);
-      }
-      const cmScroller = sourceEditor!.view.scrollDOM;
-      const scrollPct =
-        cmScroller.scrollHeight > cmScroller.clientHeight
-          ? cmScroller.scrollTop / (cmScroller.scrollHeight - cmScroller.clientHeight)
-          : 0;
-
-      const rawMd = sourceEditor!.getContent();
-      const md = stripSettingsComment(rawMd);
-
-      const sourceContainer = document.getElementById('source-editor');
-      if (sourceContainer) sourceContainer.style.display = 'none';
-      editorEl.style.display = '';
-
-      document.getElementById('editor')?.classList.toggle('full-width', isFullWidth);
-      document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
-      window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
-      if (isTocVisible && !toc.visible) toc.open();
-      if (!isTocVisible && toc.visible) toc.close();
-
-      // Try to restore saved PM state if content unchanged — preserves full undo history
-      const savedSnapshot = dualHistory.peekUndo();
-      if (savedSnapshot?.editorState && savedSnapshot.mode === 'wysiwyg' && md === savedSnapshot.markdown) {
-        // Content unchanged in source → restore exact WYSIWYG state (with undo history)
-        editor.view!.updateState(savedSnapshot.editorState);
-      } else if (md !== editor.getMarkdown()) {
-        // Content changed → re-parse (PM undo stack may become stale)
-        editor.isUpdatingFromExtension = true;
-        editor.setContent(md);
-        editor.isUpdatingFromExtension = false;
-      }
-
-      requestAnimationFrame(() => {
-        if (scrollArea.scrollHeight > scrollArea.clientHeight) {
-          scrollArea.scrollTop = scrollPct * (scrollArea.scrollHeight - scrollArea.clientHeight);
-        }
-      });
-
-      toc.sourceClickHandler = null;
-      toc.exitSourceMode();
-      view.focus();
-      isSourceMode = false;
-      updateTocStatusBar();
-      scheduleWysiwygGhost?.(view);
-      _hasEditedInCurrentMode = false;
-      _modeEntryContent = md; // snapshot for cross-mode undo guard
-      fileHeader.getSourceBtn().classList.remove('active');
-    }
-  }
+  sourceModeController = new SourceModeController({
+    editor,
+    vscode,
+    fileHeader,
+    toolbar,
+    toc,
+    dualHistory,
+    editOperationLog,
+    historyPanel,
+    getSourceEditor: () => sourceEditor,
+    setSourceEditor: (value) => { sourceEditor = value; },
+    getView: () => editor.view,
+    getCurrentContent: () => currentContent,
+    setCurrentContent: (content) => { currentContent = content; },
+    isSourceMode: () => isSourceMode,
+    setSourceMode: (value) => { isSourceMode = value; },
+    getFullWidth: () => isFullWidth,
+    getTocVisible: () => isTocVisible,
+    getTableWrap: () => isTableWrap,
+    getSkipHistoryRecord: () => _skipDualHistoryRecord,
+    setSkipHistoryRecord: (value) => { _skipDualHistoryRecord = value; },
+    setHasEditedInCurrentMode: (value) => { _hasEditedInCurrentMode = value; },
+    setModeEntryContent: (content) => { _modeEntryContent = content; },
+    hideGhost: () => hideWysiwygGhost(),
+    postEdit,
+    requestTabCompletion: requestTabCompletionFromHost,
+    describeSourceDocChange,
+    syncSourceHistory: (state) => {
+      editOperationLog.sync(cmUndoDepth(state), cmRedoDepth(state), 'source');
+    },
+    updateTocStatus: updateTocStatusBar,
+    scheduleWysiwygGhost: (currentView) => scheduleWysiwygGhost(currentView),
+    getWysiwygApproxSourcePosition,
+  });
 
   fileHeader.setSourceHandler(() => openNativeSourceMode());
   fileHeader.setStickyNoteHandler(() => {
     stickyNote.toggle();
   });
 
-  // Global keyboard shortcuts
-  document.addEventListener('keydown', (e) => {
-    const isModKey = e.ctrlKey || e.metaKey;
-    const target = e.target as HTMLElement | null;
-    const isInShortcutModal = !!target?.closest('.file-header-shortcuts-modal');
-    const isInCommitModal = !!target?.closest('.file-header-commit-modal');
-    const isInTerminalModal = !!target?.closest('.easyview-terminal-modal');
-    const isTextInputLike =
-      !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
-    const isFileNameEditing = !!target?.closest('.file-header-name');
-
-    // Do not hijack shortcuts when editing shortcut form fields or file name.
-    if (isInShortcutModal || isInCommitModal || isInTerminalModal || isTextInputLike || isFileNameEditing) {
-      return;
-    }
-
-    if (isModKey && e.shiftKey && e.code === 'KeyT' && !e.altKey) {
-      e.preventDefault();
-      fileHeader.triggerTocToggle();
-      return;
-    }
-
-    if (isModKey && e.key === '/') {
-      e.preventDefault();
-      openNativeSourceMode();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'openSourceMode') || matchesToolbarShortcut(e, 'openWithEasyView')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      openNativeSourceMode();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'copyOutlinePath')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      void copyOutlinePathForSelection();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'copyFullPath')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      void copyFullPathForSelection();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'stageFile')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      editor.flushSync();
-      vscode.postMessage({ type: 'stageFile' });
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'commitFile')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      editor.flushSync();
-      fileHeader.openCommitModal();
-      fileHeader.setCommitMessageLoading(true);
-      vscode.postMessage({ type: 'generateCommitMessage' });
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'scrollTop')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      scrollToEditorTop();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'scrollBottom')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      scrollToEditorBottom();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleFullWidth')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      fileHeader.triggerWidthToggle();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleTableWrap')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      fileHeader.triggerTableWrapToggle();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleExternalFollow')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      fileHeader.triggerExternalFollowToggle();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleTheme')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      fileHeader.triggerThemeToggle();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleTerminal')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      terminalModal.toggle();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleStickyNote')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      stickyNote.toggle();
-      return;
-    }
-    if (matchesToolbarShortcut(e, 'toggleToc')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      fileHeader.triggerTocToggle();
-      return;
-    }
-    if (isModKey && e.key === 's' && isSourceMode) {
-      e.preventDefault();
-      editor.flushSync();
-      vscode.postMessage({ type: 'save' });
-    }
-  });
+  new ShortcutController({
+    vscode,
+    fileHeader,
+    layout: layoutController,
+    terminal: terminalModal,
+    stickyNote,
+    getShortcut: (action) => toolbarShortcuts[action],
+    matchesShortcut: eventMatchesShortcut,
+    isSourceMode: () => isSourceMode,
+    toggleSourceMode,
+    openNativeSourceMode,
+    copyOutlinePath: copyOutlinePathForSelection,
+    copyFullPath: copyFullPathForSelection,
+    flushEditor: () => editor.flushSync(),
+  }).register();
 
   // 7. Event listeners
   window.addEventListener('inlinemd:openLink', ((e: CustomEvent) => {
@@ -2346,35 +1956,83 @@ function initEditor() {
   }) as EventListener);
 
   // 8. Theme change observer
-  let currentThemeIsDark = isDark;
-  const applyThemeChange = (isDarkNow = isDarkTheme()) => {
-    if (isDarkNow !== currentThemeIsDark) {
-      currentThemeIsDark = isDarkNow;
-      view.dispatch(view.state.tr.setMeta('theme', { isDark: isDarkNow }));
-    }
-  };
   window.addEventListener('inlinemd:themeChanged', ((event: CustomEvent) => {
-    applyThemeChange(!!event.detail?.isDark);
+    layoutController.applyThemeChange(!!event.detail?.isDark);
   }) as EventListener);
-  const themeObserver = new MutationObserver(() => {
-    const newIsDark = isDarkTheme();
-    applyThemeChange(newIsDark);
-  });
-  themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['class', 'style'],
-  });
-  themeObserver.observe(document.body, {
-    attributes: true,
-    attributeFilter: ['class', 'style'],
-  });
+  const themeObserver = new MutationObserver(() => layoutController.applyThemeChange());
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
 
   // 9. Message handling
   let initReceived = false;
 
-  window.addEventListener('message', (event) => {
+  window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) => {
     const message = event.data;
     if (terminalModal.handleMessage(message)) {
+      return;
+    }
+
+    if (handleHostMessageSideEffect(message, {
+      onCommitMessageGenerated: (generatedMessage, source) => {
+        if (generatedMessage.trim()) fileHeader.setCommitMessage(generatedMessage, source);
+        else fileHeader.setCommitError('Could not generate a commit message.');
+      },
+      onCommitMessageGenerationFailed: (messageText) => {
+        fileHeader.setCommitError(messageText);
+        showToast(messageText);
+      },
+      onCommitFileCompleted: (messageText) => {
+        fileHeader.setCommitInProgress(false);
+        showToast(messageText);
+      },
+      onCommitFileFailed: (messageText) => {
+        fileHeader.setCommitInProgress(false);
+        fileHeader.setCommitError(messageText);
+        showToast(messageText);
+      },
+      onSyncFileCompleted: (messageText) => {
+        fileHeader.setCommitInProgress(false);
+        fileHeader.closeCommitModal();
+        showToast(messageText);
+      },
+      onSyncFileFailed: (messageText) => {
+        fileHeader.setCommitInProgress(false, 'sync');
+        fileHeader.setCommitError(messageText);
+        showToast(messageText);
+      },
+      onClipboardCopyCompleted: (messageText) => showToast(messageText),
+      onClipboardCopyFailed: (messageText) => showToast(messageText),
+      onFocus: () => editor.focus(),
+      onRevealCursor: (cursorLine, totalLinesFromMsg) => {
+        const scrollArea = document.getElementById('editor-scroll-area');
+        if (!scrollArea) return;
+        const totalLinesFromContent = Math.max(1, currentContent.split('\n').length);
+        const safeTotal = Math.max(1, totalLinesFromMsg || totalLinesFromContent);
+        const safeLine = Math.min(Math.max(0, cursorLine), safeTotal - 1);
+        const ratio = safeLine / Math.max(1, safeTotal - 1);
+        const applyReveal = () => {
+          const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+          scrollArea.scrollTop = Number.isFinite(ratio) ? Math.round(maxScrollTop * ratio) : 0;
+        };
+        applyReveal();
+        requestAnimationFrame(applyReveal);
+        setTimeout(applyReveal, 80);
+      },
+      onFileRenamed: (fileName) => fileHeader.setName(fileName),
+      onRequestExportHtml: (theme) => void exportController.exportHtml(theme),
+      onRequestExportPdf: (theme) => void exportController.exportPdf(theme),
+      onRequestExportDocx: () => void exportController.exportDocx(),
+      onImageSelected: ({ src, originalSrc, pos }) => {
+        if (!src) return;
+        editor.insertImage(src, originalSrc, pos);
+        if (typeof pos === 'number' && pos >= 0) showToast('Image replaced');
+      },
+      onImagesDropped: ({ images, pos }) => {
+        if (!images?.length) return;
+        editor.insertImagesAtPos(images, typeof pos === 'number' ? pos : 0);
+        showToast(images.length === 1 ? 'Image inserted' : `${images.length} images inserted`);
+      },
+    })) {
       return;
     }
 
@@ -2512,6 +2170,9 @@ function initEditor() {
               applyCursorScroll();
               requestAnimationFrame(applyCursorScroll);
               setTimeout(applyCursorScroll, 80);
+              // The initial cursor positioning runs after editor.setContent and
+              // would otherwise overwrite the persisted page position.
+              restoreEditorScrollPosition(scrollArea, content);
             }
             editor.view?.dom.querySelectorAll('.mdpre-source-line-gutter').forEach((el) => el.remove());
             document.body.classList.remove('inlinemd-booting');
@@ -2539,120 +2200,6 @@ function initEditor() {
         }
         break;
 
-      case 'commitMessageGenerated': {
-        const generatedMessage = typeof message.message === 'string' ? message.message : '';
-        const source = typeof message.source === 'string' ? message.source : 'Generated';
-        if (generatedMessage.trim()) {
-          fileHeader.setCommitMessage(generatedMessage, source);
-        } else {
-          fileHeader.setCommitError('Could not generate a commit message.');
-        }
-        break;
-      }
-
-      case 'commitMessageGenerationFailed': {
-        const messageText =
-          typeof message.message === 'string' ? message.message : 'Failed to generate commit message.';
-        fileHeader.setCommitError(messageText);
-        showToast(messageText);
-        break;
-      }
-
-      case 'commitFileCompleted': {
-        fileHeader.setCommitInProgress(false);
-        showToast(typeof message.message === 'string' ? message.message : 'Committed current file');
-        break;
-      }
-
-      case 'commitFileFailed': {
-        const messageText = typeof message.message === 'string' ? message.message : 'Failed to commit current file.';
-        fileHeader.setCommitInProgress(false);
-        fileHeader.setCommitError(messageText);
-        showToast(messageText);
-        break;
-      }
-
-      case 'syncFileCompleted': {
-        fileHeader.setCommitInProgress(false);
-        fileHeader.closeCommitModal();
-        showToast(typeof message.message === 'string' ? message.message : 'Synced current file');
-        break;
-      }
-
-      case 'syncFileFailed': {
-        const messageText = typeof message.message === 'string' ? message.message : 'Failed to sync current file.';
-        fileHeader.setCommitInProgress(false, 'sync');
-        fileHeader.setCommitError(messageText);
-        showToast(messageText);
-        break;
-      }
-
-      case 'clipboardCopyCompleted': {
-        showToast(typeof message.message === 'string' ? message.message : 'Copied');
-        break;
-      }
-
-      case 'clipboardCopyFailed': {
-        showToast(typeof message.message === 'string' ? message.message : 'Copy failed');
-        break;
-      }
-
-      case 'focus':
-        editor.focus();
-        break;
-      case 'revealCursor': {
-        const scrollArea = document.getElementById('editor-scroll-area');
-        if (!scrollArea) break;
-        const cursorLine = typeof (message as any).line === 'number' ? (message as any).line : 0;
-        const totalLinesFromMsg = typeof (message as any).totalLines === 'number' ? (message as any).totalLines : 0;
-        const totalLinesFromContent = Math.max(1, currentContent.split('\n').length);
-        const safeTotal = Math.max(1, totalLinesFromMsg || totalLinesFromContent);
-        const safeLine = Math.min(Math.max(0, cursorLine), safeTotal - 1);
-        const ratio = safeLine / Math.max(1, safeTotal - 1);
-        const applyReveal = () => {
-          const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
-          scrollArea.scrollTop = Number.isFinite(ratio) ? Math.round(maxScrollTop * ratio) : 0;
-        };
-        applyReveal();
-        requestAnimationFrame(applyReveal);
-        setTimeout(applyReveal, 80);
-        break;
-      }
-
-      case 'fileRenamed':
-        if (message.fileName) fileHeader.setName(message.fileName);
-        break;
-
-      case 'requestExportHtml':
-        triggerExport(message.theme || 'light');
-        break;
-
-      case 'requestExportPdf':
-        triggerExportPdf(message.theme || 'light');
-        break;
-
-      case 'requestExportDocx':
-        triggerExportDocx();
-        break;
-
-      case 'imageSelected': {
-        const { src, originalSrc, pos } = message;
-        if (!src) break;
-        editor.insertImage(src, originalSrc, pos);
-        if (typeof pos === 'number' && pos >= 0) {
-          showToast('Image replaced');
-        }
-        break;
-      }
-
-      case 'imagesDropped': {
-        const images: Array<{ src: string; originalSrc: string }> = message.images;
-        const dropPos: number = message.pos;
-        if (!images?.length) break;
-        editor.insertImagesAtPos(images, dropPos);
-        showToast(images.length === 1 ? 'Image inserted' : `${images.length} images inserted`);
-        break;
-      }
     }
   });
 
@@ -2709,18 +2256,12 @@ function initEditor() {
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────────
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
+new EditorBootstrap({
+  initialize: initEditor,
+  installStyles: () => {
     ensurePlaceholderHorizontalFlowStyles();
     ensureMinimalGitChangeStyles();
     ensureEditorContentGutterStyles();
     ensureTableWidthStyles();
-    initEditor();
-  });
-} else {
-  ensurePlaceholderHorizontalFlowStyles();
-  ensureMinimalGitChangeStyles();
-  ensureEditorContentGutterStyles();
-  ensureTableWidthStyles();
-  initEditor();
-}
+  },
+}).start();

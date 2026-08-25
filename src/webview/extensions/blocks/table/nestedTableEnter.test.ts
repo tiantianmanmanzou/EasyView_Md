@@ -9,7 +9,7 @@ import { schema } from '../../../editor/EditorSchema';
 import { createParser, parseMarkdown } from '../../../editor/lib/MarkdownParser';
 import { BlockEdgeCursor } from '../../behavior/block-edge-cursor/BlockEdgeCursor';
 import { tryPlaceBlockEdgeAfterNestedTableFromClick } from '../../behavior/block-edge-cursor/BlockEdgeCursorExtension';
-import { handleNestedTableEnter } from './nestedTableEnter';
+import { handleNestedTableEnter } from './NestedTableEnter';
 
 function createView(markdown: string): EditorView {
   const doc = parseMarkdown(markdown, createParser());
@@ -127,7 +127,7 @@ intro
       clientX: 220,
       clientY: 40,
       target: hostCell,
-    } as MouseEvent);
+    } as unknown as MouseEvent);
 
     expect(handled).toBe(true);
     expect(view.state.selection).toBeInstanceOf(BlockEdgeCursor);

@@ -45,8 +45,7 @@ export async function highlightCode(text: string, language: string, palette: Pdf
       }
     }
 
-    const children = ast?.children ?? ast;
-    walkAst(Array.isArray(children) ? children : []);
+    walkAst(ast);
     return segments.length > 0 ? segments : null;
   } catch (err) {
     console.warn('[InLineMd] highlightCode failed for', language, ':', err);

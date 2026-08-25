@@ -498,6 +498,8 @@ export class EditorCore {
         tr.docChanged && isSelectionInsideTableCell(this._view.state);
 
       const applyStateUpdate = () => {
+        const view = this._view;
+        if (!view) return;
         // Layer 2: proxy for actual drag ranges (mouse moved + range selection)
         const isDragRange = !!(isMouseActive && _mouseHasMoved && !newState.selection.empty);
 
@@ -516,15 +518,15 @@ export class EditorCore {
               eq(s: any) { return origCurSel.eq(s); },
             };
             this._inProxyDispatch = true;
-            this._view.updateState(newState);
+            view.updateState(newState);
             this._inProxyDispatch = false;
             domObserver.currentSelection = origCurSel;
             domObserver.setCurSelection();
           } else {
-            this._view.updateState(newState);
+            view.updateState(newState);
           }
         } else {
-          this._view.updateState(newState);
+          view.updateState(newState);
         }
       };
 

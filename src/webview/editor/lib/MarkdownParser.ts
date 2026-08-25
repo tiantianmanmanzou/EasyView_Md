@@ -17,7 +17,7 @@ import { applyTableRules } from './MarkdownTableRules';
 import { parseMarkdownWithHtmlTables } from './HtmlTableParser';
 import { tokenMapping } from './MarkdownTokenMapping';
 import { applyEasyViewTableMeta, stripEasyViewTableMeta } from './TableStyleMetadata';
-import { stripPandocHighlightMarkup } from '../../../host/pandocHighlightMarkup';
+import { stripPandocHighlightMarkup } from '../../../shared/pandocHighlightMarkup';
 
 // ─── markdown-it instance ───────────────────────────────────────────────────
 

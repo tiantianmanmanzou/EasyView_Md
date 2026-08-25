@@ -14,6 +14,6 @@ export function setFirstRowStickyDefault(sticky: boolean): void {
 
 export function rememberFirstRowStickyDefault(sticky: boolean): void {
   firstRowStickyDefault = sticky;
-  const vscode = (window as any).__vscodeApi;
+  const vscode = window.__vscodeApi;
   vscode?.postMessage?.({ type: 'setTableFirstRowStickyDefault', sticky });
 }

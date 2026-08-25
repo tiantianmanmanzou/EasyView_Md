@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "A visual Markdown editor for VS Code with rich editing, document conversion, and export tools.",
-  "version": "2.0.3",
+  "version": "2.0.6",
   "publisher": "zhangxy",
   "license": "MIT",
   "icon": "assets/logo.png",
@@ -145,6 +145,11 @@
     },
     "keybindings": [
       {
+        "key": "ctrl+shift+b",
+        "command": "-workbench.action.tasks.build",
+        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
+      },
+      {
         "key": "ctrl+z",
         "command": "inlineMd.undo",
         "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
@@ -233,6 +238,9 @@
     "test:e2e": "vscode-test",
     "test:e2e:pw": "npx playwright test",
     "lint": "oxlint src/",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm run build && npm run test:unit",
+    "verify:types": "npm run typecheck",
     "clean": "rm -rf dist/extension.js dist/extension.js.map dist/webview.js dist/webview.js.map"
   },
   "devDependencies": {
@@ -248,6 +256,7 @@
     "buffer": "^6.0.3",
     "esbuild": "^0.24.0",
     "happy-dom": "^20.11.6",
+    "oxlint": "^1.80.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   },
@@ -269,6 +278,7 @@
     "codemirror": "^6.0.2",
     "copy-to-clipboard": "^3.3.3",
     "docx": "^9.5.1",
+    "exceljs": "^4.4.0",
     "gemoji": "^8.1.0",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.1",

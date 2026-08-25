@@ -58,7 +58,7 @@ describe('HTML table reconstruction', () => {
     const tables: Array<{ parent: string; rows: number }> = [];
     doc!.descendants((node, _pos, parent) => {
       if (node.type.name === 'table') {
-        tables.push({ parent: parent.type.name, rows: node.childCount });
+        tables.push({ parent: parent!.type.name, rows: node.childCount });
       }
       return true;
     });
@@ -181,7 +181,7 @@ intro paragraph
 
     const tables: Array<{ parent: string; rows: number }> = [];
     doc!.descendants((node, _pos, parent) => {
-      if (node.type.name === 'table') tables.push({ parent: parent.type.name, rows: node.childCount });
+      if (node.type.name === 'table') tables.push({ parent: parent!.type.name, rows: node.childCount });
       return true;
     });
 

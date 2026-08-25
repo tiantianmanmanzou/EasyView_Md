@@ -7,6 +7,7 @@ import { EditorState, NodeSelection } from 'prosemirror-state';
 import { gripSelectionKey } from '../../blocks/table/GripSelectionPlugin';
 import { htmlTagDropdown } from './ToolbarHtmlDropdown';
 import { buttons } from './ToolbarButtons';
+import { isMarkActive } from '../../../editor/EditorCommands';
 
 // ─── FloatingToolbar ─────────────────────────────────────────────────────────
 
@@ -71,12 +72,38 @@ function ensureFloatingToolbarColorStyles(): void {
       --toolbar-group-color: #cbd5e1;
       --toolbar-group-active: #f8fafc;
     }
+
+    .easyview-text-color-popover {
+      position: fixed;
+      z-index: 10001;
+      display: grid;
+      grid-template-columns: repeat(6, 24px);
+      gap: 6px;
+      padding: 8px;
+      border: 1px solid var(--vscode-editorWidget-border, rgba(127, 127, 127, 0.35));
+      border-radius: 8px;
+      background: var(--vscode-editorWidget-background, #252526);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    }
+
+    .easyview-text-color-swatch {
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .easyview-text-color-swatch:hover {
+      outline: 2px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: 1px;
+    }
   `;
   document.head.appendChild(style);
 }
 
 function getButtonColorGroup(buttonId: string): string {
-  if (['bold', 'italic', 'underline', 'strikethrough', 'highlight'].includes(buttonId)) return 'inline';
+  if (['bold', 'italic', 'underline', 'strikethrough', 'highlight', 'text-color'].includes(buttonId)) return 'inline';
   if (['code', 'blockquote', 'html-tags'].includes(buttonId)) return 'block';
   if (['heading1', 'heading2', 'heading3'].includes(buttonId)) return 'heading';
   if (['checkbox-list', 'bullet-list', 'ordered-list'].includes(buttonId)) return 'list';
@@ -91,6 +118,7 @@ export class FloatingToolbar {
   private isVisible = false;
   private mouseDown = false;
   private pendingShow = false;
+  private colorPopover: HTMLDivElement | null = null;
 
   constructor() {
     ensureFloatingToolbarColorStyles();
@@ -103,7 +131,8 @@ export class FloatingToolbar {
 
     document.addEventListener('mousedown', (e) => {
       // Ignore clicks on the toolbar itself
-      if (this.el.contains(e.target as Node)) return;
+      if (this.el.contains(e.target as Node) || this.colorPopover?.contains(e.target as Node)) return;
+      this.closeTextColorPopover();
       this.mouseDown = true;
       this.pendingShow = false;
     });
@@ -138,6 +167,10 @@ export class FloatingToolbar {
       button.dataset.colorGroup = getButtonColorGroup(btn.id);
       button.addEventListener('mousedown', (e) => {
         e.preventDefault(); // Prevent focus loss
+        if (btn.id === 'text-color') {
+          this.toggleTextColor(button);
+          return;
+        }
         if (this.view) {
           btn.command(this.view.state, this.view.dispatch, this.view);
           this.view.focus();
@@ -146,6 +179,73 @@ export class FloatingToolbar {
       });
       this.el.appendChild(button);
     }
+  }
+
+  private toggleTextColor(anchor: HTMLButtonElement): void {
+    const view = this.view;
+    if (!view || view.state.selection.empty) return;
+    const mark = view.state.schema.marks.text_color;
+    if (mark && isMarkActive(view.state, mark)) {
+      view.dispatch(view.state.tr.removeMark(view.state.selection.from, view.state.selection.to, mark));
+      view.focus();
+      this.closeTextColorPopover();
+      this.updateActiveStates();
+      return;
+    }
+    this.openTextColorPopover(anchor);
+  }
+
+  private openTextColorPopover(anchor: HTMLButtonElement): void {
+    const view = this.view;
+    if (!view || view.state.selection.empty) return;
+    this.closeTextColorPopover();
+
+    const rect = anchor.getBoundingClientRect();
+    const selection = { from: view.state.selection.from, to: view.state.selection.to };
+    const popover = document.createElement('div');
+    popover.className = 'easyview-text-color-popover';
+    popover.setAttribute('aria-label', 'Text color picker');
+    const colors = ['#111827', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#c026d3', '#d946ef', '#64748b', '#ffffff'];
+
+    const applyColor = (color: string) => {
+      const mark = view.state.schema.marks.text_color;
+      if (!mark || selection.from === selection.to) return;
+      view.dispatch(view.state.tr.addMark(selection.from, selection.to, mark.create({ color })));
+      view.focus();
+      this.updateActiveStates();
+      this.closeTextColorPopover();
+    };
+
+    for (const color of colors) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.className = 'easyview-text-color-swatch';
+      swatch.style.background = color;
+      swatch.title = color;
+      swatch.setAttribute('aria-label', `Set text color ${color}`);
+      swatch.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyColor(color);
+      });
+      popover.appendChild(swatch);
+    }
+
+    document.body.appendChild(popover);
+    const popoverRect = popover.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - popoverRect.width - 8));
+    const below = rect.bottom + 8;
+    const top = below + popoverRect.height <= window.innerHeight - 8
+      ? below
+      : Math.max(8, rect.top - popoverRect.height - 8);
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+    this.colorPopover = popover;
+  }
+
+  private closeTextColorPopover(): void {
+    this.colorPopover?.remove();
+    this.colorPopover = null;
   }
 
   attach(view: EditorView) {
@@ -328,6 +428,7 @@ export class FloatingToolbar {
   }
 
   destroy() {
+    this.closeTextColorPopover();
     this.el.remove();
   }
 }

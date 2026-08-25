@@ -10,6 +10,9 @@ import { getEditorView } from '../../../index';
 import { isHeaderEnabled, isRowSelection } from './TableQueries';
 import { selectedRect } from 'prosemirror-tables';
 import { rememberFirstRowStickyDefault } from './TablePreferences';
+import { exportTableToXlsx } from '../../export/xlsx/TableXlsxExport';
+import { TableToolbarPositionController } from './controllers/TableToolbarPositionController';
+import { ColumnWidthController } from './controllers/ColumnWidthController';
 
 export class TableGripToolbar {
   private el: HTMLDivElement;
@@ -18,6 +21,8 @@ export class TableGripToolbar {
   private currentType: 'row' | 'column' | 'table' | null = null;
   private isVisible = false;
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
+  private readonly positionController = new TableToolbarPositionController();
+  private readonly columnWidthController = new ColumnWidthController();
 
   constructor() {
     this.el = document.createElement('div');
@@ -84,39 +89,7 @@ export class TableGripToolbar {
   }
 
   private updatePosition(gripElement: HTMLElement) {
-    const rect = gripElement.getBoundingClientRect();
-    const popupWidth = this.el.offsetWidth;
-    const popupHeight = this.el.offsetHeight;
-
-    let left: number;
-    let top: number;
-
-    if (this.currentType === 'row') {
-      // Row grip: show to the left of the grip, vertically centered
-      left = rect.left - popupWidth - 4;
-      top = rect.top + rect.height / 2 - popupHeight / 2;
-    } else if (this.currentType === 'column') {
-      // Column grip: show above the grip, horizontally centered
-      left = rect.left + rect.width / 2 - popupWidth / 2;
-      top = rect.top - popupHeight - 4;
-    } else {
-      // Table grip (corner): show above-left
-      left = rect.left + rect.width / 2 - popupWidth / 2;
-      top = rect.top - popupHeight - 4;
-    }
-
-    // Keep within viewport
-    left = Math.max(8, Math.min(left, window.innerWidth - popupWidth - 8));
-    if (top < 8) {
-      // Flip below
-      top = rect.bottom + 4;
-    }
-    if (top + popupHeight > window.innerHeight - 8) {
-      top = rect.top - popupHeight - 4;
-    }
-
-    this.el.style.left = `${left}px`;
-    this.el.style.top = `${top}px`;
+    this.positionController.position(this.el, gripElement, this.currentType ?? 'table');
   }
 
   hide() {
@@ -210,6 +183,27 @@ export class TableGripToolbar {
     // Separator
     toolbar.appendChild(this.createSeparator());
 
+    // Set width for every column (same control as column toolbar, but applies to all)
+    toolbar.appendChild(this.createButton('Narrow all columns', this.narrowColumnIcon(), () => {
+      this.adjustAllColumnWidths(-32);
+    }));
+
+    toolbar.appendChild(this.createSizeInput({
+      label: 'All column widths',
+      value: this.getRepresentativeColumnWidth(),
+      min: 48,
+      max: 960,
+      unit: 'px',
+      onCommit: (width) => this.setAllColumnWidths(width),
+    }));
+
+    toolbar.appendChild(this.createButton('Widen all columns', this.widenColumnIcon(), () => {
+      this.adjustAllColumnWidths(32);
+    }));
+
+    // Separator
+    toolbar.appendChild(this.createSeparator());
+
     // Horizontal alignment buttons
     toolbar.appendChild(this.createButton('Align left', this.alignLeftIcon(), () => {
       this.setRowAlignment(this.currentIndex, 'left');
@@ -278,16 +272,34 @@ export class TableGripToolbar {
       this.addColumnBefore(this.currentIndex + 1);
     }));
 
-    // Separator
-    toolbar.appendChild(this.createSeparator());
-
-    // Width buttons
     toolbar.appendChild(this.createButton('Narrow column', this.narrowColumnIcon(), () => {
       this.adjustColumnWidth(this.currentIndex, -32);
     }));
 
     toolbar.appendChild(this.createButton('Widen column', this.widenColumnIcon(), () => {
       this.adjustColumnWidth(this.currentIndex, 32);
+    }));
+
+    // Separator
+    toolbar.appendChild(this.createSeparator());
+
+    // Row-height controls. Column widths already live in the row toolbar as
+    // an all-columns setting, so do not duplicate width controls here.
+    toolbar.appendChild(this.createButton('Decrease all row heights', this.decreaseRowHeightIcon(), () => {
+      this.adjustAllRowHeights(-12);
+    }));
+
+    toolbar.appendChild(this.createSizeInput({
+      label: 'All row heights',
+      value: this.getRepresentativeRowHeight(),
+      min: 36,
+      max: 1200,
+      unit: 'px',
+      onCommit: (height) => this.setAllRowHeights(height),
+    }));
+
+    toolbar.appendChild(this.createButton('Increase all row heights', this.increaseRowHeightIcon(), () => {
+      this.adjustAllRowHeights(12);
     }));
 
     // Separator
@@ -364,6 +376,31 @@ export class TableGripToolbar {
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-orientation', 'horizontal');
 
+    // Auto-merge consecutive equal values in every column. The active state
+    // means this table contains merges created by this toggle.
+    let duplicateMergesActive = false;
+    let duplicateMergesSupported = false;
+    try {
+      const view = getEditorView();
+      if (view) {
+        duplicateMergesActive = tableCommands.hasTableCellMerges(view.state);
+        duplicateMergesSupported = tableCommands.supportsDuplicateCellMerges(view.state);
+      }
+    } catch {}
+    const duplicateMergeButton = this.createToggleButton(
+      'Merge duplicate cells',
+      this.mergeDuplicateCellsIcon(),
+      duplicateMergesActive,
+      () => { this.toggleDuplicateCellMerges(); },
+    ) as HTMLButtonElement;
+    duplicateMergeButton.disabled = !duplicateMergesSupported;
+    if (!duplicateMergesSupported) {
+      duplicateMergeButton.title = '自动合并仅支持无嵌套表格的普通表';
+    }
+    toolbar.appendChild(duplicateMergeButton);
+
+    toolbar.appendChild(this.createSeparator());
+
     // Copy table through the editor clipboard pipeline, retaining both the
     // rich table payload and EasyView's Markdown/plain-text representation.
     toolbar.appendChild(this.createButton('Copy table', this.copyIcon(), () => {
@@ -378,10 +415,10 @@ export class TableGripToolbar {
 
     toolbar.appendChild(this.createSeparator());
 
-    // Export CSV button (with text "CSV")
-    toolbar.appendChild(this.createButton('Export CSV', this.exportCSVIcon(), () => {
-      this.exportTableCSV();
-    }, false, 'CSV'));
+    // Export Excel button
+    toolbar.appendChild(this.createButton('Export Excel', this.exportCSVIcon(), () => {
+      this.exportTableExcel();
+    }));
 
     this.el.appendChild(toolbar);
   }
@@ -412,6 +449,76 @@ export class TableGripToolbar {
     const sep = document.createElement('div');
     sep.className = 'grip-toolbar-separator';
     return sep;
+  }
+
+  private createSizeInput({
+    label,
+    value,
+    min,
+    max,
+    unit,
+    onCommit,
+  }: {
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    unit: string;
+    onCommit: (next: number) => void;
+  }): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'grip-toolbar-size';
+    wrap.setAttribute('aria-label', label);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'grip-toolbar-size-input';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = '1';
+    input.value = String(value);
+    input.title = `${label} (${min}-${max}${unit})`;
+    input.setAttribute('aria-label', label);
+
+    const unitEl = document.createElement('span');
+    unitEl.className = 'grip-toolbar-size-unit';
+    unitEl.textContent = unit;
+
+    const commit = () => {
+      const parsed = Number(input.value);
+      if (!Number.isFinite(parsed)) {
+        input.value = String(value);
+        return;
+      }
+      const next = Math.max(min, Math.min(max, Math.round(parsed)));
+      input.value = String(next);
+      if (next !== value) onCommit(next);
+    };
+
+    input.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+    });
+    input.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+        commit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        input.value = String(value);
+        input.blur();
+      }
+    });
+    input.addEventListener('change', commit);
+    input.addEventListener('blur', commit);
+
+    wrap.appendChild(input);
+    wrap.appendChild(unitEl);
+    return wrap;
   }
 
   private createToggleButton(label: string, icon: string, active: boolean, onClick: () => void): HTMLElement {
@@ -502,13 +609,117 @@ export class TableGripToolbar {
     tableCommands.setRowAttr({ index: rowIndex, verticalAlignment })(view.state, view.dispatch);
   }
 
+  private getCurrentColumnWidth(colIndex: number): number {
+    try {
+      const view = getEditorView();
+      if (!view) return 120;
+      const rect = selectedRect(view.state);
+      if (colIndex < 0 || colIndex >= rect.map.width) return 120;
+      const mapPos = rect.map.map[colIndex];
+      const cell = view.state.doc.nodeAt(rect.tableStart + mapPos);
+      if (!cell) return 120;
+      const cellRect = rect.map.findCell(mapPos);
+      const colspan = Math.max(1, cell.attrs.colspan || 1);
+      const slotIndex = Math.max(0, Math.min(colspan - 1, colIndex - cellRect.left));
+      const colwidth = cell.attrs.colwidth;
+      if (Array.isArray(colwidth) && typeof colwidth[slotIndex] === 'number' && colwidth[slotIndex] > 0) {
+        return Math.round(colwidth[slotIndex]);
+      }
+    } catch {}
+
+    if (this.currentType === 'column' && this.currentGrip) {
+      return Math.max(48, Math.round(this.currentGrip.getBoundingClientRect().width));
+    }
+    return 120;
+  }
+
+  private getRepresentativeColumnWidth(): number {
+    try {
+      const view = getEditorView();
+      if (!view) return 120;
+      const rect = selectedRect(view.state);
+      if (rect.map.width <= 0) return 120;
+
+      const widths: number[] = [];
+      for (let col = 0; col < rect.map.width; col++) {
+        widths.push(this.getCurrentColumnWidth(col));
+      }
+      if (widths.every((width) => width === widths[0])) return widths[0];
+
+      // Prefer first column when widths differ; still a concrete editable value.
+      return widths[0];
+    } catch {}
+    return 120;
+  }
+
+  private getRepresentativeRowHeight(): number {
+    try {
+      const view = getEditorView();
+      if (view) return tableCommands.getRepresentativeRowHeight(view.state, 48);
+    } catch {}
+    return 48;
+  }
+
+  private adjustAllRowHeights(delta: number) {
+    const view = getEditorView();
+    if (!view) return;
+    const fallbackHeight = this.getRepresentativeRowHeight();
+    tableCommands.adjustAllRowHeights({ delta, fallbackHeight })(view.state, view.dispatch);
+    this.refreshSizeControls();
+  }
+
+  private setAllRowHeights(height: number) {
+    const view = getEditorView();
+    if (!view) return;
+    const fallbackHeight = this.getRepresentativeRowHeight();
+    tableCommands.setAllRowHeights({ height, fallbackHeight })(view.state, view.dispatch);
+    this.refreshSizeControls();
+  }
+
   private adjustColumnWidth(colIndex: number, delta: number) {
     const view = getEditorView();
     if (!view) return;
-    const fallbackWidth = this.currentGrip
-      ? Math.max(48, Math.round(this.currentGrip.getBoundingClientRect().width))
-      : undefined;
-    tableCommands.adjustColumnWidth({ index: colIndex, delta, fallbackWidth })(view.state, view.dispatch);
+    const fallbackWidth = this.getCurrentColumnWidth(colIndex);
+    this.columnWidthController.adjust(view, colIndex, delta, fallbackWidth);
+    this.refreshSizeControls();
+  }
+
+  private setColumnWidth(colIndex: number, width: number) {
+    const view = getEditorView();
+    if (!view) return;
+    const fallbackWidth = this.getCurrentColumnWidth(colIndex);
+    this.columnWidthController.set(view, colIndex, width, fallbackWidth);
+    this.refreshSizeControls();
+  }
+
+  private adjustAllColumnWidths(delta: number) {
+    const view = getEditorView();
+    if (!view) return;
+    const fallbackWidth = this.getRepresentativeColumnWidth();
+    tableCommands.adjustAllColumnWidths({ delta, fallbackWidth })(view.state, view.dispatch);
+    this.refreshSizeControls();
+  }
+
+  private setAllColumnWidths(width: number) {
+    const view = getEditorView();
+    if (!view) return;
+    const fallbackWidth = this.getRepresentativeColumnWidth();
+    tableCommands.setAllColumnWidths({ width, fallbackWidth })(view.state, view.dispatch);
+    this.refreshSizeControls();
+  }
+
+  private refreshSizeControls() {
+    if (!this.isVisible || !this.currentGrip) return;
+    const grip = this.currentGrip;
+    const index = this.currentIndex;
+    const type = this.currentType;
+    // Defer so TableView can apply the new size before we re-read geometry.
+    requestAnimationFrame(() => {
+      if (!this.isVisible || this.currentType !== type || this.currentIndex !== index) return;
+      this.render();
+      const nextGrip = this.currentGrip || grip;
+      requestAnimationFrame(() => this.updatePosition(nextGrip));
+    });
   }
 
   private sortColumn(colIndex: number, direction: 'asc' | 'desc') {
@@ -646,11 +857,19 @@ export class TableGripToolbar {
     tableCommands.deleteTable(view.state, view.dispatch);
   }
 
-  private exportTableCSV() {
+  private toggleDuplicateCellMerges() {
     const view = getEditorView();
     if (!view) return;
-    const fileName = `table-${Date.now()}.csv`;
-    tableCommands.exportTable({ format: 'csv', fileName })(view.state, view.dispatch);
+    tableCommands.toggleDuplicateCellMerges()(view.state, view.dispatch);
+    this.render();
+    if (this.currentGrip) requestAnimationFrame(() => this.updatePosition(this.currentGrip!));
+  }
+
+  private exportTableExcel() {
+    const view = getEditorView();
+    if (!view) return;
+    const fileName = `table-${Date.now()}.xlsx`;
+    exportTableToXlsx({ fileName })(view.state, view.dispatch);
   }
 
   // SVG Icons from Outline
@@ -718,12 +937,24 @@ export class TableGripToolbar {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M11.2929 17.7071C10.9024 17.3166 10.9024 16.6834 11.2929 16.2929L14.5858 13H7C6.44772 13 6 12.5523 6 12C6 11.4477 6.44772 11 7 11L14.5858 11L11.2929 7.70711C10.9024 7.31658 10.9024 6.68342 11.2929 6.29289C11.6834 5.90237 12.3166 5.90237 12.7071 6.29289L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071L12.7071 17.7071C12.3166 18.0976 11.6834 18.0976 11.2929 17.7071Z"></path></svg>`;
   }
 
+  private decreaseRowHeightIcon() {
+    return `<svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 5h16M4 19h16M8 12h8"/><path d="M12 9v6"/></svg>`;
+  }
+
+  private increaseRowHeightIcon() {
+    return `<svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 5h16M4 19h16M8 12h8"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>`;
+  }
+
   private narrowColumnIcon() {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 6a1 1 0 0 1 1-1h2v14H6a1 1 0 0 1-1-1V6Zm11 6a1 1 0 0 1-1 1h-4v2a1 1 0 1 1-2 0V9a1 1 0 0 1 2 0v2h4a1 1 0 0 1 1 1Zm2-7h-2v14h2a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z"/></svg>`;
   }
 
   private widenColumnIcon() {
     return `<svg fill="currentColor" width="24px" height="24px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 6a1 1 0 0 1 1-1h2v14H6a1 1 0 0 1-1-1V6Zm14 0v12a1 1 0 0 1-1 1h-2V5h2a1 1 0 0 1 1 1Zm-8 3a1 1 0 1 1 2 0v2h2a1 1 0 1 1 0 2h-2v2a1 1 0 1 1-2 0v-2H9a1 1 0 1 1 0-2h2V9Z"/></svg>`;
+  }
+
+  private mergeDuplicateCellsIcon() {
+    return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M12 4v16"/><path d="M12 12h8"/></svg>`;
   }
 
   private copyIcon() {

@@ -27,7 +27,8 @@ class Cache {
     this.data.set(key, value);
 
     if (this.data.size > this.maxSize) {
-      this.data.delete(this.data.keys().next().value);
+      const oldest = this.data.keys().next().value;
+      if (oldest !== undefined) this.data.delete(oldest);
     }
   }
 

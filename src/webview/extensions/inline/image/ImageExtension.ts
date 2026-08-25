@@ -105,7 +105,7 @@ export class ImageExtension extends Extension {
         parseDOM: [
           {
             tag: 'img[src]',
-            getAttrs(dom: HTMLImageElement) {
+            getAttrs(dom: HTMLElement) {
               return {
                 src: dom.getAttribute('src'),
                 originalSrc: dom.getAttribute('data-original-src'),

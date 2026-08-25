@@ -5,6 +5,7 @@
  */
 
 import refractor from 'refractor/core';
+import type { RefractorNode } from 'refractor';
 import { getRefractorLangForLanguage } from '../../../editor/lib/CodeLanguages';
 import { escapeHtml } from './HtmlDomCleanup';
 
@@ -50,7 +51,7 @@ export function highlightCodeBlocks(container: HTMLElement): void {
 /**
  * Convert Refractor AST nodes to an HTML string.
  */
-function refractorNodesToHtml(nodes: refractor.RefractorNode[]): string {
+function refractorNodesToHtml(nodes: RefractorNode[]): string {
   return nodes.map((node) => {
     if (node.type === 'text') {
       return escapeHtml(node.value);

@@ -39,7 +39,7 @@ export class MermaidExtension extends Extension {
         parseDOM: [
           {
             tag: 'div[data-type="mermaid"]',
-            getAttrs(dom: HTMLDivElement) {
+            getAttrs(dom: HTMLElement) {
               return { content: dom.dataset.content || dom.textContent || '' };
             },
           },

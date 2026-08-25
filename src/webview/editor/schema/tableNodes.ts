@@ -26,7 +26,7 @@ const table_row: NodeSpec = {
   parseDOM: [
     {
       tag: 'tr',
-      getAttrs(dom: HTMLTableRowElement) {
+      getAttrs(dom: HTMLElement) {
         const height = Number(dom.getAttribute('data-easyview-row-height'));
         return {
           height: Number.isFinite(height) && height > 0 ? Math.round(height) : null,
@@ -53,6 +53,9 @@ const table_cell: NodeSpec = {
     colwidth: { default: null },
     alignment: { default: null },
     verticalAlignment: { default: null },
+    duplicateMerged: { default: false },
+    autoMerged: { default: false },
+    mergeGroup: { default: null },
   },
   content: 'block+',
   tableRole: 'cell',
@@ -60,17 +63,20 @@ const table_cell: NodeSpec = {
   parseDOM: [
     {
       tag: 'td',
-      getAttrs(dom: HTMLTableCellElement) {
+      getAttrs(dom: HTMLElement) {
         const widthAttr = dom.getAttribute('data-colwidth');
         const widths = widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
           ? widthAttr.split(',').map((s) => Number(s))
           : null;
         return {
-          colspan: dom.colSpan,
-          rowspan: dom.rowSpan,
-          colwidth: widths && widths.length === dom.colSpan ? widths : null,
+          colspan: (dom as HTMLTableCellElement).colSpan,
+          rowspan: (dom as HTMLTableCellElement).rowSpan,
+          colwidth: widths && widths.length === (dom as HTMLTableCellElement).colSpan ? widths : null,
           alignment: dom.style.textAlign || null,
           verticalAlignment: dom.style.verticalAlign || null,
+          duplicateMerged: dom.getAttribute('data-easyview-duplicate-merged') === 'true',
+          autoMerged: dom.getAttribute('data-easyview-auto-merged') === 'true',
+          mergeGroup: dom.getAttribute('data-easyview-merge-group') || null,
         };
       },
     },
@@ -80,6 +86,9 @@ const table_cell: NodeSpec = {
     if (node.attrs.colspan !== 1) attrs.colspan = node.attrs.colspan;
     if (node.attrs.rowspan !== 1) attrs.rowspan = node.attrs.rowspan;
     if (node.attrs.colwidth) attrs['data-colwidth'] = node.attrs.colwidth.join(',');
+    if (node.attrs.duplicateMerged) attrs['data-easyview-duplicate-merged'] = 'true';
+    if (node.attrs.autoMerged) attrs['data-easyview-auto-merged'] = 'true';
+    if (node.attrs.mergeGroup) attrs['data-easyview-merge-group'] = node.attrs.mergeGroup;
     const styles: string[] = [];
     if (node.attrs.alignment) styles.push(`text-align: ${node.attrs.alignment}`);
     if (node.attrs.verticalAlignment) styles.push(`vertical-align: ${node.attrs.verticalAlignment}`);
@@ -95,6 +104,9 @@ const table_header: NodeSpec = {
     colwidth: { default: null },
     alignment: { default: null },
     verticalAlignment: { default: null },
+    duplicateMerged: { default: false },
+    autoMerged: { default: false },
+    mergeGroup: { default: null },
   },
   content: 'block+',
   tableRole: 'header_cell',
@@ -102,17 +114,20 @@ const table_header: NodeSpec = {
   parseDOM: [
     {
       tag: 'th',
-      getAttrs(dom: HTMLTableCellElement) {
+      getAttrs(dom: HTMLElement) {
         const widthAttr = dom.getAttribute('data-colwidth');
         const widths = widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
           ? widthAttr.split(',').map((s) => Number(s))
           : null;
         return {
-          colspan: dom.colSpan,
-          rowspan: dom.rowSpan,
-          colwidth: widths && widths.length === dom.colSpan ? widths : null,
+          colspan: (dom as HTMLTableCellElement).colSpan,
+          rowspan: (dom as HTMLTableCellElement).rowSpan,
+          colwidth: widths && widths.length === (dom as HTMLTableCellElement).colSpan ? widths : null,
           alignment: dom.style.textAlign || null,
           verticalAlignment: dom.style.verticalAlign || null,
+          duplicateMerged: dom.getAttribute('data-easyview-duplicate-merged') === 'true',
+          autoMerged: dom.getAttribute('data-easyview-auto-merged') === 'true',
+          mergeGroup: dom.getAttribute('data-easyview-merge-group') || null,
         };
       },
     },
@@ -122,6 +137,9 @@ const table_header: NodeSpec = {
     if (node.attrs.colspan !== 1) attrs.colspan = node.attrs.colspan;
     if (node.attrs.rowspan !== 1) attrs.rowspan = node.attrs.rowspan;
     if (node.attrs.colwidth) attrs['data-colwidth'] = node.attrs.colwidth.join(',');
+    if (node.attrs.duplicateMerged) attrs['data-easyview-duplicate-merged'] = 'true';
+    if (node.attrs.autoMerged) attrs['data-easyview-auto-merged'] = 'true';
+    if (node.attrs.mergeGroup) attrs['data-easyview-merge-group'] = node.attrs.mergeGroup;
     const styles: string[] = [];
     if (node.attrs.alignment) styles.push(`text-align: ${node.attrs.alignment}`);
     if (node.attrs.verticalAlignment) styles.push(`vertical-align: ${node.attrs.verticalAlignment}`);

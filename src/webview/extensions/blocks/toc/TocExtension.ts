@@ -53,9 +53,9 @@ export class TocExtension extends Extension {
 
   get serializerNodes(): Record<string, SerializerNodeHandler> {
     return {
-      table_of_contents(state) {
+      table_of_contents(state, node) {
         state.write('[[_TOC_]]');
-        state.closeBlock(state.options?.node);
+        state.closeBlock(node);
       },
     };
   }
@@ -66,12 +66,9 @@ export class TocExtension extends Extension {
         label: 'Table of Contents',
         keywords: ['toc', 'contents', 'outline', 'navigation'],
         icon: '📑',
-        command: (state, dispatch) => {
-          if (dispatch) {
-            const node = state.schema.nodes.table_of_contents.create();
-            dispatch(state.tr.replaceSelectionWith(node));
-          }
-          return true;
+        action: (view) => {
+          const node = view.state.schema.nodes.table_of_contents.create();
+          view.dispatch(view.state.tr.replaceSelectionWith(node));
         },
       },
     ];

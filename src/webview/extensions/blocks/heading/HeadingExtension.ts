@@ -17,7 +17,7 @@ import {
 } from 'prosemirror-view';
 import { textblockTypeInputRule, type InputRule } from 'prosemirror-inputrules';
 import type { NodeSpec, Schema, Node as ProsemirrorNode } from 'prosemirror-model';
-import type { Command } from 'prosemirror-commands';
+import type { Command } from 'prosemirror-state';
 import { setBlockType } from 'prosemirror-commands';
 import { findCollapsedNodes } from './FindCollapsedNodes';
 import { getHeadingAnchors, anchorPlugin } from './AnchorPlugin';
@@ -139,12 +139,17 @@ export class HeadingExtension extends Extension {
   }
 
   keymaps(schema: Schema): Record<string, Command> {
+    const toggleHeading = (level: number): Command => (state, dispatch) => {
+      const { $from } = state.selection;
+      const active = $from.parent.type === schema.nodes.heading && $from.parent.attrs.level === level;
+      return setBlockType(active ? schema.nodes.paragraph : schema.nodes.heading, active ? undefined : { level })(state, dispatch);
+    };
     return {
       'Shift-Ctrl-0': setBlockType(schema.nodes.paragraph),
-      'Shift-Ctrl-1': setBlockType(schema.nodes.heading, { level: 1 }),
-      'Shift-Ctrl-2': setBlockType(schema.nodes.heading, { level: 2 }),
-      'Shift-Ctrl-3': setBlockType(schema.nodes.heading, { level: 3 }),
-      'Shift-Ctrl-4': setBlockType(schema.nodes.heading, { level: 4 }),
+      'Shift-Ctrl-1': toggleHeading(1),
+      'Shift-Ctrl-2': toggleHeading(2),
+      'Shift-Ctrl-3': toggleHeading(3),
+      'Shift-Ctrl-4': toggleHeading(4),
     };
   }
 

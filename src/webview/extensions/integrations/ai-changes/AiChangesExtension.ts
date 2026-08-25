@@ -342,16 +342,13 @@ function layoutScrollMarkers() {
 
     const rect = scrollArea.getBoundingClientRect();
     const proseMirror = document.querySelector('#editor .ProseMirror') as HTMLElement | null;
-    let leftRailX = Math.round(rect.left);
-    if (proseMirror) {
-      const referenceBlock =
-        (proseMirror.querySelector(':scope > *:not(.table-wrapper)') as HTMLElement | null) ??
-        (proseMirror.firstElementChild as HTMLElement | null) ??
-        proseMirror;
-      const referenceRect = referenceBlock.getBoundingClientRect();
-      const paneInset = 6;
-      leftRailX = Math.round(Math.max(rect.left, referenceRect.left - paneInset));
-    }
+    // Use the editor content edge as the rail anchor. The first child is not
+    // stable for wide tables: its text may begin at an internal column, which
+    // incorrectly places the version marker through the table body in full
+    // width mode.
+    const leftRailX = proseMirror
+      ? Math.round(Math.max(rect.left, proseMirror.getBoundingClientRect().left - 6))
+      : Math.round(rect.left);
     scrollMarkerOverlay.style.left = `${rect.right - 10}px`;
     scrollMarkerOverlay.style.top = `${rect.top}px`;
     scrollMarkerOverlay.style.height = `${rect.height}px`;

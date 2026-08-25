@@ -10,7 +10,7 @@ import type { NodeSpec, MarkSpec, Schema } from 'prosemirror-model';
 import type { Plugin, EditorState, Transaction } from 'prosemirror-state';
 import type { InputRule } from 'prosemirror-inputrules';
 import type { EditorView, NodeViewConstructor } from 'prosemirror-view';
-import type { Command } from 'prosemirror-commands';
+import type { Command } from 'prosemirror-state';
 import type MarkdownIt from 'markdown-it';
 import type { MarkdownSerializerState } from 'prosemirror-markdown';
 import type { Node as ProsemirrorNode, Mark } from 'prosemirror-model';

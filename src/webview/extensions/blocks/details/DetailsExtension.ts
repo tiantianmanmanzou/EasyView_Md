@@ -7,10 +7,7 @@
  * - Gap zones before/after for paragraph insertion
  */
 
-import type {
-  NodeViewConstructor,
-  EditorView,
-} from 'prosemirror-view';
+import type { NodeViewConstructor, EditorView, ViewMutationRecord } from 'prosemirror-view';
 import type { NodeSpec, Schema, Node as ProsemirrorNode } from 'prosemirror-model';
 import {
   Extension,
@@ -33,14 +30,14 @@ export class DetailsExtension extends Extension {
         parseDOM: [
           {
             tag: 'details',
-            getAttrs(dom: HTMLDetailsElement) {
+            getAttrs(dom: HTMLElement) {
               const summaryEl = dom.querySelector('summary');
               return { summary: summaryEl?.textContent || 'Details' };
             },
           },
           {
             tag: 'div.details-block',
-            getAttrs(dom: HTMLDivElement) {
+            getAttrs(dom: HTMLElement) {
               const summaryEl = dom.querySelector('.details-summary-text');
               return { summary: summaryEl?.textContent || 'Details' };
             },
@@ -217,7 +214,7 @@ function createDetailsNodeView(
       if (summaryRow.contains(target)) return true;
       return false;
     },
-    ignoreMutation(mutation: MutationRecord) {
+    ignoreMutation(mutation: ViewMutationRecord) {
       return !contentDOM.contains(mutation.target);
     },
   };

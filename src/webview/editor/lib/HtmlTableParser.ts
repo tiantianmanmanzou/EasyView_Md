@@ -141,6 +141,9 @@ function readCellAttrs(cell: HTMLTableCellElement): Record<string, unknown> {
     colwidth: widths && widths.length === cell.colSpan ? widths : null,
     alignment: textAlign || null,
     verticalAlignment: verticalAlign || null,
+    duplicateMerged: cell.getAttribute('data-easyview-duplicate-merged') === 'true',
+    autoMerged: cell.getAttribute('data-easyview-auto-merged') === 'true',
+    mergeGroup: cell.getAttribute('data-easyview-merge-group') || null,
   };
 }
 
@@ -291,7 +294,7 @@ function getDirectRows(table: HTMLTableElement): HTMLTableRowElement[] {
   for (const section of Array.from(table.children)) {
     const tag = section.tagName;
     if (tag === 'THEAD' || tag === 'TBODY' || tag === 'TFOOT') {
-      rows.push(...Array.from(section.querySelectorAll(':scope > tr')));
+      rows.push(...Array.from(section.querySelectorAll(':scope > tr')) as HTMLTableRowElement[]);
     } else if (tag === 'TR') {
       rows.push(section as HTMLTableRowElement);
     }

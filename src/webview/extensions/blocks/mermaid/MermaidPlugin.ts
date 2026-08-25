@@ -31,7 +31,8 @@ class Cache {
     this.data.set(key, value);
 
     if (this.data.size > this.maxSize) {
-      this.data.delete(this.data.keys().next().value);
+      const oldest = this.data.keys().next().value;
+      if (oldest !== undefined) this.data.delete(oldest);
     }
   }
 
@@ -504,9 +505,9 @@ export default function Mermaid({ isDark }: { isDark: boolean }) {
             const decorations = pluginState.decorationSet.find(
               block.pos,
               block.pos + block.node.nodeSize,
-              (spec) => !!spec.renderer
+              (spec: { renderer?: unknown }) => !!spec.renderer
             );
-            const renderer = decorations.find((decoration) => decoration.spec.renderer)?.spec.renderer as MermaidRenderer | undefined;
+            const renderer = decorations.find((decoration: Decoration) => decoration.spec.renderer)?.spec.renderer as MermaidRenderer | undefined;
             if (renderer) {
               void renderer.render(block, pluginState.isDark);
             }
@@ -547,16 +548,8 @@ export default function Mermaid({ isDark }: { isDark: boolean }) {
             if (href) {
               event.stopPropagation();
               event.preventDefault();
-              // In VS Code webview, open external links
-              // @ts-expect-error VS Code API
-              if (typeof acquireVsCodeApi !== "undefined") {
-                // @ts-expect-error VS Code API
-                const vscode = acquireVsCodeApi();
-                vscode.postMessage({
-                  type: "openLink",
-                  href: href,
-                });
-              }
+              // Reuse the single Host bridge created by the webview entry point.
+              window.__vscodeApi?.postMessage({ type: 'openLink', href });
             }
 
             return false;

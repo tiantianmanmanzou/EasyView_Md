@@ -6,7 +6,7 @@
  */
 
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
-import type { EditorView } from 'prosemirror-view';
+import type { EditorView, ViewMutationRecord } from 'prosemirror-view';
 import {
   TableView as ProsemirrorTableView,
   TableMap,
@@ -19,6 +19,12 @@ import { getEditorView } from '../../../index';
 import { TableGripToolbar } from './TableGripToolbar';
 import { syncTableCellVerticalAlignmentLayout } from './TableCellView';
 import { isColumnSelection, isRowSelection, isTableSelected } from './TableQueries';
+import { TableSelectionController } from './controllers/TableSelectionController';
+import { RowHeightController } from './controllers/RowHeightController';
+import { NestedTableScrollController } from './controllers/NestedTableScrollController';
+import { closeTableCellContentPopup, showTableCellContentPopup } from './TableCellContentPopup';
+
+let tableViewportStyleSequence = 0;
 
 export class TableView extends ProsemirrorTableView {
   private scrollable: HTMLDivElement | null = null;
@@ -26,6 +32,7 @@ export class TableView extends ProsemirrorTableView {
   private columnControlsContainer: HTMLDivElement | null = null;
   private gripToolbar: TableGripToolbar | null = null;
   private stickyHeaderOverlay: HTMLDivElement | null = null;
+  private stickyHeaderGrip: HTMLDivElement | null = null;
   private stickyHeaderFrame: number | null = null;
   private stickyHeaderObserver: MutationObserver | null = null;
   private toolbarRequest: {
@@ -36,13 +43,24 @@ export class TableView extends ProsemirrorTableView {
   private layoutSyncFrame: number | null = null;
   private lastObservedTableSize: { width: number; height: number } | null = null;
   private renderedRowHeightCache = new WeakMap<HTMLTableRowElement, number | null>();
+  private readonly rowViewportStyleKey = `easyview-row-viewport-${++tableViewportStyleSequence}`;
+  private rowViewportStyle: HTMLStyleElement | null = null;
+  private lastRowViewportSignature = '';
+  private lastRowViewportRows: HTMLTableRowElement[] = [];
   private rowResizeCleanup: (() => void) | null = null;
+  private initialLayoutPending = true;
   private isRowResizing = false;
   private lastRowResizeHover: number | null | undefined = undefined;
-  private pinnedHorizontalScroll: Array<{ el: HTMLElement; left: number }> | null = null;
-  private stableScrollLeft = 0;
-  private stableAncestorScrolls = new Map<HTMLElement, number>();
   private ignoringScrollEvent = false;
+  // The scroll controller writes scrollLeft directly; suppress the view's own
+  // scroll handler around those writes so programmatic restores never schedule
+  // layout work or re-learn a transient offset.
+  private readonly beginScrollRestore = (root: HTMLElement): void => {
+    if (root === this.scrollable) this.ignoringScrollEvent = true;
+  };
+  private readonly endScrollRestore = (): void => {
+    this.ignoringScrollEvent = false;
+  };
   private columnResizeSession = false;
   private columnResizeCommitPending = false;
   // Widths that are rendered but not yet persisted in ProseMirror's colwidth
@@ -55,6 +73,9 @@ export class TableView extends ProsemirrorTableView {
   // Keep it above the resize plugin's hard minimum so the column remains
   // editable and can still be dragged normally afterwards.
   private readonly compactColumnWidth = 100;
+  private readonly rowHeightController = new RowHeightController();
+  private readonly nestedTableScrollController = new NestedTableScrollController();
+  private selectionController: TableSelectionController | null = null;
   // Keep the table-select dot off the row/column dashed bars and the table's
   // rectangular corner so it stays easy to see and click, including nested tables.
   private readonly tableGripSize = 14;
@@ -64,7 +85,7 @@ export class TableView extends ProsemirrorTableView {
   private readonly columnGripInsetTop = 2;
   private readonly columnGripHeight = 4;
   private readonly scheduleLayoutSync = (): void => {
-    if (this.layoutSyncFrame !== null || this.isRowResizing || this.shouldDeferColumnResizeLayout()) return;
+    if (this.initialLayoutPending || this.layoutSyncFrame !== null || this.isRowResizing || this.shouldDeferColumnResizeLayout()) return;
     // Hover/drag already mutates <col> widths. Extra layout here restyles
     // every table on the page and is what users see as screen flicker.
     if (this.shouldDeferColumnResizeLayout()) return;
@@ -73,18 +94,24 @@ export class TableView extends ProsemirrorTableView {
       this.layoutSyncFrame = null;
       if (!this.dom || !this.node || this.isRowResizing || this.shouldDeferColumnResizeLayout()) return;
 
-      this.withPreservedHorizontalScroll(() => {
-        this.syncWrappedColumnWidths();
-        this.applyRowHeights(this.node);
-        this.updateClassList(this.node);
-        this.syncStickyHeader(this.node);
-        // ResizeObserver fires for ordinary content reflow as well as real
-        // table structure changes. Recreating every grip on each delivery
-        // causes a large child-list mutation burst and visible scroll jank.
-        // Keep existing controls and update only their geometry unless rows or
-        // logical columns actually changed.
-        this.refreshControlGeometryOrRebuild(this.node);
-      });
+      this.nestedTableScrollController.withPreserved(
+        this.scrollable,
+        () => this.shouldLockHorizontalScroll(),
+        () => {
+          this.syncWrappedColumnWidths();
+          this.applyRowHeights(this.node);
+          this.updateClassList(this.node);
+          this.syncStickyHeader(this.node);
+          // ResizeObserver fires for ordinary content reflow as well as real
+          // table structure changes. Recreating every grip on each delivery
+          // causes a large child-list mutation burst and visible scroll jank.
+          // Keep existing controls and update only their geometry unless rows or
+          // logical columns actually changed.
+          this.refreshControlGeometryOrRebuild(this.node);
+        },
+        this.beginScrollRestore,
+        this.endScrollRestore
+      );
     });
   };
   private readonly handleTableWrapLayoutChange = (): void => {
@@ -123,21 +150,22 @@ export class TableView extends ProsemirrorTableView {
     // snapshot walk below reads every ancestor scrollport and is only needed
     // while a column-resize commit may mutate layout beneath the viewport.
     if (!this.columnResizeSession && !this.columnResizeCommitPending) {
-      this.stableScrollLeft = left;
+      this.nestedTableScrollController.recordRootScrollLeft(this.scrollable, left);
       return;
     }
     // Only bounce back when a DOM mutation collapsed the viewport to the
     // start. Never fight an intentional scrollbar / wheel move to the right.
-    const collapsedToStart =
-      this.stableScrollLeft > 40 && left < 8 && this.stableScrollLeft - left > 40;
+    const collapsedToStart = this.nestedTableScrollController.hasCollapsedToStart(left);
     if (collapsedToStart && this.columnResizeSession) {
-      this.restoreColumnResizeScroll();
+      this.nestedTableScrollController.restoreColumnResizeScroll(
+        this.scrollable,
+        this.beginScrollRestore,
+        this.endScrollRestore
+      );
       return;
     }
 
-    this.stableScrollLeft = left;
-    this.rememberAncestorScrollSnapshots();
-    this.pinnedHorizontalScroll = this.captureHorizontalScrollSnapshots();
+    this.nestedTableScrollController.recordRootScrollAncestorsAndPinned(this.scrollable, left);
   };
   private readonly handleTablePointerDown = (event: PointerEvent): void => {
     // The add-row / add-column handles intentionally sit on a table border.
@@ -198,8 +226,7 @@ export class TableView extends ProsemirrorTableView {
       remaining -= consumed;
       applied = true;
       if (owner === this.scrollable) {
-        this.stableScrollLeft = nextLeft;
-        this.rememberAncestorScrollSnapshots();
+        this.nestedTableScrollController.recordRootScrollAndAncestors(this.scrollable, nextLeft);
       }
       if (Math.abs(remaining) < 0.5) break;
     }
@@ -250,6 +277,17 @@ export class TableView extends ProsemirrorTableView {
 
     return [...contentPorts, ...tablePorts];
   }
+  private readonly handleTableDoubleClick = (event: MouseEvent): void => {
+    if (this.isEventFromNestedTable(event.target) || this.isOnHorizontalScrollbar(event)) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target || this.isTableControlTarget(target)) return;
+    const cell = target.closest('td, th') as HTMLTableCellElement | null;
+    if (!cell || cell.closest('.table-wrapper') !== this.dom) return;
+    if (event.clientX >= cell.getBoundingClientRect().right - 8) return;
+    event.preventDefault();
+    showTableCellContentPopup(cell);
+  };
+
   private readonly handleTableMouseDownCapture = (event: MouseEvent): void => {
     if (this.compactColumnOnDoublePress(event)) return;
     if (this.isEventFromNestedTable(event.target) || this.isOnHorizontalScrollbar(event)) return;
@@ -257,7 +295,10 @@ export class TableView extends ProsemirrorTableView {
     // only its owning table; ordinary cell clicks and ancestor tables do not
     // participate in the nested table's scroll preservation.
     if (!this.isColumnResizeInteractionOnThisTable()) return;
-    this.rememberStableHorizontalScroll();
+    this.nestedTableScrollController.rememberStable(
+      this.scrollable,
+      () => this.shouldLockHorizontalScroll()
+    );
     this.columnResizeSession = true;
     if (this.layoutSyncFrame !== null) {
       cancelAnimationFrame(this.layoutSyncFrame);
@@ -292,13 +333,23 @@ export class TableView extends ProsemirrorTableView {
     // all existing column drag behavior continue through unchanged.
     event.preventDefault();
     event.stopImmediatePropagation();
-    this.withPreservedHorizontalScroll(() => {
-      this.setColumnWidth(view, cellPos, Math.max(this.defaultCellMinWidth, this.compactColumnWidth));
-    });
+    this.nestedTableScrollController.withPreserved(
+      this.scrollable,
+      () => this.shouldLockHorizontalScroll(),
+      () => {
+        this.setColumnWidth(view, cellPos, Math.max(this.defaultCellMinWidth, this.compactColumnWidth));
+      },
+      this.beginScrollRestore,
+      this.endScrollRestore
+    );
 
     requestAnimationFrame(() => {
       if (!this.node) return;
-      this.restoreStableHorizontalScroll();
+      this.nestedTableScrollController.restoreStable(
+        this.scrollable,
+        this.beginScrollRestore,
+        this.endScrollRestore
+      );
       this.refreshColumnControlGeometry(this.node);
       this.updateClassList(this.node);
     });
@@ -315,19 +366,27 @@ export class TableView extends ProsemirrorTableView {
     // in place after the commit instead.
     this.columnResizeCommitPending = true;
     requestAnimationFrame(() => {
-      this.restoreColumnResizeScroll();
+      this.nestedTableScrollController.restoreColumnResizeScroll(
+        this.scrollable,
+        this.beginScrollRestore,
+        this.endScrollRestore
+      );
       if (this.node) this.refreshColumnControlGeometry(this.node);
       this.updateClassList(this.node);
       this.columnResizeCommitPending = false;
     });
   };
 
-  constructor(node: ProsemirrorNode, cellMinWidth: number, _view?: EditorView) {
+  constructor(node: ProsemirrorNode, cellMinWidth: number, _view: EditorView) {
     super(node, cellMinWidth);
+    this.dom.dataset.easyviewRowViewport = this.rowViewportStyleKey;
+    this.rowViewportStyle = document.createElement('style');
+    document.head.appendChild(this.rowViewportStyle);
 
     // Remove table from default dom and wrap in scrollable container
     this.dom.removeChild(this.table);
     this.dom.className = TableStyleHelper.table;
+    this.dom.classList.add('easyview-table-initializing');
 
     // Create scrollable wrapper
     this.scrollable = this.dom.appendChild(document.createElement('div'));
@@ -351,11 +410,19 @@ export class TableView extends ProsemirrorTableView {
     this.controlsContainer.className = 'table-controls';
     this.controlsContainer.contentEditable = 'false';
     this.controlsContainer.setAttribute('oncontextmenu', 'return false');
+    this.selectionController = new TableSelectionController({
+      getEditorView,
+      tableDom: this.dom,
+      rowControls: this.controlsContainer,
+      columnControls: this.columnControlsContainer,
+    });
 
     // Initialize grip toolbar
     this.gripToolbar = new TableGripToolbar();
 
     // Close toolbar when clicking inside table cells
+    this.table.addEventListener('dblclick', this.handleTableDoubleClick);
+
     this.table.addEventListener('mousedown', (e) => {
       // Only close if clicking on a cell, not on grips or buttons
       const target = e.target as HTMLElement;
@@ -384,21 +451,38 @@ export class TableView extends ProsemirrorTableView {
       passive: false,
     });
 
-    // Create controls
-    this.syncWrappedColumnWidths();
-    this.applyRowHeights(node);
-    this.updateControls(node);
-
-    this.updateClassList(node);
-    this.syncStickyHeader(node);
     window.addEventListener('easyview-table-wrap-layout-change', this.handleTableWrapLayoutChange);
 
-    // Wait for DOM to render to ensure scroll shadows are correct
-    setTimeout(() => {
-      if (this.dom) {
-        this.scheduleLayoutSync();
-      }
-    }, 100);
+    // Let every real TableCellView mount, then perform exactly one complete
+    // initial layout before making the table visible. Previously the browser
+    // painted intrinsic narrow columns, then width rules, then row viewports
+    // in separate passes, which looked like a three-stage reload.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!this.dom || !this.node) return;
+        try {
+          this.renderedRowHeightCache = new WeakMap();
+          this.nestedTableScrollController.withPreserved(
+            this.scrollable,
+            () => false,
+            () => {
+              this.syncWrappedColumnWidths();
+              this.applyRowHeights(this.node, true);
+              this.updateControls(this.node);
+              this.updateClassList(this.node);
+              this.syncStickyHeader(this.node);
+            },
+            this.beginScrollRestore,
+            this.endScrollRestore,
+          );
+          const rect = this.table.getBoundingClientRect();
+          this.lastObservedTableSize = { width: rect.width, height: rect.height };
+        } finally {
+          this.initialLayoutPending = false;
+          this.dom.classList.remove('easyview-table-initializing');
+        }
+      });
+    });
 
     // ResizeObserver: update grips when table dimensions change (e.g. column resize)
     this.resizeObserver = new ResizeObserver((entries) => {
@@ -501,6 +585,21 @@ export class TableView extends ProsemirrorTableView {
     tbody.appendChild(cloneRow);
     cloneTable.appendChild(tbody);
     overlay.replaceChildren(cloneTable);
+
+    // The normal corner grip belongs to the scrolling table controls and moves
+    // out of view with the source first row. Mirror it into the fixed sticky
+    // header so the table-level entry point stays visible while scrolling.
+    const stickyGrip = document.createElement('div');
+    stickyGrip.className = `${TableStyleHelper.tableGrip} easyview-sticky-table-grip`;
+    stickyGrip.setAttribute('aria-label', 'Table actions');
+    stickyGrip.contentEditable = 'false';
+    stickyGrip.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.gripToolbar?.showForTable(stickyGrip);
+    });
+    overlay.appendChild(stickyGrip);
+    this.stickyHeaderGrip = stickyGrip;
   }
 
 
@@ -620,6 +719,12 @@ export class TableView extends ProsemirrorTableView {
     overlay.style.clipPath = clipLeft > 0 || clipRight > 0
       ? `inset(0px ${clipRight}px 0px ${clipLeft}px)`
       : 'none';
+    if (this.stickyHeaderGrip) {
+      this.stickyHeaderGrip.style.left = `${clipLeft + 4}px`;
+      this.stickyHeaderGrip.style.top = `${Math.max(0, (rowRect.height - this.tableGripSize) / 2)}px`;
+      this.stickyHeaderGrip.style.width = `${this.tableGripSize}px`;
+      this.stickyHeaderGrip.style.height = `${this.tableGripSize}px`;
+    }
   }
 
   private removeStickyHeader(): void {
@@ -631,6 +736,7 @@ export class TableView extends ProsemirrorTableView {
     this.stickyHeaderObserver = null;
     this.stickyHeaderOverlay?.remove();
     this.stickyHeaderOverlay = null;
+    this.stickyHeaderGrip = null;
   }
 
   /**
@@ -787,8 +893,9 @@ export class TableView extends ProsemirrorTableView {
         addColBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (getEditorView()) {
-            tableCommands.addColumnBefore({ index: 0 })(getEditorView().state, getEditorView().dispatch);
+          const view = getEditorView();
+          if (view) {
+            tableCommands.addColumnBefore({ index: 0 })(view.state, view.dispatch);
           }
         });
         this.columnControlsContainer!.appendChild(addColBefore);
@@ -879,8 +986,9 @@ export class TableView extends ProsemirrorTableView {
         addRowBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (getEditorView()) {
-            tableCommands.addRowBefore({ index: 0 })(getEditorView().state, getEditorView().dispatch);
+          const view = getEditorView();
+          if (view) {
+            tableCommands.addRowBefore({ index: 0 })(view.state, view.dispatch);
           }
         });
         this.controlsContainer!.appendChild(addRowBefore);
@@ -967,41 +1075,7 @@ export class TableView extends ProsemirrorTableView {
 
   /** Update only selection classes; do not create, remove, or remeasure grips. */
   private refreshControlSelection(): void {
-    if (!this.controlsContainer || !this.columnControlsContainer || !this.dom) return;
-
-    const selectedRows = new Set<number>();
-    const selectedColumns = new Set<number>();
-    let showTableGrip = false;
-    const view = getEditorView();
-    if (!view) return;
-
-    try {
-      const activeRect = tableCommands.selectedRect(view.state);
-      const activeTableDom = view.nodeDOM(activeRect.tableStart - 1) as HTMLElement | null;
-      const isActiveTable = activeTableDom?.closest('.table-wrapper') === this.dom;
-      if (isActiveTable) {
-        if (isTableSelected(view.state)) {
-          showTableGrip = true;
-        } else {
-          for (let row = activeRect.top; row < activeRect.bottom; row++) selectedRows.add(row);
-          for (let col = activeRect.left; col < activeRect.right; col++) selectedColumns.add(col);
-          if (selectedRows.size === 0 && !isColumnSelection(view.state.selection)) selectedRows.add(activeRect.top);
-          if (selectedColumns.size === 0 && !isRowSelection(view.state.selection)) selectedColumns.add(activeRect.left);
-        }
-      }
-    } catch {
-      // A text selection outside a table simply clears the previous control state.
-    }
-
-    this.controlsContainer.querySelectorAll<HTMLElement>(`.${TableStyleHelper.tableGripRow}`).forEach((grip) => {
-      grip.classList.toggle(TableStyleHelper.selected, selectedRows.has(Number(grip.dataset.index)));
-    });
-    this.columnControlsContainer.querySelectorAll<HTMLElement>(`.${TableStyleHelper.tableGripColumn}`).forEach((grip) => {
-      grip.classList.toggle(TableStyleHelper.selected, selectedColumns.has(Number(grip.dataset.index)));
-    });
-    this.controlsContainer
-      .querySelector(`.${TableStyleHelper.tableGrip}`)
-      ?.classList.toggle(TableStyleHelper.selected, showTableGrip);
+    this.selectionController?.refresh();
   }
 
   /**
@@ -1185,7 +1259,7 @@ export class TableView extends ProsemirrorTableView {
       .filter((row) => row.closest('table') === this.table);
   }
 
-  private applyRowHeights(node: ProsemirrorNode): void {
+  private applyRowHeights(node: ProsemirrorNode, force = false): void {
     const rows = this.getDirectRows();
     const rowCount = Math.min(rows.length, node.childCount);
 
@@ -1196,10 +1270,80 @@ export class TableView extends ProsemirrorTableView {
       // change. Do not rewrite every td/content viewport when this row already
       // has the requested height; a large nested table otherwise turns a
       // horizontal gesture into thousands of redundant style mutations.
-      if (this.renderedRowHeightCache.has(row) && this.renderedRowHeightCache.get(row) === height) continue;
-      this.applyRenderedRowHeight(row, height);
+      if (!force && this.renderedRowHeightCache.get(row) === height) {
+        continue;
+      }
+      this.applyRenderedRowHeight(row, node, rowIndex, height);
       this.renderedRowHeightCache.set(row, height);
     }
+    this.syncRowViewportStyles(node, rows, force);
+  }
+
+  /**
+   * ProseMirror patches td/tr style attributes from node attrs and may clear
+   * ad-hoc inline sizing styles. Keep fixed row viewports in a table-scoped
+   * stylesheet so persisted row heights survive those DOM patches.
+   */
+  private syncRowViewportStyles(
+    tableNode: ProsemirrorNode,
+    rows: HTMLTableRowElement[],
+    force = false,
+  ): void {
+    if (!this.rowViewportStyle) return;
+    const signature = this.getRowViewportSignature(tableNode, rows);
+    const sameRows = rows.length === this.lastRowViewportRows.length &&
+      rows.every((row, index) => row === this.lastRowViewportRows[index]);
+    if (!force && signature === this.lastRowViewportSignature && sameRows) return;
+    const tableSelector = `.table-wrapper[data-easyview-row-viewport="${this.rowViewportStyleKey}"] > .table-scrollable > table > tbody`;
+    const rules: string[] = [];
+    const rowCount = Math.min(rows.length, tableNode.childCount);
+
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      const rowHeight = this.normalizeRowHeight(tableNode.child(rowIndex).attrs.height);
+      if (rowHeight === null) continue;
+      const rowSelector = `${tableSelector} > tr:nth-child(${rowIndex + 1})`;
+      rules.push(`${rowSelector}{height:${rowHeight}px!important;min-height:0!important;max-height:${rowHeight}px!important}`);
+
+      Array.from(rows[rowIndex].cells).forEach((cell, cellIndex) => {
+        const viewportHeight = this.getExplicitCellViewportHeight(tableNode, rowIndex, cell, rowHeight);
+        const computed = getComputedStyle(cell);
+        const top = this.cssPixels(computed.paddingTop);
+        const right = this.cssPixels(computed.paddingRight);
+        const bottom = this.cssPixels(computed.paddingBottom);
+        const left = this.cssPixels(computed.paddingLeft);
+        const cellSelector = `${rowSelector} > :is(td,th):nth-child(${cellIndex + 1})`;
+        const contentSelector = `${cellSelector} > .easyview-table-cell-content`;
+        rules.push(`${cellSelector}{position:relative!important;height:${viewportHeight}px!important;min-height:0!important;max-height:${viewportHeight}px!important;overflow:hidden!important;box-sizing:border-box!important}`);
+        rules.push(`${contentSelector}{position:absolute!important;top:${top}px!important;right:${right}px!important;bottom:${bottom}px!important;left:${left}px!important;height:auto!important;min-height:0!important;max-height:none!important;overflow-y:auto!important;overflow-x:auto!important}`);
+      });
+    }
+    this.rowViewportStyle.textContent = rules.join('\n');
+    this.lastRowViewportSignature = signature;
+    this.lastRowViewportRows = [...rows];
+    // Row viewport rules are injected after CellView's initial mutation pass.
+    // Re-evaluate vertical alignment once their final clientHeight is known so
+    // a delayed layout sync cannot turn a visually centred cell back to top.
+    requestAnimationFrame(() => {
+      if (!this.dom || !this.node) return;
+      for (const row of this.getDirectRows()) {
+        for (const cell of Array.from(row.cells)) {
+          const content = cell.querySelector(':scope > .easyview-table-cell-content') as HTMLDivElement | null;
+          syncTableCellVerticalAlignmentLayout(cell, content);
+        }
+      }
+    });
+  }
+
+  private getRowViewportSignature(tableNode: ProsemirrorNode, rows: HTMLTableRowElement[]): string {
+    const rowCount = Math.min(rows.length, tableNode.childCount);
+    const parts: string[] = [];
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      const height = this.normalizeRowHeight(tableNode.child(rowIndex).attrs.height);
+      if (height === null) continue;
+      const spans = Array.from(rows[rowIndex].cells).map((cell) => `${cell.rowSpan}x${cell.colSpan}`).join(',');
+      parts.push(`${rowIndex}:${height}:${spans}`);
+    }
+    return parts.join('|');
   }
 
   /**
@@ -1209,8 +1353,29 @@ export class TableView extends ProsemirrorTableView {
    * naturally tall row because that difference also contains all free vertical
    * space in short cells, which previously collapsed the viewport to 0px.
    */
-  private applyRenderedRowHeight(row: HTMLTableRowElement, height: number | null): void {
+  private applyRenderedRowHeight(
+    row: HTMLTableRowElement,
+    tableNode: ProsemirrorNode,
+    rowIndex: number,
+    height: number | null,
+  ): void {
     const cells = Array.from(row.cells);
+
+    // A persisted row height is authoritative for independent cells. Setting
+    // the row/cell viewport explicitly prevents the browser's table layout
+    // algorithm from treating tall content as a minimum-height fallback.
+    if (height === null) {
+      row.removeAttribute('data-easyview-row-resized');
+      row.style.height = '';
+      row.style.minHeight = '';
+      row.style.maxHeight = '';
+    } else {
+      row.setAttribute('data-easyview-row-resized', 'true');
+      row.style.setProperty('--easyview-row-height', `${height}px`);
+      row.style.height = `${height}px`;
+      row.style.minHeight = '0';
+      row.style.maxHeight = `${height}px`;
+    }
 
     // Do not write preview attributes/styles to <tr>. Table rows use the
     // default ProseMirror DOM view, so a <tr> mutation can be reparsed and the
@@ -1221,18 +1386,31 @@ export class TableView extends ProsemirrorTableView {
       if (height === null) {
         cell.removeAttribute('data-easyview-row-resized');
         cell.style.height = '';
+        cell.style.minHeight = '';
+        cell.style.maxHeight = '';
+        cell.style.position = '';
+        cell.style.overflow = '';
         cell.style.boxSizing = '';
         if (content) {
           content.style.height = '';
           content.style.maxHeight = '';
+          content.style.minHeight = '';
+          content.style.position = '';
+          content.style.inset = '';
+          content.style.overflowY = '';
         }
         syncTableCellVerticalAlignmentLayout(cell, content);
         return;
       }
 
+      const viewportHeight = this.getExplicitCellViewportHeight(tableNode, rowIndex, cell, height);
       cell.setAttribute('data-easyview-row-resized', 'true');
       cell.style.boxSizing = 'border-box';
-      cell.style.height = `${height}px`;
+      cell.style.position = 'relative';
+      cell.style.height = `${viewportHeight}px`;
+      cell.style.minHeight = '0';
+      cell.style.maxHeight = `${viewportHeight}px`;
+      cell.style.overflow = 'hidden';
       if (!content) return;
 
       const style = getComputedStyle(cell);
@@ -1241,11 +1419,70 @@ export class TableView extends ProsemirrorTableView {
         this.cssPixels(style.paddingBottom) +
         this.cssPixels(style.borderTopWidth) +
         this.cssPixels(style.borderBottomWidth);
-      const contentHeight = Math.max(1, height - verticalChrome);
-      content.style.height = `${contentHeight}px`;
-      content.style.maxHeight = `${contentHeight}px`;
+      // Take the content viewport out of table-cell flow. In a native table,
+      // a normal-flow child can still raise the row's intrinsic minimum height
+      // even when td/tr have `height` and `max-height`. An absolute viewport
+      // makes the persisted row height authoritative and scrolls overflow.
+      content.style.position = 'absolute';
+      content.style.top = `${this.cssPixels(style.paddingTop)}px`;
+      content.style.right = `${this.cssPixels(style.paddingRight)}px`;
+      content.style.bottom = `${this.cssPixels(style.paddingBottom)}px`;
+      content.style.left = `${this.cssPixels(style.paddingLeft)}px`;
+      content.style.height = 'auto';
+      content.style.maxHeight = 'none';
+      content.style.minHeight = '0';
+      content.style.overflowY = 'auto';
       syncTableCellVerticalAlignmentLayout(cell, content);
     });
+  }
+
+  /**
+   * ProseMirror may replace the native cells after TableView's constructor has
+   * already applied a height. Cache equality alone therefore is not proof that
+   * the currently mounted cell NodeViews still own their fixed scrollports.
+   */
+  private hasAppliedRowHeightViewport(
+    row: HTMLTableRowElement,
+    tableNode: ProsemirrorNode,
+    rowIndex: number,
+    height: number | null,
+  ): boolean {
+    if (height === null) {
+      return !row.hasAttribute('data-easyview-row-resized') &&
+        Array.from(row.cells).every((cell) => !cell.hasAttribute('data-easyview-row-resized'));
+    }
+
+    if (row.style.height !== `${height}px`) return false;
+    return Array.from(row.cells).every((cell) => {
+      const content = cell.querySelector(':scope > .easyview-table-cell-content') as HTMLElement | null;
+      const expectedHeight = this.getExplicitCellViewportHeight(tableNode, rowIndex, cell, height);
+      return cell.getAttribute('data-easyview-row-resized') === 'true' &&
+        cell.style.height === `${expectedHeight}px` &&
+        content?.style.position === 'absolute' &&
+        content.style.overflowY === 'auto';
+    });
+  }
+
+  /**
+   * A merged cell represents several logical rows. Its fixed viewport is the
+   * sum of those explicitly configured row heights, never the natural height
+   * of its content. A normal cell therefore remains exactly `height`, while a
+   * rowspan cell remains exactly the height of the rows it covers.
+   */
+  private getExplicitCellViewportHeight(
+    tableNode: ProsemirrorNode,
+    rowIndex: number,
+    cell: HTMLTableCellElement,
+    fallbackHeight: number,
+  ): number {
+    const rowSpan = Math.max(1, cell.rowSpan || 1);
+    let total = 0;
+    for (let offset = 0; offset < rowSpan; offset += 1) {
+      const logicalRow = tableNode.child(rowIndex + offset);
+      const configuredHeight = this.normalizeRowHeight(logicalRow?.attrs.height);
+      total += configuredHeight ?? fallbackHeight;
+    }
+    return Math.max(1, total);
   }
 
   private cssPixels(value: string): number {
@@ -1261,10 +1498,10 @@ export class TableView extends ProsemirrorTableView {
       type: 'rowResizeDebug',
       stage,
       data,
-    };
+    } as const;
     console.info('[EasyView RowResize]', message);
     try {
-      (window as any).__vscodeApi?.postMessage(message);
+      window.__vscodeApi?.postMessage(message);
     } catch {
       // Diagnostics must never interrupt normal table editing.
     }
@@ -1319,70 +1556,6 @@ export class TableView extends ProsemirrorTableView {
     );
   }
 
-  private rememberStableHorizontalScroll(): void {
-    if (!this.scrollable) return;
-
-    if (!this.shouldLockHorizontalScroll()) {
-      const left = this.scrollable.scrollLeft;
-      // A decoration/control rebuild can collapse scrollLeft to 0 in the same
-      // turn as pointerdown. Do not learn that collapsed value.
-      if (!(this.stableScrollLeft > 1 && left < 1)) {
-        this.stableScrollLeft = left;
-        this.rememberAncestorScrollSnapshots();
-      }
-    }
-
-    this.pinnedHorizontalScroll = this.captureHorizontalScrollSnapshots().map((snapshot) => {
-      if (snapshot.el === this.scrollable) {
-        return { el: snapshot.el, left: this.stableScrollLeft };
-      }
-      const locked = this.stableAncestorScrolls.get(snapshot.el);
-      return locked == null ? snapshot : { el: snapshot.el, left: locked };
-    });
-  }
-
-  private rememberAncestorScrollSnapshots(): void {
-    this.stableAncestorScrolls.clear();
-    for (const snapshot of this.captureHorizontalScrollSnapshots()) {
-      if (snapshot.el === this.scrollable) continue;
-      this.stableAncestorScrolls.set(snapshot.el, snapshot.left);
-    }
-  }
-
-  private clampScrollLeft(left: number): number {
-    if (!this.scrollable) return left;
-    const max = Math.max(0, this.scrollable.scrollWidth - this.scrollable.clientWidth);
-    return Math.min(Math.max(0, left), max);
-  }
-
-  private restoreColumnResizeScroll(): void {
-    if (!this.scrollable) return;
-    const left = this.clampScrollLeft(this.stableScrollLeft);
-    if (Math.abs(this.scrollable.scrollLeft - left) <= 0.5) return;
-    this.ignoringScrollEvent = true;
-    this.scrollable.scrollLeft = left;
-    this.ignoringScrollEvent = false;
-  }
-
-  private restoreStableHorizontalScroll(): void {
-    if (!this.scrollable) return;
-
-    const max = Math.max(0, this.scrollable.scrollWidth - this.scrollable.clientWidth);
-    const applied = Math.min(this.stableScrollLeft, max);
-    if (Math.abs(this.scrollable.scrollLeft - applied) > 0.5) {
-      this.ignoringScrollEvent = true;
-      this.scrollable.scrollLeft = applied;
-      this.ignoringScrollEvent = false;
-    }
-
-    for (const [el, left] of this.stableAncestorScrolls) {
-      if (el.isConnected && Math.abs(el.scrollLeft - left) > 0.5) {
-        el.scrollLeft = left;
-      }
-    }
-    this.restoreHorizontalScrollSnapshots(this.pinnedHorizontalScroll);
-  }
-
   private isColumnResizeInteractionOnThisTable(): boolean {
     const view = getEditorView();
     if (!view) return false;
@@ -1414,8 +1587,9 @@ export class TableView extends ProsemirrorTableView {
    */
   private getColumnResizeCellAtEvent(view: EditorView, event: MouseEvent): number {
     const pluginState = columnResizingPluginKey.getState(view.state);
-    if (pluginState?.activeHandle >= 0 && this.isColumnResizeInteractionOnThisTable()) {
-      return pluginState.activeHandle;
+    const activeHandle = pluginState?.activeHandle;
+    if (activeHandle !== undefined && activeHandle >= 0 && this.isColumnResizeInteractionOnThisTable()) {
+      return activeHandle;
     }
 
     if (!(event.target instanceof HTMLElement)) return -1;
@@ -1496,64 +1670,6 @@ export class TableView extends ProsemirrorTableView {
     else view.dispatch(tr);
   }
 
-  private withPreservedHorizontalScroll(run: () => void): void {
-    this.rememberStableHorizontalScroll();
-    const snapshots = this.captureHorizontalScrollSnapshots().map((snapshot) => {
-      if (snapshot.el === this.scrollable) {
-        return { el: snapshot.el, left: this.stableScrollLeft };
-      }
-      const locked = this.stableAncestorScrolls.get(snapshot.el);
-      return locked == null ? snapshot : { el: snapshot.el, left: locked };
-    });
-    run();
-    this.restoreHorizontalScrollSnapshots(snapshots);
-    this.restoreStableHorizontalScroll();
-    requestAnimationFrame(() => {
-      this.restoreHorizontalScrollSnapshots(snapshots);
-      this.restoreStableHorizontalScroll();
-    });
-  }
-
-  private captureHorizontalScrollSnapshots(): Array<{ el: HTMLElement; left: number }> {
-    const snapshots: Array<{ el: HTMLElement; left: number }> = [];
-    const seen = new Set<HTMLElement>();
-    const track = (el: HTMLElement | null | undefined) => {
-      if (!el || seen.has(el)) return;
-      seen.add(el);
-      snapshots.push({ el, left: el.scrollLeft });
-    };
-
-    // Nested / wide tables scroll inside their own wrapper.
-    track(this.scrollable);
-
-    // Parent cell viewport when this table is embedded in another table cell.
-    let current: HTMLElement | null = this.dom?.parentElement ?? null;
-    while (current) {
-      if (
-        current.classList.contains('easyview-table-cell-content') ||
-        current.classList.contains('table-scrollable')
-      ) {
-        track(current);
-      }
-      current = current.parentElement;
-    }
-
-    return snapshots;
-  }
-
-  private restoreHorizontalScrollSnapshots(
-    snapshots: Array<{ el: HTMLElement; left: number }> | null
-  ): void {
-    if (!snapshots) return;
-    for (const { el, left } of snapshots) {
-      if (el.isConnected && Math.abs(el.scrollLeft - left) > 0.5) {
-        if (el === this.scrollable) this.ignoringScrollEvent = true;
-        el.scrollLeft = left;
-        if (el === this.scrollable) this.ignoringScrollEvent = false;
-      }
-    }
-  }
-
   private isTableControlTarget(target: EventTarget | null): boolean {
     return (
       target instanceof HTMLElement &&
@@ -1597,8 +1713,7 @@ export class TableView extends ProsemirrorTableView {
   }
 
   private normalizeRowHeight(value: unknown): number | null {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
-    return Math.max(this.minRowHeight, Math.min(this.maxRowHeight, Math.round(value)));
+    return this.rowHeightController.normalize(value, this.minRowHeight, this.maxRowHeight);
   }
 
   private startRowResize(event: PointerEvent, rowIndex: number, renderedHeight: number): void {
@@ -1636,7 +1751,7 @@ export class TableView extends ProsemirrorTableView {
       const row = this.getDirectRows()[rowIndex];
       if (!row) return;
 
-      this.applyRenderedRowHeight(row, height);
+      this.applyRenderedRowHeight(row, this.node, rowIndex, height);
       this.updateClassList(this.node);
       this.updateControls(this.node);
       this.logRowResize('preview', {
@@ -1810,7 +1925,7 @@ export class TableView extends ProsemirrorTableView {
     });
   }
 
-  override ignoreMutation(record: MutationRecord): boolean {
+  override ignoreMutation(record: ViewMutationRecord): boolean {
     // Row resizing is a visual preview until pointerup commits the row attr.
     // ProseMirror must not interpret these style/data changes as document edits
     // and rebuild the table halfway through the drag.
@@ -1818,7 +1933,7 @@ export class TableView extends ProsemirrorTableView {
       record.type === 'attributes' &&
       (record.attributeName === 'style' || record.attributeName === 'data-easyview-row-resized') &&
       record.target instanceof HTMLElement &&
-      record.target.matches('td, th, .easyview-table-cell-content')
+      record.target.matches('tr, td, th, .easyview-table-cell-content')
     ) {
       return true;
     }
@@ -1877,7 +1992,8 @@ export class TableView extends ProsemirrorTableView {
 
   private hasActiveColumnResizeHandle(): boolean {
     const view = getEditorView();
-    return Boolean(view && columnResizingPluginKey.getState(view.state)?.activeHandle >= 0);
+    const activeHandle = view ? columnResizingPluginKey.getState(view.state)?.activeHandle : undefined;
+    return activeHandle !== undefined && activeHandle >= 0;
   }
 
   private captureRenderedColumnWidths(): number[] | null {
@@ -2207,6 +2323,8 @@ export class TableView extends ProsemirrorTableView {
   }
 
   destroy(): void {
+    this.table.removeEventListener('dblclick', this.handleTableDoubleClick);
+    closeTableCellContentPopup();
     this.dom.removeEventListener('pointermove', this.handleTablePointerMove, true);
     this.dom.removeEventListener('pointerleave', this.clearRowResizeCursor, true);
     this.dom.removeEventListener('pointerdown', this.handleTablePointerDown, true);
@@ -2246,6 +2364,8 @@ export class TableView extends ProsemirrorTableView {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
+    this.rowViewportStyle?.remove();
+    this.rowViewportStyle = null;
     window.removeEventListener('easyview-table-wrap-layout-change', this.handleTableWrapLayoutChange);
   }
 }

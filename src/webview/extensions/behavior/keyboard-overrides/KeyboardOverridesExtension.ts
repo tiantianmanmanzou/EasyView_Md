@@ -10,7 +10,7 @@
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { BlockEdgeCursor } from '../block-edge-cursor/BlockEdgeCursor';
-import { handleNestedTableEnter } from '../../blocks/table/nestedTableEnter';
+import { handleNestedTableEnter } from '../../blocks/table/NestedTableEnter';
 import type { Schema } from 'prosemirror-model';
 import { Extension } from '../../../editor/EditorExtension';
 

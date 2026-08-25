@@ -1,4 +1,5 @@
 import { Fragment, type Node as ProsemirrorNode } from 'prosemirror-model';
+import { TableMap } from 'prosemirror-tables';
 
 export interface EasyViewTableCellMeta {
   row: number;
@@ -9,6 +10,8 @@ export interface EasyViewTableCellMeta {
 export interface EasyViewTableMetaEntry {
   shape: number[];
   cells: EasyViewTableCellMeta[];
+  /** Logical per-column widths (width[column]). Decoupled from row structure. */
+  colWidths?: number[];
   rowHeights?: number[];
 }
 
@@ -26,6 +29,11 @@ function hasPositiveColwidths(value: unknown): value is number[] {
 function normalizeRowHeight(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
   return Math.max(36, Math.min(1200, Math.round(value)));
+}
+
+function normalizeColWidth(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return Math.max(1, Math.round(value));
 }
 
 export function stripEasyViewTableMeta(markdown: string): {
@@ -51,6 +59,34 @@ export function stripEasyViewTableMeta(markdown: string): {
     content: markdown.slice(0, match.index).replace(/\s+$/, ''),
     meta,
   };
+}
+
+/**
+ * Collect logical per-column widths from the first row of a table.
+ * Row structure (row count, rowspans) does not affect this result, which is
+ * what allows widths to survive row/rowspan edits.
+ */
+function collectTableColWidths(tableNode: ProsemirrorNode): number[] | null {
+  const map = TableMap.get(tableNode);
+  if (map.width <= 0) return null;
+
+  const widths = new Array<number>(map.width).fill(0);
+  const firstRow = tableNode.firstChild;
+  if (!firstRow) return null;
+
+  let columnIndex = 0;
+  firstRow.forEach((cell) => {
+    const colspan = Math.max(1, cell.attrs.colspan ?? 1);
+    const colwidth = cell.attrs.colwidth;
+    for (let offset = 0; offset < colspan && columnIndex + offset < map.width; offset++) {
+      const width = Array.isArray(colwidth) ? colwidth[offset] : null;
+      const normalized = normalizeColWidth(width);
+      if (normalized !== null) widths[columnIndex + offset] = normalized;
+    }
+    columnIndex += colspan;
+  });
+
+  return widths.some((width) => width > 0) ? widths : null;
 }
 
 export function collectEasyViewTableMeta(doc: ProsemirrorNode): EasyViewTableMeta | null {
@@ -80,10 +116,12 @@ export function collectEasyViewTableMeta(doc: ProsemirrorNode): EasyViewTableMet
       });
     });
 
-    if (cells.length > 0 || hasRowHeights) {
+    const colWidths = collectTableColWidths(node);
+    if (cells.length > 0 || hasRowHeights || colWidths) {
       tables.push({
         shape,
         cells,
+        ...(colWidths ? { colWidths } : {}),
         ...(hasRowHeights ? { rowHeights: rowHeights.map((height) => height ?? 0) } : {}),
       });
     }
@@ -101,6 +139,48 @@ export function appendEasyViewTableMeta(markdown: string, meta: EasyViewTableMet
   }
 
   return `${base}\n\n<!-- easyview:table-meta ${JSON.stringify(meta)} -->\n`;
+}
+
+/**
+ * Resolve logical per-column widths from table metadata.
+ *
+ * Prefers the new table-level `colWidths` field; falls back to deriving widths
+ * from the legacy per-cell metadata of the header row (row 0), which is how
+ * old meta versions stored column widths.
+ */
+function resolveTableColWidths(meta: EasyViewTableMetaEntry): number[] | null {
+  if (Array.isArray(meta.colWidths)) {
+    const widths = meta.colWidths
+      .map((width) => normalizeColWidth(width))
+      .filter((width): width is number => width !== null);
+    if (widths.length > 0) return widths;
+  }
+
+  const headerCells = meta.cells
+    .filter((cellMeta) => cellMeta.row === 0)
+    .sort((a, b) => a.cell - b.cell);
+  if (headerCells.length === 0) return null;
+
+  const widths: number[] = [];
+  for (const cellMeta of headerCells) {
+    if (!hasPositiveColwidths(cellMeta.colwidth)) continue;
+    for (const width of cellMeta.colwidth) {
+      const normalized = normalizeColWidth(width);
+      if (normalized !== null) widths.push(normalized);
+    }
+  }
+
+  return widths.length > 0 ? widths : null;
+}
+
+/**
+ * Build the per-cell colwidth array for a cell that starts at `columnIndex`
+ * (colspan-aware), or null when the cell falls outside the known widths.
+ */
+function colWidthsForCell(colWidths: number[], columnIndex: number, colspan: number): number[] | null {
+  const slice = colWidths.slice(columnIndex, columnIndex + colspan);
+  if (slice.length !== colspan || !slice.some((width) => width > 0)) return null;
+  return slice;
 }
 
 export function applyEasyViewTableMeta(doc: ProsemirrorNode, meta: EasyViewTableMeta | null): ProsemirrorNode {
@@ -127,41 +207,64 @@ export function applyEasyViewTableMeta(doc: ProsemirrorNode, meta: EasyViewTable
       });
 
       let nextTable = childChanged ? node.copy(Fragment.fromArray(processedRows)) : node;
-      if (!currentMeta || !shapeMatches) return nextTable;
+      if (!currentMeta) return nextTable;
+
+      // Prefer exact per-cell widths when the structure still matches the
+      // saved shape. When rows/rowspans changed, fall back to logical-column
+      // widths so a structural edit never silently discards the saved widths.
+      const usePerCellWidths = shapeMatches && currentMeta.cells.length > 0;
+      const colWidths = usePerCellWidths ? null : resolveTableColWidths(currentMeta);
+
       const updatedRows: ProsemirrorNode[] = [];
       let tableChanged = false;
 
       nextTable.forEach((row, _rowOffset, rowIndex) => {
         const cellMetaByIndex = new Map<number, EasyViewTableCellMeta>();
-        currentMeta.cells
-          .filter((cellMeta) => cellMeta.row === rowIndex)
-          .forEach((cellMeta) => cellMetaByIndex.set(cellMeta.cell, cellMeta));
+        if (shapeMatches) {
+          currentMeta.cells
+            .filter((cellMeta) => cellMeta.row === rowIndex)
+            .forEach((cellMeta) => cellMetaByIndex.set(cellMeta.cell, cellMeta));
+        }
 
         const nextCells: ProsemirrorNode[] = [];
         let rowChanged = false;
+        let columnIndex = 0;
+
         row.forEach((cell, _cellOffset, cellIndex) => {
-          const cellMeta = cellMetaByIndex.get(cellIndex);
-          if (!cellMeta || !hasPositiveColwidths(cellMeta.colwidth)) {
-            nextCells.push(cell);
-            return;
+          const colspan = Math.max(1, cell.attrs.colspan ?? 1);
+          let nextColwidth: number[] | null = null;
+
+          if (colWidths) {
+            nextColwidth = colWidthsForCell(colWidths, columnIndex, colspan);
+          } else {
+            const cellMeta = cellMetaByIndex.get(cellIndex);
+            if (cellMeta && hasPositiveColwidths(cellMeta.colwidth)) {
+              nextColwidth = cellMeta.colwidth.map((width: number) => Math.max(1, Math.round(width)));
+            }
           }
 
-          const normalized = cellMeta.colwidth.map((width) => Math.max(1, Math.round(width)));
-          const existing = hasPositiveColwidths(cell.attrs.colwidth) ? cell.attrs.colwidth : null;
-          const same =
-            existing &&
-            existing.length === normalized.length &&
-            existing.every((value: number, idx: number) => value === normalized[idx]);
+          let nextCell = cell;
+          if (nextColwidth) {
+            const normalized = nextColwidth.map((width: number) => Math.max(1, Math.round(width)));
+            const existing = hasPositiveColwidths(cell.attrs.colwidth) ? cell.attrs.colwidth : null;
+            const same =
+              existing &&
+              existing.length === normalized.length &&
+              existing.every((value: number, idx: number) => value === normalized[idx]);
 
-          if (same) {
-            nextCells.push(cell);
-            return;
+            if (!same) {
+              nextCell = cell.type.create({ ...cell.attrs, colwidth: normalized }, cell.content, cell.marks);
+              rowChanged = true;
+            }
           }
 
-          rowChanged = true;
-          nextCells.push(cell.type.create({ ...cell.attrs, colwidth: normalized }, cell.content, cell.marks));
+          nextCells.push(nextCell);
+          columnIndex += colspan;
         });
 
+        // Row heights are a per-row property and do not depend on cell
+        // structure, so they are restored by index even when the shape
+        // changed. Rows beyond the saved metadata keep their current height.
         const height = normalizeRowHeight(currentMeta.rowHeights?.[rowIndex]);
         const rowAttrs = height === null ? row.attrs : { ...row.attrs, height };
         const heightChanged = height !== null && row.attrs.height !== height;

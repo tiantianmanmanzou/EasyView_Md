@@ -50,7 +50,7 @@ export class HtmlBlockExtension extends Extension {
         parseDOM: [
           {
             tag: 'div[data-type="html_block"]',
-            getAttrs(dom: HTMLDivElement) {
+            getAttrs(dom: HTMLElement) {
               return { html: dom.getAttribute('data-html') || dom.textContent || '' };
             },
           },

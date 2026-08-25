@@ -98,7 +98,7 @@ const code_block: NodeSpec = {
     {
       tag: 'pre',
       preserveWhitespace: 'full' as const,
-      getAttrs(dom: HTMLPreElement) {
+      getAttrs(dom: HTMLElement) {
         const code = dom.querySelector('code');
         const className = code?.className || '';
         const match = className.match(/language-(\w+)/);
@@ -125,7 +125,7 @@ const notice: NodeSpec = {
   parseDOM: [
     {
       tag: 'div.notice-block',
-      getAttrs(dom: HTMLDivElement) {
+      getAttrs(dom: HTMLElement) {
         return { style: dom.dataset.style || 'note' };
       },
     },
@@ -133,7 +133,7 @@ const notice: NodeSpec = {
     {
       tag: 'blockquote',
       priority: 60,
-      getAttrs(dom: HTMLQuoteElement) {
+      getAttrs(dom: HTMLElement) {
         const firstP = dom.querySelector(':scope > p:first-child');
         if (!firstP) return false;
         const match = firstP.textContent?.match(/^\[!(\w+)\]$/);
@@ -163,14 +163,14 @@ const details: NodeSpec = {
   parseDOM: [
     {
       tag: 'details',
-      getAttrs(dom: HTMLDetailsElement) {
+      getAttrs(dom: HTMLElement) {
         const summaryEl = dom.querySelector('summary');
         return { summary: summaryEl?.textContent || 'Details' };
       },
     },
     {
       tag: 'div.details-block',
-      getAttrs(dom: HTMLDivElement) {
+      getAttrs(dom: HTMLElement) {
         const summaryEl = dom.querySelector('.details-summary-text');
         return { summary: summaryEl?.textContent || 'Details' };
       },
@@ -202,7 +202,7 @@ const html_block: NodeSpec = {
   parseDOM: [
     {
       tag: 'div[data-type="html_block"]',
-      getAttrs(dom: HTMLDivElement) {
+      getAttrs(dom: HTMLElement) {
         return { html: dom.getAttribute('data-html') || dom.textContent || '' };
       },
     },

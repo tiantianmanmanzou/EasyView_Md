@@ -458,7 +458,7 @@ export function convertListType(fromItemType: any, toListType: any) {
       // Restore cursor position
       const newPos = listPos + cursorOffset;
       if (newPos >= 0 && newPos <= tr.doc.content.size) {
-        tr.setSelection(state.selection.constructor.near(tr.doc.resolve(newPos)) as any);
+        tr.setSelection(TextSelection.near(tr.doc.resolve(newPos)));
       }
 
       dispatch(tr);

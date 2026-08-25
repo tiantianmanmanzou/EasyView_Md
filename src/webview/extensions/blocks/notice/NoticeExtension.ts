@@ -6,12 +6,12 @@
  */
 
 import type { NodeSpec, Schema } from 'prosemirror-model';
-import type { Command } from 'prosemirror-commands';
+import type { Command } from 'prosemirror-state';
 import {
   Extension,
   type SerializerNodeHandler,
 } from '../../../editor/EditorExtension';
-import { wrapInBlockSmart } from '../../../editor/EditorCommands';
+import { wrapInBlockSmart, liftFromNodeType } from '../../../editor/EditorCommands';
 
 // ─── Notice Extension ────────────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ export class NoticeExtension extends Extension {
         parseDOM: [
           {
             tag: 'div.notice-block',
-            getAttrs(dom: HTMLDivElement) {
+            getAttrs(dom: HTMLElement) {
               return { style: dom.dataset.style || 'note' };
             },
           },
@@ -40,7 +40,7 @@ export class NoticeExtension extends Extension {
           {
             tag: 'blockquote',
             priority: 60,
-            getAttrs(dom: HTMLQuoteElement) {
+            getAttrs(dom: HTMLElement) {
               const firstP = dom.querySelector(':scope > p:first-child');
               if (!firstP) return false;
               const match = firstP.textContent?.match(/^\[!(\w+)\]$/);
@@ -61,9 +61,17 @@ export class NoticeExtension extends Extension {
   }
 
   keymaps(schema: Schema): Record<string, Command> {
-    return {
-      'Ctrl-Shift-n': wrapInBlockSmart(schema.nodes.notice, { style: 'note' }),
+    const toggleNote: Command = (state, dispatch) => {
+      const { $from } = state.selection;
+      for (let depth = $from.depth; depth > 0; depth--) {
+        const node = $from.node(depth);
+        if (node.type === schema.nodes.notice && node.attrs.style === 'note') {
+          return liftFromNodeType(schema.nodes.notice)(state, dispatch);
+        }
+      }
+      return wrapInBlockSmart(schema.nodes.notice, { style: 'note' })(state, dispatch);
     };
+    return { 'Ctrl-Shift-n': toggleNote };
   }
 
   get serializerNodes(): Record<string, SerializerNodeHandler> {

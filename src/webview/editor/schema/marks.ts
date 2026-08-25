@@ -58,6 +58,21 @@ const code_inline: MarkSpec = {
   },
 };
 
+const text_color: MarkSpec = {
+  attrs: { color: { default: '#000000' } },
+  parseDOM: [
+    {
+      tag: 'span[style*="color"]',
+      getAttrs(dom: HTMLElement) {
+        return { color: dom.style.color || null };
+      },
+    },
+  ],
+  toDOM(mark) {
+    return ['span', { style: `color: ${mark.attrs.color}` }, 0];
+  },
+};
+
 const highlight: MarkSpec = {
   attrs: {
     color: { default: null },
@@ -91,7 +106,7 @@ const link: MarkSpec = {
   parseDOM: [
     {
       tag: 'a[href]',
-      getAttrs(dom: HTMLAnchorElement) {
+      getAttrs(dom: HTMLElement) {
         return {
           href: dom.getAttribute('href'),
           title: dom.getAttribute('title'),
@@ -167,6 +182,7 @@ export const marks: Record<string, MarkSpec> = {
   strikethrough,
   code_inline,
   highlight,
+  text_color,
   link,
   html_tag,
 };

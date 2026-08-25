@@ -293,26 +293,26 @@ export function createMermaidContainerDecoration(
 
   // Function to position toolbar over diagram
   const positionToolbar = () => {
-    const diagram = findDiagram();
-    if (!diagram) return false;
+    const diagramWrapper = findDiagram();
+    if (!diagramWrapper) return false;
 
     // Cache resolved diagramId on toolbar for edit button click handler
-    if (diagram.id && toolbar.dataset.diagramId === 'unknown') {
+    if (diagramWrapper.id && toolbar.dataset.diagramId === 'unknown') {
       const wrapperIdPrefix = getDiagramWrapperIdPrefix(diagram.kind);
-      toolbar.dataset.diagramId = diagram.id.replace(wrapperIdPrefix, '');
+      toolbar.dataset.diagramId = diagramWrapper.id.replace(wrapperIdPrefix, '');
     }
 
-    const diagramHeight = diagram.offsetHeight;
+    const diagramHeight = diagramWrapper.offsetHeight;
     const toolbarHeight = toolbar.offsetHeight;
 
     // Pull toolbar up to overlay top of diagram
     toolbar.style.marginTop = `${-(diagramHeight + toolbarHeight) + 16}px`;
 
     // Align toolbar with right edge of diagram (not container)
-    const parent = diagram.offsetParent as HTMLElement;
+    const parent = diagramWrapper.offsetParent as HTMLElement;
     if (parent) {
       const parentWidth = parent.offsetWidth;
-      const diagramRight = diagram.offsetLeft + diagram.offsetWidth;
+      const diagramRight = diagramWrapper.offsetLeft + diagramWrapper.offsetWidth;
       const marginRight = parentWidth - diagramRight;
       toolbar.style.marginRight = `${marginRight + 8}px`;
     }
@@ -320,18 +320,18 @@ export function createMermaidContainerDecoration(
     // Hover listeners: show toolbar when hovering diagram or toolbar.
     // The toolbar element is recreated on decoration rebuilds, so we store
     // the current reference on the diagram and use it in the listeners.
-    (diagram as any)._mermaidToolbar = toolbar;
+    (diagramWrapper as any)._mermaidToolbar = toolbar;
 
-    if (!diagram.dataset.hoverBound) {
-      diagram.dataset.hoverBound = 'true';
-      diagram.addEventListener('mouseenter', () => {
-        const tb = (diagram as any)._mermaidToolbar as HTMLElement | null;
+    if (!diagramWrapper.dataset.hoverBound) {
+      diagramWrapper.dataset.hoverBound = 'true';
+      diagramWrapper.addEventListener('mouseenter', () => {
+        const tb = (diagramWrapper as any)._mermaidToolbar as HTMLElement | null;
         if (tb) tb.classList.add('diagram-hover');
       });
-      diagram.addEventListener('mouseleave', () => {
+      diagramWrapper.addEventListener('mouseleave', () => {
         setTimeout(() => {
-          const tb = (diagram as any)._mermaidToolbar as HTMLElement | null;
-          if (tb && !tb.matches(':hover') && !diagram.matches(':hover')) {
+          const tb = (diagramWrapper as any)._mermaidToolbar as HTMLElement | null;
+          if (tb && !tb.matches(':hover') && !diagramWrapper.matches(':hover')) {
             tb.classList.remove('diagram-hover');
           }
         }, 150);
@@ -341,7 +341,7 @@ export function createMermaidContainerDecoration(
     // Each new toolbar gets its own mouseleave handler
     toolbar.addEventListener('mouseleave', () => {
       setTimeout(() => {
-        if (!toolbar.matches(':hover') && !diagram.matches(':hover')) {
+        if (!toolbar.matches(':hover') && !diagramWrapper.matches(':hover')) {
           toolbar.classList.remove('diagram-hover');
         }
       }, 150);

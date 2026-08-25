@@ -6,12 +6,12 @@
 
 import { wrappingInputRule, type InputRule } from 'prosemirror-inputrules';
 import type { NodeSpec, Schema } from 'prosemirror-model';
-import type { Command } from 'prosemirror-commands';
+import type { Command } from 'prosemirror-state';
 import {
   Extension,
   type SerializerNodeHandler,
 } from '../../../editor/EditorExtension';
-import { wrapInBlockSmart } from '../../../editor/EditorCommands';
+import { wrapInBlockSmart, liftFromNodeType } from '../../../editor/EditorCommands';
 
 // ─── Blockquote Extension ────────────────────────────────────────────────────
 
@@ -41,9 +41,16 @@ export class BlockquoteExtension extends Extension {
   }
 
   keymaps(schema: Schema): Record<string, Command> {
-    return {
-      'Ctrl-Shift-b': wrapInBlockSmart(schema.nodes.blockquote),
+    const toggleBlockquote: Command = (state, dispatch) => {
+      const { $from } = state.selection;
+      for (let depth = $from.depth; depth > 0; depth--) {
+        if ($from.node(depth).type === schema.nodes.blockquote) {
+          return liftFromNodeType(schema.nodes.blockquote)(state, dispatch);
+        }
+      }
+      return wrapInBlockSmart(schema.nodes.blockquote)(state, dispatch);
     };
+    return { 'Ctrl-Shift-b': toggleBlockquote };
   }
 
   get serializerNodes(): Record<string, SerializerNodeHandler> {

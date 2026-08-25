@@ -59,14 +59,103 @@ describe('EasyView table style metadata', () => {
     expect(restoredTable.child(0).child(1).attrs.colwidth).toEqual([180]);
   });
 
-  it('does not apply row heights if the table shape changed', () => {
+  it('restores row heights by index even when the table shape changed', () => {
     const doc = docWithTable([{ cells: [cell('a')] }]);
     const meta: EasyViewTableMeta = {
       version: 1,
       tables: [{ shape: [2], cells: [], rowHeights: [100, 120] }],
     };
 
-    expect(applyEasyViewTableMeta(doc, meta).firstChild!.child(0).attrs.height).toBeNull();
+    const restored = applyEasyViewTableMeta(doc, meta).firstChild!;
+    expect(restored.child(0).attrs.height).toBe(100);
+  });
+
+  it('keeps rows beyond the saved metadata at their current height', () => {
+    const doc = docWithTable([{ cells: [cell('a')] }, { cells: [cell('b')] }]);
+    const meta: EasyViewTableMeta = {
+      version: 1,
+      tables: [{ shape: [1], cells: [], rowHeights: [100] }],
+    };
+
+    const restored = applyEasyViewTableMeta(doc, meta).firstChild!;
+    expect(restored.child(0).attrs.height).toBe(100);
+    expect(restored.child(1).attrs.height).toBeNull();
+  });
+
+  it('collects table-level logical column widths from the first row', () => {
+    const doc = docWithTable([
+      { cells: [cell('a', [320]), cell('b', [180])] },
+      { cells: [cell('c', [320]), cell('d', [180])] },
+    ]);
+
+    expect(collectEasyViewTableMeta(doc)).toEqual({
+      version: 1,
+      tables: [{
+        shape: [2, 2],
+        cells: [
+          { row: 0, cell: 0, colwidth: [320] },
+          { row: 0, cell: 1, colwidth: [180] },
+          { row: 1, cell: 0, colwidth: [320] },
+          { row: 1, cell: 1, colwidth: [180] },
+        ],
+        colWidths: [320, 180],
+      }],
+    });
+  });
+
+  it('restores column widths by logical column when the shape changed', () => {
+    const doc = docWithTable([
+      { cells: [cell('a'), cell('b')] },
+      { cells: [cell('c')] },
+    ]);
+    const meta: EasyViewTableMeta = {
+      version: 1,
+      tables: [{ shape: [2, 2], cells: [], colWidths: [300, 180] }],
+    };
+
+    const restored = applyEasyViewTableMeta(doc, meta).firstChild!;
+    expect(restored.child(0).child(0).attrs.colwidth).toEqual([300]);
+    expect(restored.child(0).child(1).attrs.colwidth).toEqual([180]);
+    expect(restored.child(1).child(0).attrs.colwidth).toEqual([300]);
+  });
+
+  it('derives column widths from legacy header-row cells when the shape changed', () => {
+    const doc = docWithTable([
+      { cells: [cell('a'), cell('b')] },
+      { cells: [cell('c')] },
+    ]);
+    const meta: EasyViewTableMeta = {
+      version: 1,
+      tables: [{
+        shape: [2, 2],
+        cells: [
+          { row: 0, cell: 0, colwidth: [300] },
+          { row: 0, cell: 1, colwidth: [180] },
+        ],
+      }],
+    };
+
+    const restored = applyEasyViewTableMeta(doc, meta).firstChild!;
+    expect(restored.child(1).child(0).attrs.colwidth).toEqual([300]);
+    expect(restored.child(0).child(1).attrs.colwidth).toEqual([180]);
+  });
+
+  it('applies logical column widths to colspan cells', () => {
+    const wide = schema.nodes.table_cell.create(
+      { colspan: 2, rowspan: 1, colwidth: null, alignment: null, verticalAlignment: null },
+      schema.nodes.paragraph.create(null, schema.text('ab'))
+    );
+    const doc = docWithTable([
+      { cells: [wide] },
+      { cells: [cell('c'), cell('d')] },
+    ]);
+    const meta: EasyViewTableMeta = {
+      version: 1,
+      tables: [{ shape: [1, 2], cells: [], colWidths: [300, 180] }],
+    };
+
+    const restored = applyEasyViewTableMeta(doc, meta).firstChild!;
+    expect(restored.child(0).child(0).attrs.colwidth).toEqual([300, 180]);
   });
 
   it('keeps documents with legacy metadata that has no rowHeights compatible', () => {

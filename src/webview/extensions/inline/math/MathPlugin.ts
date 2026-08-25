@@ -47,13 +47,15 @@ function createMathView(displayMode: boolean): NodeViewConstructor {
           throwOnError: false,
         },
       },
-      MATH_PLUGIN_KEY,
-      () => {
-        // Cleanup: remove from active list when destroyed
-        const idx = nodeViews.indexOf(nodeView);
-        if (idx >= 0) nodeViews.splice(idx, 1);
-      }
+      MATH_PLUGIN_KEY as unknown as PluginKey<{ macros: Record<string, string>; prevCursorPos: number }>,
     );
+
+    const originalDestroy = nodeView.destroy.bind(nodeView);
+    nodeView.destroy = () => {
+      const idx = nodeViews.indexOf(nodeView);
+      if (idx >= 0) nodeViews.splice(idx, 1);
+      originalDestroy();
+    };
 
     nodeViews.push(nodeView);
     return nodeView;

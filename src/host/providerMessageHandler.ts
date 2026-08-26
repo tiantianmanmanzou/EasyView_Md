@@ -1358,7 +1358,8 @@ export async function handleWebviewMessage(
 
       try {
         const mermaidImages = Array.isArray(message.mermaidImages) ? message.mermaidImages : [];
-        const docxFile = await markdownToDocx(markdown, title, docxDocDir, mermaidImages);
+        const asciiImages = Array.isArray(message.asciiImages) ? message.asciiImages : [];
+        const docxFile = await markdownToDocx(markdown, title, docxDocDir, mermaidImages, asciiImages);
         const buffer = await Packer.toBuffer(docxFile);
         await vscode.workspace.fs.writeFile(docxSaveUri, buffer);
 

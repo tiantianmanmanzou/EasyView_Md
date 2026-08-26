@@ -110,6 +110,7 @@ export class ExportController {
     try {
       const markdown = this.markdown();
       const mermaidImages: Array<{ source: string; pngBase64: string; width: number; height: number }> = [];
+      const asciiImages: Array<{ source: string; pngBase64: string; width: number; height: number }> = [];
       try {
         const { extractMermaidSourcesFromMarkdown, collectExportMermaidPngs, looksLikeMermaid, normalizeMermaidSource } = await import('../extensions/export/pdf/PdfMermaidRenderer');
         const { LIGHT_PALETTE } = await import('../extensions/export/pdf/PdfPalette');
@@ -131,7 +132,14 @@ export class ExportController {
       } catch (error) {
         console.warn('[InLineMd] Mermaid render for DOCX failed; exporting diagrams as code:', error);
       }
-      this.deps.vscode.postMessage({ type: 'exportDocx', title: this.title(), markdown, mermaidImages });
+      try {
+        const { collectAsciiPngs } = await import('../extensions/export/ascii/AsciiDiagramRenderer');
+        const rendered = await collectAsciiPngs(markdown);
+        asciiImages.push(...rendered);
+      } catch (error) {
+        console.warn('[InLineMd] ASCII diagram render for DOCX failed; exporting as code:', error);
+      }
+      this.deps.vscode.postMessage({ type: 'exportDocx', title: this.title(), markdown, mermaidImages, asciiImages });
     } catch (error) {
       console.error('[InLineMd] DOCX export failed:', error);
       this.deps.vscode.postMessage({ type: 'showInfo', text: `DOCX export failed: ${error}` });

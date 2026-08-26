@@ -260,6 +260,9 @@ class MermaidRenderer {
       mermaid.initialize({
         startOnLoad: true,
         suppressErrorRendering: true,
+        // Bound the width of each flowchart node so long text wraps instead of
+        // overflowing / being clipped at the node edge (especially CJK labels).
+        flowchart: { wrappingWidth: 320 },
         gantt: { useWidth: 700 },
         pie: { useWidth: 700 },
         fontSize: 12,

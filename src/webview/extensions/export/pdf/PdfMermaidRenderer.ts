@@ -148,6 +148,12 @@ export async function renderMermaidSvgs(sources: string[], palette: PdfPalette):
       theme: palette.mermaidTheme as any,
       darkMode: palette.mermaidDarkMode,
       fontFamily: '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, Helvetica, sans-serif',
+      // Render labels as SVG <text> (htmlLabels:false) and bound the node width so the
+      // text wraps at a max width. This keeps the exported diagram from overflowing or
+      // being clipped. (htmlLabels:false avoids foreignObject labels that can't be drawn
+      // into the exported PNG and would otherwise be flattened into a single clipped line.)
+      htmlLabels: false,
+      flowchart: { wrappingWidth: 320 },
       themeVariables: palette.mermaidThemeVariables,
       gantt: { useWidth: 700 },
       pie: { useWidth: 700 },
@@ -335,24 +341,143 @@ function pathRoundedRect(
 function flattenForeignObjects(svgEl: Element): void {
   const ns = 'http://www.w3.org/2000/svg';
   const foreignObjects = Array.from(svgEl.querySelectorAll('foreignObject'));
+  if (foreignObjects.length === 0) return;
+
+  const measure = createTextMeasurer();
+
   for (const fo of foreignObjects) {
-    const text = (fo.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!text) {
+    const lines = extractForeignObjectLines(fo);
+    if (lines.length === 0) {
       fo.remove();
       continue;
     }
+
     const x = parseFloat(fo.getAttribute('x') || '0');
     const y = parseFloat(fo.getAttribute('y') || '0');
     const width = parseFloat(fo.getAttribute('width') || '0');
     const height = parseFloat(fo.getAttribute('height') || '0');
-    const textEl = svgEl.ownerDocument.createElementNS(ns, 'text');
-    textEl.setAttribute('x', String(x + width / 2));
-    textEl.setAttribute('y', String(y + height / 2));
-    textEl.setAttribute('text-anchor', 'middle');
-    textEl.setAttribute('dominant-baseline', 'middle');
-    textEl.setAttribute('font-size', '14');
-    textEl.setAttribute('fill', '#1f2328');
-    textEl.textContent = text;
-    fo.parentNode?.replaceChild(textEl, fo);
+    const fontSize = readForeignObjectFontSize(fo);
+    const fontFamily = readForeignObjectFontFamily(fo);
+    const font = `${fontSize}px ${fontFamily}`;
+    const lineHeight = fontSize * 1.3;
+
+    // Wrap every logical line so it stays inside the node instead of overflowing the
+    // foreignObject (which would otherwise be clipped when flattened to SVG <text>).
+    const wrapped: string[] = [];
+    for (const line of lines) {
+      if (width > 0) {
+        wrapped.push(...wrapTextToWidth(measure, line, Math.max(fontSize, width - fontSize), font));
+      } else {
+        wrapped.push(line);
+      }
+    }
+
+    const centerY = y + height / 2;
+    const startY = centerY - ((wrapped.length - 1) * lineHeight) / 2;
+    const parent = fo.parentNode;
+
+    wrapped.forEach((lineText, index) => {
+      const textEl = svgEl.ownerDocument.createElementNS(ns, 'text');
+      textEl.setAttribute('x', String(x + width / 2));
+      textEl.setAttribute('y', String(startY + index * lineHeight));
+      textEl.setAttribute('text-anchor', 'middle');
+      textEl.setAttribute('dominant-baseline', 'middle');
+      textEl.setAttribute('font-family', fontFamily);
+      textEl.setAttribute('font-size', String(fontSize));
+      textEl.setAttribute('fill', '#1f2328');
+      textEl.textContent = lineText;
+      parent?.insertBefore(textEl, fo);
+    });
+
+    fo.remove();
   }
+}
+
+type TextMeasurer = (text: string, font: string) => number;
+
+function createTextMeasurer(): TextMeasurer {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  return (text, font) => {
+    if (!ctx) return text.length * 14;
+    ctx.font = font;
+    return ctx.measureText(text).width;
+  };
+}
+
+function readForeignObjectFontSize(fo: Element): number {
+  const styled = fo.querySelector('div, span, p, td');
+  const raw = (styled as HTMLElement | null)?.style?.fontSize || '';
+  const match = raw.match(/(\d+(?:\.\d+)?)px/);
+  return match ? parseFloat(match[1]) : 14;
+}
+
+function readForeignObjectFontFamily(fo: Element): string {
+  const styled = fo.querySelector('div, span, p, td');
+  return (
+    (styled as HTMLElement | null)?.style?.fontFamily ||
+    '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, Helvetica, sans-serif'
+  );
+}
+
+/**
+ * Extract the logical lines of a flowchart label, preserving explicit line breaks
+ * (<br/>) and block boundaries (<div>, <p>, <li>, ...). Otherwise a foreignObject's
+ * textContent collapses every line into one long string.
+ */
+function extractForeignObjectLines(fo: Element): string[] {
+  const lines: string[] = [];
+  let current = '';
+
+  const flush = () => {
+    const value = current.replace(/\s+/g, ' ').trim();
+    if (value) lines.push(value);
+    current = '';
+  };
+
+  const walk = (node: ChildNode) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      current += node.textContent || '';
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as Element;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'br') {
+      flush();
+      return;
+    }
+    if (tag === 'div' || tag === 'p' || tag === 'li' || tag === 'tr') {
+      flush();
+      el.childNodes.forEach(walk);
+      flush();
+      return;
+    }
+    el.childNodes.forEach(walk);
+  };
+
+  fo.childNodes.forEach(walk);
+  flush();
+  return lines;
+}
+
+/**
+ * Split text into lines that do not exceed maxWidth. Works for both CJK (character
+ * level) and Latin text by just breaking at the widest fitting character/word boundary.
+ */
+function wrapTextToWidth(measure: TextMeasurer, text: string, maxWidth: number, font: string): string[] {
+  if (maxWidth <= 0 || measure(text, font) <= maxWidth) return [text];
+  const result: string[] = [];
+  let current = '';
+  for (const ch of Array.from(text)) {
+    const candidate = current + ch;
+    if (current && measure(candidate, font) > maxWidth) {
+      result.push(current);
+      current = ch;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) result.push(current);
+  return result;
 }

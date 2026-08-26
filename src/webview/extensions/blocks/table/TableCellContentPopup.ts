@@ -1,12 +1,20 @@
 let activePopup: HTMLDivElement | null = null;
+let activeCell: HTMLTableCellElement | null = null;
 let outsidePointerHandler: ((event: PointerEvent) => void) | null = null;
 let escapeHandler: ((event: KeyboardEvent) => void) | null = null;
+let repositionHandler: ((event: Event) => void) | null = null;
 
 function closeActivePopup(): void {
   activePopup?.remove();
   activePopup = null;
+  activeCell = null;
   if (outsidePointerHandler) document.removeEventListener('pointerdown', outsidePointerHandler, true);
   if (escapeHandler) document.removeEventListener('keydown', escapeHandler, true);
+  if (repositionHandler) {
+    document.removeEventListener('scroll', repositionHandler, true);
+    window.removeEventListener('resize', repositionHandler);
+    repositionHandler = null;
+  }
   outsidePointerHandler = null;
   escapeHandler = null;
 }
@@ -186,16 +194,44 @@ export function showTableCellContentPopup(cell: HTMLTableCellElement): void {
   document.body.appendChild(popup);
   activePopup = popup;
 
-  const rect = cell.getBoundingClientRect();
-  const margin = 10;
-  const popupRect = popup.getBoundingClientRect();
-  let left = Math.min(Math.max(margin, rect.left), window.innerWidth - popupRect.width - margin);
-  let top = rect.bottom + margin;
-  if (top + popupRect.height > window.innerHeight - margin) top = rect.top - popupRect.height - margin;
-  top = Math.max(margin, Math.min(top, window.innerHeight - popupRect.height - margin));
-  left = Math.max(margin, left);
-  popup.style.left = `${left}px`;
-  popup.style.top = `${top}px`;
+  const padding = 10;
+
+  // Anchor the popup to the cell's top-left corner so it reads as an
+  // expansion of the cell itself rather than a detached second window.
+  // Clamp only to keep the whole popup on screen when the cell hugs an edge.
+  const placePopup = (): void => {
+    if (!activePopup || !activeCell) return;
+    const rect = activeCell.getBoundingClientRect();
+    // Once the cell scrolls out of the viewport there is no anchor left;
+    // close instead of leaving a floating window.
+    if (
+      rect.right < padding ||
+      rect.bottom < padding ||
+      rect.left > window.innerWidth - padding ||
+      rect.top > window.innerHeight - padding
+    ) {
+      closeActivePopup();
+      return;
+    }
+    const size = activePopup.getBoundingClientRect();
+    const left = Math.max(0, Math.min(rect.left, window.innerWidth - size.width - padding));
+    const top = Math.max(0, Math.min(rect.top, window.innerHeight - size.height - padding));
+    activePopup.style.left = `${left}px`;
+    activePopup.style.top = `${top}px`;
+  };
+
+  activeCell = cell;
+  placePopup();
+
+  // The popup sits on the cell, so keep it glued to the cell while the
+  // document scrolls; the illusion breaks if it is left behind.
+  repositionHandler = (event: Event) => {
+    // Scrolling inside the popup must not move its anchor.
+    if (event.target instanceof Node && activePopup?.contains(event.target)) return;
+    placePopup();
+  };
+  document.addEventListener('scroll', repositionHandler, true);
+  window.addEventListener('resize', repositionHandler);
 
   outsidePointerHandler = (event) => {
     if (!activePopup?.contains(event.target as Node)) closeActivePopup();

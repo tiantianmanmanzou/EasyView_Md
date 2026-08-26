@@ -79,7 +79,7 @@ export type WebviewToHostMessage =
   | { type: 'dropImages'; paths: string[]; pos?: number }
   | { type: 'pasteImage'; dataUrl: string; mimeType?: string; name?: string; pos?: number }
   | { type: 'exportPdfBase64'; data: string }
-  | { type: 'exportDocx'; title: string; markdown: string; mermaidImages: Array<{ source: string; pngBase64: string; width: number; height: number }> }
+  | { type: 'exportDocx'; title: string; markdown: string; mermaidImages: Array<{ source: string; pngBase64: string; width: number; height: number }>; asciiImages: Array<{ source: string; pngBase64: string; width: number; height: number }> }
   | { type: 'exportXlsx'; payload: XlsxTablePayload; fileName: string }
   | { type: 'exportHtml'; html: string; images: ExportImagePayload[] };
 

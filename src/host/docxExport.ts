@@ -567,6 +567,47 @@ function isMermaidFenceInfo(info: string): boolean {
   return lang === 'mermaid' || lang === 'mermaidjs';
 }
 
+type DocxAsciiImage = {
+  source?: string;
+  pngBase64?: string;
+  width?: number;
+  height?: number;
+};
+
+type DocxAsciiPng = { data: Buffer; width: number; height: number; source?: string };
+
+const DOCX_ASCII_FENCE_LANGS = new Set(['text', 'txt', 'ascii', 'box', 'art', 'diagram']);
+const DOCX_ASCII_BOX_CHARS = /[─━│┃┌┐└┘├┤┬┴┼╔╗╚╝║╬═╠╣╦╩╭╮╯╰+|=-]/;
+
+function normalizeDocxAsciiSource(source: string): string {
+  return source.replace(/\r\n/g, '\n').trim();
+}
+
+function isAsciiFenceInfo(info: string): boolean {
+  const lang = info.trim().split(/\s+/)[0]?.toLowerCase() || '';
+  return DOCX_ASCII_FENCE_LANGS.has(lang);
+}
+
+function looksLikeDocxAsciiArt(source: string): boolean {
+  const lines = normalizeDocxAsciiSource(source).split('\n');
+  if (lines.length < 2) return false;
+  let borderRows = 0;
+  let frameRows = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (
+      /^[┌└├╔╚╠][─━═-]/.test(trimmed) ||
+      /[─━═-]{4,}/.test(line) ||
+      /^[-+]{4,}/.test(trimmed)
+    ) {
+      borderRows++;
+    } else if (DOCX_ASCII_BOX_CHARS.test(line)) {
+      frameRows++;
+    }
+  }
+  return borderRows >= 1 && borderRows + frameRows >= 2;
+}
+
 function unwrapHeadingEmphasis(text: string): string {
   let value = text.trim();
   let changed = true;
@@ -637,6 +678,7 @@ export async function markdownToDocx(
   title: string,
   docDir: string,
   mermaidImages: DocxMermaidImage[] = [],
+  asciiImages: DocxAsciiImage[] = [],
 ): Promise<DocxDocument> {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const documentChildren: (Paragraph | Table)[] = [];
@@ -657,6 +699,25 @@ export async function markdownToDocx(
     const bySource = mermaidQueue.findIndex((item) => item.source && item.source === key);
     if (bySource >= 0) return mermaidQueue.splice(bySource, 1)[0];
     return mermaidQueue.shift();
+  };
+
+  const asciiQueue: DocxAsciiPng[] = [];
+  for (const image of asciiImages) {
+    if (!image?.pngBase64) continue;
+    const data = decodePngBase64(image.pngBase64);
+    if (!data) continue;
+    asciiQueue.push({
+      data,
+      width: Number(image.width) || 900,
+      height: Number(image.height) || 300,
+      source: normalizeDocxAsciiSource(image.source || ''),
+    });
+  }
+  const takeAsciiImage = (source: string): DocxAsciiPng | undefined => {
+    const key = normalizeDocxAsciiSource(source);
+    const bySource = asciiQueue.findIndex((item) => item.source && item.source === key);
+    if (bySource >= 0) return asciiQueue.splice(bySource, 1)[0];
+    return asciiQueue.shift();
   };
 
   // Consecutive Markdown text lines are soft line breaks, not separate Word paragraphs.
@@ -701,6 +762,18 @@ export async function markdownToDocx(
             alignment: AlignmentType.CENTER,
             spacing: { before: 160, after: 160 },
             children: [new ImageRun({ type: 'png', data: mermaidPng.data, transformation: fitted })],
+          }));
+          continue;
+        }
+      }
+      if (isAsciiFenceInfo(fenceInfo) || looksLikeDocxAsciiArt(codeText)) {
+        const asciiPng = takeAsciiImage(codeText);
+        if (asciiPng) {
+          const fitted = fitMermaidToDocxPage(asciiPng.width, asciiPng.height, asciiPng.data);
+          documentChildren.push(new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 160, after: 160 },
+            children: [new ImageRun({ type: 'png', data: asciiPng.data, transformation: fitted })],
           }));
           continue;
         }

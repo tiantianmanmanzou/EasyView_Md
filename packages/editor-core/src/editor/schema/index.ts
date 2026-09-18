@@ -1,5 +1,5 @@
 /**
- * InLineMd ProseMirror Schema
+ * EasyView_Md ProseMirror Schema
  *
  * Defines all node and mark types for the Markdown WYSIWYG editor.
  * Inspired by Outline's editor architecture but adapted for VS Code webview.

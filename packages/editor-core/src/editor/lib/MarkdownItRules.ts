@@ -1,5 +1,5 @@
 /**
- * Custom markdown-it rule registrations for InLineMd.
+ * Custom markdown-it rule registrations for EasyView_Md.
  *
  * Registers inline, block and core rules that extend the default markdown-it
  * behaviour:  highlight, underline, fenced_blockquote, notice, diff_inline,
@@ -12,7 +12,7 @@ import {
   isPandocHighlightCloseTag,
   isPandocHighlightOpenTag,
   stripPandocHighlightMarkup,
-} from '../../../shared/pandocHighlightMarkup';
+} from '@easyview/markdown-core/pandoc-highlight-markup';
 
 // ─── Regex constants ─────────────────────────────────────────────────────────
 

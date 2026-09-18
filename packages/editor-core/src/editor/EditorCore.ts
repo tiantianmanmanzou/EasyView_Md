@@ -24,10 +24,9 @@ import { EditorView } from 'prosemirror-view';
 import { history, undo, redo, undoDepth, isHistoryTransaction } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
 import { dropCursor } from 'prosemirror-dropcursor';
-import type { Node as ProsemirrorNode } from 'prosemirror-model';
 
 import { ExtensionManager } from './EditorExtensionManager';
-import type { Extension } from './EditorExtension';
+import type { EditorCoreConfig } from './EditorCoreTypes';
 import { schema } from './EditorSchema';
 import { createParser, createPasteParser, parseMarkdown } from './lib/MarkdownParser';
 import { docToMarkdown } from './lib/MarkdownSerializer';
@@ -44,37 +43,6 @@ import {
   handlePaste,
   handlePastePlainText,
 } from './EditorEventHandlers';
-
-// ─── Config ──────────────────────────────────────────────────────────────────
-
-export interface EditorCoreConfig {
-  /** Extension instances */
-  extensions: Extension[];
-
-  /** Additional keymaps injected by the host (e.g. Mod-k for link, Mod-s for save) */
-  keymaps?: Record<string, (...args: any[]) => boolean>;
-
-  /** Called after every transaction — use for toolbar / ToC / image toolbar updates */
-  onDispatch?: (view: EditorView, tr: Transaction, oldState: EditorState) => void;
-
-  /** Called when document content changes — use for syncing back to VS Code */
-  onContentChange?: (markdown: string) => void;
-
-  /** Called when an image node is directly clicked */
-  onImageClick?: (view: EditorView, pos: number, node: ProsemirrorNode, dom: HTMLElement) => void;
-
-  /** Called on Ctrl+Click of a link (open externally) */
-  onOpenLink?: (href: string) => void;
-
-  /** Called on regular click of a link (show edit popup) */
-  onLinkSelect?: (view: EditorView, href: string) => void;
-
-  /** Called when native undo stack is exhausted — return true if cross-mode undo was handled */
-  onUndoExhausted?: () => boolean;
-
-  /** Called when native redo stack is exhausted — return true if cross-mode redo was handled */
-  onRedoExhausted?: () => boolean;
-}
 
 // Module-level flag: true while processing a drag-selection transaction.
 // Decoration plugins check this to freeze their output and avoid
@@ -106,18 +74,18 @@ export class EditorCore {
 
     const t1 = performance.now();
     this.manager = new ExtensionManager(config.extensions);
-    console.log(`[InLineMd perf]   ExtensionManager: ${(performance.now() - t1).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   ExtensionManager: ${(performance.now() - t1).toFixed(1)}ms`);
 
     const t2 = performance.now();
     this.parser = createParser();
-    console.log(`[InLineMd perf]   createParser: ${(performance.now() - t2).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   createParser: ${(performance.now() - t2).toFixed(1)}ms`);
 
     const t3 = performance.now();
     this.pasteParser = createPasteParser();
-    console.log(`[InLineMd perf]   createPasteParser: ${(performance.now() - t3).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   createPasteParser: ${(performance.now() - t3).toFixed(1)}ms`);
 
     this.imageManager = new EditorImageManager();
-    console.log(`[InLineMd perf]   EditorCore constructor TOTAL: ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   EditorCore constructor TOTAL: ${(performance.now() - t0).toFixed(1)}ms`);
   }
 
   // ── Accessors ──
@@ -151,11 +119,11 @@ export class EditorCore {
   init(element: HTMLElement): void {
     const t0 = performance.now();
     const state = this.createState('');
-    console.log(`[InLineMd perf]   createState(empty): ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   createState(empty): ${(performance.now() - t0).toFixed(1)}ms`);
 
     const t1 = performance.now();
     const nodeViews = this.manager.buildNodeViews();
-    console.log(`[InLineMd perf]   buildNodeViews: ${(performance.now() - t1).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   buildNodeViews: ${(performance.now() - t1).toFixed(1)}ms`);
 
     const t2 = performance.now();
     this._view = new EditorView(element, {
@@ -172,11 +140,11 @@ export class EditorCore {
         handlePaste(view, event as ClipboardEvent, this.pasteParser),
     });
 
-    console.log(`[InLineMd perf]   new EditorView: ${(performance.now() - t2).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   new EditorView: ${(performance.now() - t2).toFixed(1)}ms`);
 
     const t3 = performance.now();
     this.manager.initAll(this._view);
-    console.log(`[InLineMd perf]   extensions.initAll: ${(performance.now() - t3).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   extensions.initAll: ${(performance.now() - t3).toFixed(1)}ms`);
 
     // Disable native text/node drag — we use our own block drag handles (6-dot grip).
     // External file drops still work (they use 'drop' event, not 'dragstart').
@@ -256,11 +224,11 @@ export class EditorCore {
       const tParse = performance.now();
       const doc = parseMarkdown(markdown, this.parser);
       if (!doc) return;
-      if (isInit) console.log(`[InLineMd perf]   parseMarkdown: ${(performance.now() - tParse).toFixed(1)}ms (${markdown.length} chars)`);
+      if (isInit) console.log(`[EasyView_Md perf]   parseMarkdown: ${(performance.now() - tParse).toFixed(1)}ms (${markdown.length} chars)`);
 
       const tImg = performance.now();
       const converted = this.imageManager.convertImagePaths(doc);
-      if (isInit) console.log(`[InLineMd perf]   convertImagePaths: ${(performance.now() - tImg).toFixed(1)}ms`);
+      if (isInit) console.log(`[EasyView_Md perf]   convertImagePaths: ${(performance.now() - tImg).toFixed(1)}ms`);
 
       if (isInit) {
         // Fresh state — ensures NodeViews are properly instantiated.
@@ -273,13 +241,13 @@ export class EditorCore {
           plugins: this._view.state.plugins,
           ...(initSelection ? { selection: initSelection } : {}),
         });
-        console.log(`[InLineMd perf]   EditorState.create: ${(performance.now() - tState).toFixed(1)}ms`);
+        console.log(`[EasyView_Md perf]   EditorState.create: ${(performance.now() - tState).toFixed(1)}ms`);
 
         const tUpdate = performance.now();
         // Suppress history for any DOM-correction transactions that fire after state update
         this._suppressHistory = true;
         this._view.updateState(newState);
-        console.log(`[InLineMd perf]   view.updateState: ${(performance.now() - tUpdate).toFixed(1)}ms`);
+        console.log(`[EasyView_Md perf]   view.updateState: ${(performance.now() - tUpdate).toFixed(1)}ms`);
         // Defer cleanup — keep _isUpdatingFromExtension and _suppressHistory true
         // until DOM fully settles. Double-RAF covers MutationObserver microtasks
         // that fire async DOM-correction transactions after updateState().
@@ -307,8 +275,10 @@ export class EditorCore {
         const { tr } = this._view.state;
         tr.replaceWith(0, this._view.state.doc.content.size, converted.content);
 
-        // Content from extension should not pollute PM undo stack
-        tr.setMeta('addToHistory', false);
+        // Content from extension should not pollute PM undo stack,
+        // unless the caller explicitly opts in (e.g. AI agent edits that
+        // must be undoable as a single step).
+        tr.setMeta('addToHistory', meta?.addToHistory === true);
 
         // Attach optional metadata (e.g. externalChange flag)
         if (meta) {
@@ -384,7 +354,7 @@ export class EditorCore {
           this.config.onContentChange?.(md);
         }
       } catch (err) {
-        console.warn('[InLineMd] Serialization error in flushSync:', err);
+        console.warn('[EasyView_Md] Serialization error in flushSync:', err);
       }
     }
   }
@@ -410,7 +380,7 @@ export class EditorCore {
     const t0 = performance.now();
     // Extension plugins first — feature keymaps have priority
     const extension = this.manager.buildPlugins(schema);
-    console.log(`[InLineMd perf]   buildPlugins (extensions): ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]   buildPlugins (extensions): ${(performance.now() - t0).toFixed(1)}ms`);
 
     // Core plugins — history (with undo/redo keymaps), drop cursor
     // Note: gap cursor is now handled by BlockEdgeCursorExtension
@@ -463,7 +433,7 @@ export class EditorCore {
     // MutationObserver → flush → readDOMChange → dispatch recursion.
     this._dispatchDepth++;
     if (this._dispatchDepth > 3) {
-      console.warn('[InLineMd] Re-entrant dispatch loop detected, depth:', this._dispatchDepth);
+      console.warn('[EasyView_Md] Re-entrant dispatch loop detected, depth:', this._dispatchDepth);
       this._dispatchDepth--;
       return;
     }
@@ -558,7 +528,7 @@ export class EditorCore {
             this._currentContent = md;
             this.config.onContentChange?.(md);
           } catch (err) {
-            console.warn('[InLineMd] Serialization error in dispatch (history):', err);
+            console.warn('[EasyView_Md] Serialization error in dispatch (history):', err);
           }
         } else {
           if (this._syncTimer) clearTimeout(this._syncTimer);
@@ -572,7 +542,7 @@ export class EditorCore {
                 this.config.onContentChange?.(md);
               }
             } catch (err) {
-              console.warn('[InLineMd] Serialization error in dispatch:', err);
+              console.warn('[EasyView_Md] Serialization error in dispatch:', err);
             }
           }, 100);
         }

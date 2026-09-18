@@ -13,7 +13,7 @@ import { scheduleAutoEditComment } from '../../blocks/html-block/HtmlBlockExtens
 import { showHeadingPicker } from './SlashMenuHeadingPicker';
 import { showImageUrlPopup } from './SlashMenuImagePopup';
 import { getFirstRowStickyDefault } from '../../blocks/table/TablePreferences';
-import type { SlashMenuItem } from './SlashMenu';
+import type { SlashMenuItem } from './SlashMenuTypes';
 
 // ─── Helper: replace paragraph with node(s) ─────────────────────────────────
 

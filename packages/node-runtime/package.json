@@ -1,0 +1,43 @@
+{
+  "name": "@easyview/node-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Platform-neutral Node.js services for EasyView",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ai-chat-client": "./src/ai/openai-chat-client.ts",
+    "./chat-prompt": "./src/ai/chatPrompt.ts",
+    "./xlsx-export": "./src/export/xlsx-export.ts",
+    "./html-export": "./src/export/html-export.ts",
+    "./pdf-export": "./src/export/pdf-export.ts",
+    "./docx-export": "./src/export/docx-export.ts",
+    "./terminal-service": "./src/terminal/terminal-service.ts",
+    "./image-service": "./src/image/image-service.ts",
+    "./workspace": "./src/workspace/index.ts",
+    "./workspace-tree-model": "./src/workspace/workspace-tree-model.ts",
+    "./workspace-file-operation-service": "./src/workspace/workspace-file-operation-service.ts",
+    "./local-workspace-gateway": "./src/workspace/local-workspace-gateway.ts"
+  },
+  "files": [
+    "src",
+    "tests",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run tests"
+  },
+  "dependencies": {
+    "@easyview/contracts": "*",
+    "@easyview/markdown-core": "*",
+    "exceljs": "^4.4.0",
+    "docx": "^9.5.1",
+    "pngjs": "^7.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.1"
+  }
+}

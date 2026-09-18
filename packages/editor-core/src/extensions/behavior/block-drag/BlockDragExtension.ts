@@ -281,19 +281,6 @@ function blockDragPlugin(): Plugin {
     handle.innerHTML = GRIP_ICON;
     handle.title = 'Drag to reorder';
 
-    const node = currentView?.state.doc.nodeAt(pos);
-    if (node?.type.name === 'heading') {
-      const rawLevel = Number(node.attrs?.level);
-      const level = Number.isFinite(rawLevel)
-        ? Math.min(6, Math.max(1, Math.floor(rawLevel)))
-        : 1;
-      const levelTag = document.createElement('span');
-      levelTag.className = 'block-drag-heading-level';
-      levelTag.textContent = `H${level}`;
-      handle.classList.add('with-heading-level');
-      handle.appendChild(levelTag);
-    }
-
     // Mouse-based drag: mousedown → mousemove (threshold) → mouseup (drop)
     // preventDefault on mousedown prevents text selection and native drag,
     // solving both the code-block drag issue and the text-selection issue.
@@ -370,7 +357,7 @@ function blockDragPlugin(): Plugin {
               clone.querySelectorAll(
                 '.block-drag-handle, .table-controls, .table-column-controls, ' +
                 '.table-grip, .table-grip-column, .table-grip-row, .table-add-column, .table-add-row, ' +
-                '.code-block-toolbar, .heading-actions'
+                '.code-block-toolbar, .heading-actions, .heading-trailing, .heading-copy-outline'
               ).forEach(el => el.remove());
               clone.style.margin = '0';
               clone.style.opacity = '';

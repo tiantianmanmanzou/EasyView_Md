@@ -1,18 +1,33 @@
+import type { EditorRuntimeContext } from '../../../runtime/editorRuntimeContext';
 /**
  * Table XLSX Export
  *
  * Builds a serializable representation of a ProseMirror table that mirrors the
  * on-page presentation (grid borders, merged cells, column widths, row heights)
- * and sends it to the VS Code host to build a real .xlsx workbook.
+ * and sends it to the owning host to build a real .xlsx workbook.
  */
 
 import type { Command, EditorState } from "prosemirror-state";
+import type { Node as ProsemirrorNode } from "prosemirror-model";
 import { TableMap, isInTable, selectedRect } from "prosemirror-tables";
 import type {
   XlsxTableCellPayload,
   XlsxTableMergePayload,
   XlsxTablePayload,
-} from "../../../../shared/xlsxExport";
+} from "@easyview/contracts";
+import { cellContentToMarkdown } from "../../../editor/lib/MarkdownSerializer";
+
+function containsNestedTable(cell: ProsemirrorNode): boolean {
+  let found = false;
+  cell.descendants((child) => {
+    if (child.type.name === 'table') {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
 
 /**
  * Build a serializable representation of the currently selected table that
@@ -57,7 +72,8 @@ export function buildTableXlsxPayload(state: EditorState): XlsxTablePayload {
       cells.push({
         row: cellRect.top,
         col: cellRect.left,
-        text: cell.textContent,
+        // Nested tables are exported as GFM pipe markdown so Excel keeps structure.
+        text: containsNestedTable(cell) ? cellContentToMarkdown(cell) : cell.textContent,
         rowspan,
         colspan,
         isHeader: cell.type.name === 'table_header',
@@ -104,8 +120,10 @@ export function buildTableXlsxPayload(state: EditorState): XlsxTablePayload {
  */
 export function exportTableToXlsx({
   fileName,
+  runtime,
 }: {
   fileName: string;
+  runtime: EditorRuntimeContext;
 }): Command {
   return (state, dispatch) => {
     if (!isInTable(state)) {
@@ -114,12 +132,7 @@ export function exportTableToXlsx({
 
     if (dispatch) {
       const payload = buildTableXlsxPayload(state);
-
-      // Send structured table data to the VS Code host to build the workbook.
-      const vscodeApi = window.__vscodeApi;
-      if (vscodeApi) {
-        vscodeApi.postMessage({ type: 'exportXlsx', payload, fileName });
-      }
+      void runtime.host.postMessage({ type: 'exportXlsx', payload, fileName });
     }
 
     return true;

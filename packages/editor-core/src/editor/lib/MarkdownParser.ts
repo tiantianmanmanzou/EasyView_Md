@@ -1,5 +1,5 @@
 /**
- * InLineMd Markdown Parser
+ * EasyView_Md Markdown Parser
  *
  * Converts Markdown text -> ProseMirror document using markdown-it + prosemirror-markdown.
  * Inspired by Outline's parser architecture with custom markdown-it plugins.
@@ -11,13 +11,13 @@ import markdownItDeflist from 'markdown-it-deflist';
 import { MarkdownParser } from 'prosemirror-markdown';
 import { DOMParser as PmDOMParser, type Node as ProsemirrorNode, Fragment } from 'prosemirror-model';
 import { schema } from '../EditorSchema';
-import { parseMarkdownWithFrontmatter } from './Frontmatter';
+import { parseMarkdownWithFrontmatter } from '@easyview/markdown-core/frontmatter';
 import { applyCustomRules } from './MarkdownItRules';
 import { applyTableRules } from './MarkdownTableRules';
 import { parseMarkdownWithHtmlTables } from './HtmlTableParser';
 import { tokenMapping } from './MarkdownTokenMapping';
-import { applyEasyViewTableMeta, stripEasyViewTableMeta } from './TableStyleMetadata';
-import { stripPandocHighlightMarkup } from '../../../shared/pandocHighlightMarkup';
+import { applyEasyViewTableMeta, stripEasyViewTableMeta } from '@easyview/markdown-core/table-style-metadata';
+import { stripPandocHighlightMarkup } from '@easyview/markdown-core/pandoc-highlight-markup';
 
 // ─── markdown-it instance ───────────────────────────────────────────────────
 
@@ -164,7 +164,7 @@ export function parseMarkdown(markdown: string, parser: MarkdownParser): Prosemi
   const t3 = performance.now();
 
   if (t2 - t0 > 5) {
-    console.log(`[InLineMd perf]     parseMarkdown breakdown: frontmatter=${(t1 - t0).toFixed(1)}ms, parser.parse=${(t2 - t1).toFixed(1)}ms, restoreHtmlCells=${(t3 - t2).toFixed(1)}ms`);
+    console.log(`[EasyView_Md perf]     parseMarkdown breakdown: frontmatter=${(t1 - t0).toFixed(1)}ms, parser.parse=${(t2 - t1).toFixed(1)}ms, restoreHtmlCells=${(t3 - t2).toFixed(1)}ms`);
   }
 
   // If no frontmatter, return as-is

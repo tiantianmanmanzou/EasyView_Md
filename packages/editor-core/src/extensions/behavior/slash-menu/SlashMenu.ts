@@ -9,20 +9,9 @@
 import { Plugin, PluginKey } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { defaultSlashItems } from './SlashMenuItems';
+import type { SlashMenuItem } from './SlashMenuTypes';
 
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-export interface SlashMenuItem {
-  id: string;
-  label: string;
-  icon: string;
-  keywords: string[];
-  /** Group for visual separators between categories */
-  group: string;
-  /** Receives the view and the range [parentStart, parentEnd] of the paragraph to replace */
-  command: (view: EditorView, parentStart: number, parentEnd: number) => void;
-}
+export type { SlashMenuItem } from './SlashMenuTypes';
 
 // ─── Slash Menu View (DOM) ──────────────────────────────────────────────────
 

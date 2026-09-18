@@ -28,9 +28,14 @@ export interface HistoryPanelDeps {
 export class HistoryPanel {
   private panel: HTMLElement;
   private contentEl: HTMLElement;
-  private deps: HistoryPanelDeps;
+  private deps: HistoryPanelDeps | null;
   private _visible = false;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private refreshTimers = new Set<ReturnType<typeof setTimeout>>();
+  private refreshFrames = new Set<number>();
+  private destroyed = false;
+  private readonly closeButton: HTMLButtonElement;
+  private readonly transitionListener: (event: TransitionEvent) => void;
 
   get visible() { return this._visible; }
 
@@ -46,7 +51,8 @@ export class HistoryPanel {
       <span class="history-panel-title">最近</span>
       <button class="history-panel-close" title="Close">&times;</button>
     `;
-    header.querySelector('.history-panel-close')!.addEventListener('click', () => this.close());
+    this.closeButton = header.querySelector('.history-panel-close') as HTMLButtonElement;
+    this.closeButton.addEventListener('click', this.handleCloseClick);
     this.panel.appendChild(header);
 
     this.contentEl = document.createElement('div');
@@ -58,8 +64,24 @@ export class HistoryPanel {
       editorBody.appendChild(this.panel);
     }
 
+    this.transitionListener = (event: TransitionEvent): void => {
+      const property = event.propertyName;
+      if (
+        property === 'width' ||
+        property === 'min-width' ||
+        property === 'margin-right' ||
+        property === 'padding-left' ||
+        property === 'padding-right'
+      ) {
+        this.notifyLayoutChange();
+      }
+    };
     this.attachPanelTransitionListener();
   }
+
+  private readonly handleCloseClick = (): void => {
+    this.close();
+  };
 
   private ensureStyles(): void {
     if (document.getElementById('easyview-history-panel-styles')) return;
@@ -156,63 +178,98 @@ export class HistoryPanel {
   }
 
   private scheduleLayoutChangeNotifications(): void {
-    const notify = () => this.notifyLayoutChange();
+    if (this.destroyed) return;
+
+    const notify = (): void => {
+      if (!this.destroyed) this.notifyLayoutChange();
+    };
     notify();
-    requestAnimationFrame(notify);
-    setTimeout(notify, 60);
-    setTimeout(notify, 220);
+
+    const frame = requestAnimationFrame(() => {
+      this.refreshFrames.delete(frame);
+      notify();
+    });
+    this.refreshFrames.add(frame);
+
+    for (const delay of [60, 220]) {
+      const timer = setTimeout(() => {
+        this.refreshTimers.delete(timer);
+        notify();
+      }, delay);
+      this.refreshTimers.add(timer);
+    }
   }
 
   private attachPanelTransitionListener(): void {
-    if (this.panel.dataset.easyviewLayoutBound === '1') return;
-    this.panel.dataset.easyviewLayoutBound = '1';
-    this.panel.addEventListener('transitionend', (event) => {
-      const property = event.propertyName;
-      if (
-        property === 'width' ||
-        property === 'min-width' ||
-        property === 'margin-right' ||
-        property === 'padding-left' ||
-        property === 'padding-right'
-      ) {
-        this.notifyLayoutChange();
-      }
-    });
+    this.panel.addEventListener('transitionend', this.transitionListener);
   }
 
-  open() {
+  open(): void {
+    if (this.destroyed) return;
     this._visible = true;
     this.panel.classList.remove('hidden');
     this.render();
-    this.refreshTimer = setInterval(() => this.render(), 500);
-    this.deps.onVisibilityChange?.(true);
+    if (this.refreshTimer === null) {
+      this.refreshTimer = setInterval(() => this.render(), 500);
+    }
+    this.deps?.onVisibilityChange?.(true);
     this.scheduleLayoutChangeNotifications();
   }
 
-  close() {
+  close(): void {
+    if (this.destroyed) return;
     this._visible = false;
     this.panel.classList.add('hidden');
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
-    this.deps.onVisibilityChange?.(false);
+    this.deps?.onVisibilityChange?.(false);
     this.scheduleLayoutChangeNotifications();
   }
 
-  toggle() {
+  toggle(): void {
+    if (this.destroyed) return;
     if (this._visible) this.close();
     else this.open();
   }
 
-  refresh() {
-    if (this._visible) this.render();
+  refresh(): void {
+    if (!this.destroyed && this._visible) this.render();
+  }
+
+  /** Release DOM nodes, timers, listeners, and host callbacks. */
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this._visible = false;
+
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    for (const timer of this.refreshTimers) {
+      clearTimeout(timer);
+    }
+    this.refreshTimers.clear();
+    for (const frame of this.refreshFrames) {
+      cancelAnimationFrame(frame);
+    }
+    this.refreshFrames.clear();
+
+    this.closeButton.removeEventListener('click', this.handleCloseClick);
+    this.panel.removeEventListener('transitionend', this.transitionListener);
+    this.contentEl.replaceChildren();
+    this.panel.remove();
+    this.deps = null;
   }
 
   private getDepths(): { undos: number; redos: number; isSource: boolean } {
-    const view = this.deps.getView();
-    const sourceView = this.deps.getSourceView();
-    const isSource = this.deps.getIsSourceMode();
+    const deps = this.deps;
+    if (!deps) return { undos: 0, redos: 0, isSource: false };
+    const view = deps.getView();
+    const sourceView = deps.getSourceView();
+    const isSource = deps.getIsSourceMode();
 
     if (isSource && sourceView) {
       return {
@@ -232,10 +289,11 @@ export class HistoryPanel {
   }
 
   private syncOperationLog(undos: number, redos: number, isSource: boolean): void {
-    this.deps.getOperationLog().sync(undos, redos, isSource ? 'source' : 'wysiwyg');
+    this.deps?.getOperationLog().sync(undos, redos, isSource ? 'source' : 'wysiwyg');
   }
 
   private undoSteps(steps: number): void {
+    if (this.destroyed || !this.deps) return;
     for (let index = 0; index < steps; index++) {
       this.deps.triggerUndo();
     }
@@ -243,13 +301,15 @@ export class HistoryPanel {
   }
 
   private redoSteps(steps: number): void {
+    if (this.destroyed || !this.deps) return;
     for (let index = 0; index < steps; index++) {
       this.deps.triggerRedo();
     }
     this.render();
   }
 
-  private render() {
+  private render(): void {
+    if (this.destroyed || !this.deps) return;
     const view = this.deps.getView();
     const dualHistory = this.deps.getDualHistory();
     const operationLog = this.deps.getOperationLog();
@@ -280,8 +340,7 @@ export class HistoryPanel {
     undoBtn.textContent = 'Undo';
     undoBtn.disabled = undos === 0;
     undoBtn.addEventListener('click', () => {
-      this.deps.triggerUndo();
-      this.render();
+      this.undoSteps(1);
     });
 
     const redoBtn = document.createElement('button');
@@ -289,8 +348,7 @@ export class HistoryPanel {
     redoBtn.textContent = 'Redo';
     redoBtn.disabled = redos === 0;
     redoBtn.addEventListener('click', () => {
-      this.deps.triggerRedo();
-      this.render();
+      this.redoSteps(1);
     });
 
     actionsEl.appendChild(undoBtn);

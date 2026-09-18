@@ -5,6 +5,7 @@
 import { toggleMark, setBlockType } from 'prosemirror-commands';
 import { wrapInList, liftListItem } from 'prosemirror-schema-list';
 import { TextSelection } from 'prosemirror-state';
+import type { EditorView } from 'prosemirror-view';
 import { schema } from '../../../editor/EditorSchema';
 import {
   type ToolbarButton,
@@ -15,7 +16,6 @@ import {
   liftFromNodeType,
   wrapInBlockSmart,
 } from '../../../editor/EditorCommands';
-import { linkEditPopup } from './ToolbarLinkPopup';
 import { htmlTagDropdown } from './ToolbarHtmlDropdown';
 import { hasMarkdownPatterns, interpretAsMarkdown } from './ToolbarMarkdownInterpreter';
 
@@ -37,7 +37,10 @@ function invokeWindowAction(action: 'copyOutlinePath' | 'copyFullPath'): boolean
 const PRIMARY_MODIFIER_LABEL = 'Ctrl';
 
 
-export const buttons: ToolbarButton[] = [
+export type LinkPopupToggle = (view: EditorView) => void;
+
+export function createToolbarButtons(toggleLink: LinkPopupToggle): ToolbarButton[] {
+  return [
   {
     id: 'bold',
     icon: '<svg fill="currentColor" width="20" height="20" viewBox="0 0 24 24"><path d="M18 15.4286C18 17.9533 16.2091 20 14 20H8C7.44772 20 7 19.4883 7 18.8571V5.14286C7 4.51167 7.44772 4 8 4H13C15.2091 4 17 6.0467 17 8.57143C17 9.69102 16.6478 10.7166 16.0632 11.5114C17.2239 12.3116 18 13.7665 18 15.4286ZM9 17.7143H14C15.1046 17.7143 16 16.6909 16 15.4286C16 14.1662 15.1046 13.1429 14 13.1429H9V17.7143ZM9 10.8571H13C14.1046 10.8571 15 9.83379 15 8.57143C15 7.30906 14.1046 6.28571 13 6.28571H9V10.8571Z"></path></svg>',
@@ -372,7 +375,7 @@ export const buttons: ToolbarButton[] = [
     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
     title: `Link (${PRIMARY_MODIFIER_LABEL}+K)`,
     command: (_state, _dispatch, view) => {
-      if (view) linkEditPopup.toggle(view);
+      if (view) toggleLink(view);
       return true;
     },
     isActive: (state) => isMarkActive(state, schema.marks.link),
@@ -495,3 +498,4 @@ export const buttons: ToolbarButton[] = [
     visible: (state) => hasMarkdownPatterns(state),
   },
 ];
+}

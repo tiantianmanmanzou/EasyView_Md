@@ -1818,9 +1818,12 @@ function applyKeywordBadge(cellContent: any[], color: BadgeColor, palette: PdfPa
   }
 }
 
+/** PDF body font supports U+00A0, while it does not contain U+2009 thin space. */
+const PDF_BADGE_PADDING = '\u00A0';
+
 function applyBadgeToTextNode(node: any, bg: string, fg: string): void {
   if (typeof node.text === 'string') {
-    node.text = `\u2009${node.text.trim()}\u2009`;
+    node.text = `${PDF_BADGE_PADDING}${node.text.trim()}${PDF_BADGE_PADDING}`;
     node.background = bg;
     node.color = fg;
     node.bold = true;
@@ -1831,14 +1834,14 @@ function applyBadgeToTextNode(node: any, bg: string, fg: string): void {
         // Can't modify string in-place; replace in array
         const idx = node.text.indexOf(seg);
         node.text[idx] = {
-          text: `\u2009${seg.trim()}\u2009`,
+          text: `${PDF_BADGE_PADDING}${seg.trim()}${PDF_BADGE_PADDING}`,
           background: bg,
           color: fg,
           bold: true,
           fontSize: 10,
         };
       } else if (seg && typeof seg === 'object' && typeof seg.text === 'string') {
-        seg.text = `\u2009${seg.text.trim()}\u2009`;
+        seg.text = `${PDF_BADGE_PADDING}${seg.text.trim()}${PDF_BADGE_PADDING}`;
         seg.background = bg;
         seg.color = fg;
         seg.bold = true;

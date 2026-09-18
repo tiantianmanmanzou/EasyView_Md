@@ -1,5 +1,5 @@
 /**
- * InLineMd Markdown Serializer
+ * EasyView_Md Markdown Serializer
  *
  * Converts ProseMirror document back to Markdown string.
  * Based on prosemirror-markdown's MarkdownSerializer with extensions
@@ -12,7 +12,23 @@ import {
   defaultMarkdownSerializer,
 } from 'prosemirror-markdown';
 import type { Node as ProsemirrorNode, Mark } from 'prosemirror-model';
-import { appendEasyViewTableMeta, collectEasyViewTableMeta } from './TableStyleMetadata';
+import { appendEasyViewTableMeta, collectEasyViewTableMeta } from '@easyview/markdown-core/table-style-metadata';
+
+/**
+ * While serializing content inside an HTML table cell, prefer GFM pipe tables
+ * for nested tables (ignore EasyView width/sticky/valign that would otherwise
+ * force nested HTML `<table>` output).
+ */
+let preferPipeTablesDepth = 0;
+
+function withPreferPipeTables<T>(fn: () => T): T {
+  preferPipeTablesDepth += 1;
+  try {
+    return fn();
+  } finally {
+    preferPipeTablesDepth -= 1;
+  }
+}
 
 // ─── Node Serializers ──────────────────────────────────────────────────────
 
@@ -128,7 +144,8 @@ function serializeTableAsHtml(state: MarkdownSerializerState, node: ProsemirrorN
 
   function renderCellHtml(cell: ProsemirrorNode, tag: string, cellAttrs: string): string {
     const cellDoc = cell.type.schema.node('doc', null, cell.content.content);
-    const cellMd = serializer.serialize(cellDoc).trim();
+    // Nested tables inside HTML cells are saved as GFM pipe markdown.
+    const cellMd = withPreferPipeTables(() => serializer.serialize(cellDoc).trim());
     const hasBlockContent = cellHasBlockContent(cell);
 
     if (!cellMd) {
@@ -193,7 +210,10 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
   // Determine column count from first row
   const colCount = rows[0].childCount;
 
-  // Check if any cell has complex content → use HTML table format
+  // Check if any cell has complex content → use HTML table format.
+  // Nested tables (inside HTML cells) prefer GFM pipe markdown and ignore
+  // EasyView-only layout attrs that would otherwise force nested HTML tables.
+  const preferPipe = preferPipeTablesDepth > 0;
   let hasComplex = false;
   let hasManualWidths = false;
   let hasVerticalAlignments = false;
@@ -217,7 +237,7 @@ function serializeTable(state: MarkdownSerializerState, node: ProsemirrorNode) {
     }
   }
 
-  if (hasComplex || hasManualWidths || hasVerticalAlignments || hasStickyRows) {
+  if (hasComplex || (!preferPipe && (hasManualWidths || hasVerticalAlignments || hasStickyRows))) {
     serializeTableAsHtml(state, node, rows);
     return;
   }
@@ -707,5 +727,16 @@ export function docToMarkdown(doc: ProsemirrorNode): string {
       serializer.serialize(doc, { tightLists: true }),
       collectEasyViewTableMeta(doc),
     ),
+  );
+}
+
+/**
+ * Serialize a table cell's content to Markdown. Nested tables prefer GFM pipe
+ * format (same as when saving nested tables inside HTML cells).
+ */
+export function cellContentToMarkdown(cell: ProsemirrorNode): string {
+  const cellDoc = cell.type.schema.node('doc', null, cell.content.content);
+  return withPreferPipeTables(() =>
+    serializer.serialize(cellDoc, { tightLists: true }).trim(),
   );
 }

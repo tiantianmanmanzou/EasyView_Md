@@ -8,6 +8,7 @@
 
 import type { EditorView } from 'prosemirror-view';
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
+import { createEditorDomContext, type EditorDomContext } from '../../../runtime/editorDomContext';
 import { TextSelection } from 'prosemirror-state';
 import scrollIntoView from 'scroll-into-view-if-needed';
 
@@ -21,6 +22,40 @@ interface HeadingEntry {
 }
 
 type TocDropPlacement = 'before' | 'after';
+
+interface TocExpandState {
+  collapsedHeadingKeys: string[];
+  expandedHeadingKeys: string[];
+  collapsedTablePathKeys: string[];
+  expandedTablePathKeys: string[];
+  maxVisibleLevel: number | null;
+}
+
+const TOC_EXPAND_KEY_PREFIX = 'easyview-toc-expand:';
+const TOC_PATH_SEP = '\u0001';
+
+/** Stable outline key: ancestor `level:text` chain with sibling-occurrence disambiguation. */
+function buildHeadingPosToKey(headings: HeadingEntry[]): Map<number, string> {
+  const posToKey = new Map<number, string>();
+  const stack: Array<{ level: number; key: string }> = [];
+  const siblingCounts = new Map<string, number>();
+
+  for (const heading of headings) {
+    while (stack.length > 0 && stack[stack.length - 1].level >= heading.level) {
+      stack.pop();
+    }
+    const parentKey = stack.length > 0 ? stack[stack.length - 1].key : '';
+    const segment = `${heading.level}:${heading.text}`;
+    const countKey = parentKey ? `${parentKey}${TOC_PATH_SEP}${segment}` : segment;
+    const occurrence = siblingCounts.get(countKey) ?? 0;
+    siblingCounts.set(countKey, occurrence + 1);
+    const disambiguated = occurrence === 0 ? segment : `${segment}#${occurrence}`;
+    const key = parentKey ? `${parentKey}${TOC_PATH_SEP}${disambiguated}` : disambiguated;
+    posToKey.set(heading.pos, key);
+    stack.push({ level: heading.level, key });
+  }
+  return posToKey;
+}
 
 function getHeadingSectionEnd(doc: ProsemirrorNode, headingPos: number, level: number): number {
   const headingNode = doc.nodeAt(headingPos);
@@ -50,9 +85,12 @@ export class TableOfContents {
   private filterInput: HTMLInputElement | null = null;
   private levelButtons: Array<{ level: number; el: HTMLButtonElement }> = [];
   private levelToggleBtn: HTMLButtonElement | null = null;
+  private tableModeToggleBtn: HTMLButtonElement | null = null;
+  private tableMode: boolean;
   private maxVisibleLevel: number | null = null; // null = show all levels
-  private collapsedHeadingPos = new Set<number>();
-  private expandedHeadingPos = new Set<number>();
+  private collapsedHeadingKeys = new Set<string>();
+  private expandedHeadingKeys = new Set<string>();
+  private headingPosToKey = new Map<number, string>();
   private headings: HeadingEntry[] = [];
   private filterText = '';
   private isVisible = false;
@@ -70,10 +108,172 @@ export class TableOfContents {
   private sourceScrollHandler: (() => void) | null = null;
   private sourceGetActivePos: (() => number) | null = null;
   private visibleHeadingPosSet = new Set<number>();
+  private tableTreeRows: Array<{ path: string[]; row: HTMLTableRowElement }> = [];
+  private activeTablePathKey: string | null = null;
+  private clickedTablePathKey: string | null = null;
+  private collapsedTablePathKeys = new Set<string>();
+  private expandedTablePathKeys = new Set<string>();
+  private sidebarWidth: number;
+  private resizer: HTMLElement | null = null;
+  private isResizingSidebar = false;
+  private currentFilePath = '';
 
-  constructor(view: EditorView) {
+  private loadTableMode(): boolean {
+    try {
+      const saved = this.dom.window.localStorage.getItem('easyview-toc-mode');
+      return saved === null ? true : saved === 'table';
+    } catch {
+      return true;
+    }
+  }
+
+  private saveTableMode(): void {
+    try {
+      this.dom.window.localStorage.setItem('easyview-toc-mode', this.tableMode ? 'table' : 'normal');
+    } catch {
+      // Webview storage can be unavailable in restricted environments.
+    }
+  }
+
+  private static readonly TOC_WIDTH_MIN = 180;
+  private static readonly TOC_WIDTH_MAX = 560;
+  private static readonly TOC_WIDTH_DEFAULT = 256;
+
+  private loadSidebarWidth(): number {
+    try {
+      const saved = Number(this.dom.window.localStorage.getItem('easyview-toc-width'));
+      if (Number.isFinite(saved) && saved >= TableOfContents.TOC_WIDTH_MIN && saved <= TableOfContents.TOC_WIDTH_MAX) {
+        return Math.round(saved);
+      }
+    } catch {
+      // Webview storage can be unavailable in restricted environments.
+    }
+    return TableOfContents.TOC_WIDTH_DEFAULT;
+  }
+
+  private saveSidebarWidth(): void {
+    try {
+      this.dom.window.localStorage.setItem('easyview-toc-width', String(this.sidebarWidth));
+    } catch {
+      // Webview storage can be unavailable in restricted environments.
+    }
+  }
+
+  private expandStorageKey(filePath = this.currentFilePath): string {
+    return `${TOC_EXPAND_KEY_PREFIX}${filePath}`;
+  }
+
+  private clearExpandStateInMemory(): void {
+    this.collapsedHeadingKeys.clear();
+    this.expandedHeadingKeys.clear();
+    this.collapsedTablePathKeys.clear();
+    this.expandedTablePathKeys.clear();
+    this.maxVisibleLevel = null;
+  }
+
+  private saveExpandState(): void {
+    if (!this.currentFilePath) return;
+    const payload: TocExpandState = {
+      collapsedHeadingKeys: [...this.collapsedHeadingKeys],
+      expandedHeadingKeys: [...this.expandedHeadingKeys],
+      collapsedTablePathKeys: [...this.collapsedTablePathKeys],
+      expandedTablePathKeys: [...this.expandedTablePathKeys],
+      maxVisibleLevel: this.maxVisibleLevel,
+    };
+    const isDefault =
+      payload.collapsedHeadingKeys.length === 0
+      && payload.expandedHeadingKeys.length === 0
+      && payload.collapsedTablePathKeys.length === 0
+      && payload.expandedTablePathKeys.length === 0
+      && payload.maxVisibleLevel === null;
+    try {
+      if (isDefault) {
+        this.dom.window.localStorage.removeItem(this.expandStorageKey());
+      } else {
+        this.dom.window.localStorage.setItem(this.expandStorageKey(), JSON.stringify(payload));
+      }
+    } catch {
+      // Webview storage can be unavailable in restricted environments.
+    }
+  }
+
+  private loadExpandState(): void {
+    this.clearExpandStateInMemory();
+    if (!this.currentFilePath) return;
+    try {
+      const raw = this.dom.window.localStorage.getItem(this.expandStorageKey());
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<TocExpandState>;
+      if (Array.isArray(parsed.collapsedHeadingKeys)) {
+        parsed.collapsedHeadingKeys.forEach((key) => {
+          if (typeof key === 'string') this.collapsedHeadingKeys.add(key);
+        });
+      }
+      if (Array.isArray(parsed.expandedHeadingKeys)) {
+        parsed.expandedHeadingKeys.forEach((key) => {
+          if (typeof key === 'string') this.expandedHeadingKeys.add(key);
+        });
+      }
+      if (Array.isArray(parsed.collapsedTablePathKeys)) {
+        parsed.collapsedTablePathKeys.forEach((key) => {
+          if (typeof key === 'string') this.collapsedTablePathKeys.add(key);
+        });
+      }
+      if (Array.isArray(parsed.expandedTablePathKeys)) {
+        parsed.expandedTablePathKeys.forEach((key) => {
+          if (typeof key === 'string') this.expandedTablePathKeys.add(key);
+        });
+      }
+      if (
+        parsed.maxVisibleLevel === null
+        || (typeof parsed.maxVisibleLevel === 'number'
+          && Number.isInteger(parsed.maxVisibleLevel)
+          && parsed.maxVisibleLevel >= 1
+          && parsed.maxVisibleLevel <= 5)
+      ) {
+        this.maxVisibleLevel = parsed.maxVisibleLevel ?? null;
+      }
+    } catch {
+      this.clearExpandStateInMemory();
+    }
+  }
+
+  private rebuildHeadingKeyMap(): void {
+    this.headingPosToKey = buildHeadingPosToKey(this.headings);
+  }
+
+  private headingKeyForPos(pos: number): string | null {
+    return this.headingPosToKey.get(pos) ?? null;
+  }
+
+  private isHeadingCollapsed(pos: number): boolean {
+    const key = this.headingKeyForPos(pos);
+    return key !== null && this.collapsedHeadingKeys.has(key);
+  }
+
+  private isHeadingExpanded(pos: number): boolean {
+    const key = this.headingKeyForPos(pos);
+    return key !== null && this.expandedHeadingKeys.has(key);
+  }
+
+  private applySidebarWidth(width = this.sidebarWidth): void {
+    this.sidebarWidth = Math.max(
+      TableOfContents.TOC_WIDTH_MIN,
+      Math.min(TableOfContents.TOC_WIDTH_MAX, Math.round(width)),
+    );
+    if (!this.sidebar || this.sidebar.classList.contains('hidden')) return;
+    this.sidebar.style.width = `${this.sidebarWidth}px`;
+    this.sidebar.style.minWidth = `${this.sidebarWidth}px`;
+  }
+
+  private readonly dom: EditorDomContext;
+
+  constructor(view: EditorView, private readonly options: { position?: 'left' | 'right'; dom?: EditorDomContext } = {}) {
     this.view = view;
-    this.scrollAreaEl = document.getElementById('editor-scroll-area');
+    this.dom = options.dom ?? createEditorDomContext();
+    this.tableMode = this.loadTableMode();
+    this.sidebarWidth = this.loadSidebarWidth();
+    this.scrollAreaEl = this.dom.getById('editor-scroll-area');
     this.ensureStyles();
     this.createSidebar();
     this.attachScrollListener();
@@ -84,17 +284,52 @@ export class TableOfContents {
   }
 
   private ensureStyles(): void {
-    if (document.getElementById('easyview-toc-tree-styles')) return;
-    const style = document.createElement('style');
+    if (this.dom.getById('easyview-toc-tree-styles')) return;
+    const style = this.dom.document.createElement('style');
     style.id = 'easyview-toc-tree-styles';
     style.textContent = `
       .toc-sidebar {
+        position: relative;
         transition:
           width 0.2s ease,
           min-width 0.2s ease,
           opacity 0.2s ease,
           padding 0.2s ease,
           border-color 0.2s ease;
+      }
+
+      .toc-sidebar.resizing {
+        transition: none !important;
+        user-select: none;
+      }
+
+      .toc-sidebar-resizer {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 6px;
+        height: 100%;
+        cursor: col-resize;
+        z-index: 6;
+        touch-action: none;
+      }
+      .toc-sidebar-right .toc-sidebar-resizer { left: 0; right: auto; }
+
+      .toc-sidebar-resizer::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 2px;
+        width: 2px;
+        border-radius: 999px;
+        background: transparent;
+        transition: background 120ms ease;
+      }
+
+      .toc-sidebar-resizer:hover::after,
+      .toc-sidebar.resizing .toc-sidebar-resizer::after {
+        background: var(--mdpre-accent, var(--vscode-focusBorder, #409eff));
       }
 
       .toc-sidebar.hidden {
@@ -150,6 +385,26 @@ export class TableOfContents {
         white-space: nowrap;
         cursor: pointer;
       }
+      .toc-item-level {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        min-width: 22px;
+        height: 16px;
+        padding: 0 5px;
+        border-radius: 4px;
+        border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .28));
+        background: color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent);
+        color: var(--vscode-descriptionForeground, #8a8a8a);
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: .02em;
+        line-height: 1;
+        pointer-events: none;
+        user-select: none;
+      }
       .toc-item-actions {
         display: inline-flex;
         align-items: center;
@@ -188,6 +443,81 @@ export class TableOfContents {
       .toc-item-drag-handle:active {
         cursor: grabbing;
       }
+      .toc-table-controls { display:flex; align-items:center; justify-content:center; padding:8px 12px 10px; }
+      .toc-table-mode-group { display:grid; grid-template-columns:1fr 1fr; width:min(100%, 224px); align-items:stretch; border:1px solid var(--vscode-input-border,rgba(128,128,128,.3)); border-radius:8px; overflow:hidden; background:var(--vscode-input-background,rgba(128,128,128,.12)); }
+      .toc-table-mode-option { height:30px; min-width:0; padding:0 12px; border:0; border-right:1px solid var(--vscode-input-border,rgba(128,128,128,.3)); background:transparent; color:var(--vscode-editor-foreground,#ccc); cursor:pointer; font:inherit; font-size:12px; font-weight:600; }
+      .toc-table-mode-option:last-child { border-right:0; }
+      .toc-table-mode-option.active {
+        background: var(--mdpre-accent, var(--vscode-button-background, #65aaf5));
+        color: var(--vscode-button-foreground, #fff);
+      }
+      .toc-table-item {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 4px;
+      }
+      .toc-table-node {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+        min-width: 0;
+        padding: 4px 8px 4px 4px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--vscode-foreground, #ccc);
+        text-align: left;
+        cursor: pointer;
+        font: inherit;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .toc-table-node:hover {
+        background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .1));
+      }
+      .toc-table-node.active {
+        background: var(--mdpre-accent-soft, var(--vscode-list-activeSelectionBackground, rgba(64, 128, 208, .14)));
+        color: var(--mdpre-accent-text, var(--mdpre-accent, var(--vscode-list-activeSelectionForeground, var(--vscode-textLink-foreground, #4080d0))));
+        font-weight: 600;
+      }
+      .toc-table-node.active .toc-table-node-count {
+        color: inherit;
+        opacity: 0.72;
+      }
+      .toc-table-node-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+        margin-left: 4px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--vscode-descriptionForeground, #888);
+        cursor: pointer;
+        font: inherit;
+        font-size: 16px;
+        line-height: 1;
+      }
+      .toc-table-node-toggle:hover:not(:disabled) {
+        color: var(--mdpre-accent, var(--vscode-textLink-foreground, #4080d0));
+        background: color-mix(in srgb, var(--mdpre-accent, var(--vscode-focusBorder, #409eff)) 14%, transparent);
+      }
+      .toc-table-node-toggle.empty {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .toc-table-item[data-depth="1"] .toc-table-node-toggle { margin-left: 4px; }
+      .toc-table-item[data-depth="2"] .toc-table-node-toggle { margin-left: 16px; }
+      .toc-table-item[data-depth="3"] .toc-table-node-toggle { margin-left: 28px; }
+      .toc-table-item[data-depth="4"] .toc-table-node-toggle { margin-left: 40px; }
+      .toc-table-node-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; } .toc-table-node-count { color:var(--vscode-descriptionForeground,#888); font-size:10px; }
+      .toc-table-empty { padding:16px 12px; color:var(--vscode-descriptionForeground,#888); font-size:12px; }
+      .toc-table-row-match { outline:2px solid var(--mdpre-accent,var(--vscode-focusBorder,#409eff)); outline-offset:-2px; }
       .toc-item-delete svg,
       .toc-item-drag-handle svg {
         width: 13px;
@@ -199,19 +529,46 @@ export class TableOfContents {
         stroke-linejoin: round;
       }
     `;
-    document.head.appendChild(style);
+    this.dom.document.head.appendChild(style);
   }
 
   // ─── DOM Creation ────────────────────────────────────────────────────
 
   private createSidebar(): void {
-    this.sidebar = document.createElement('div');
-    this.sidebar.className = 'toc-sidebar hidden';
+    this.sidebar = this.dom.document.createElement('div');
+    this.sidebar.className = `toc-sidebar hidden toc-sidebar-${this.options.position ?? 'left'}`;
 
-    // Top controls: show heading levels H1 through H5.
-    const controls = document.createElement('div');
+    // Top controls: choose the outline data source.
+    const tableControls = this.dom.document.createElement('div');
+    tableControls.className = 'toc-table-controls';
+    const modeGroup = this.dom.document.createElement('div');
+    modeGroup.className = 'toc-table-mode-group';
+    const detailModeBtn = this.dom.document.createElement('button');
+    detailModeBtn.type = 'button';
+    detailModeBtn.className = 'toc-table-mode-option';
+    detailModeBtn.textContent = '全文目录';
+    detailModeBtn.addEventListener('click', () => {
+      this.tableMode = false;
+      this.refreshTableModeControl();
+      this.renderList();
+    });
+    this.tableModeToggleBtn = this.dom.document.createElement('button');
+    this.tableModeToggleBtn.type = 'button';
+    this.tableModeToggleBtn.className = 'toc-table-mode-option';
+    this.tableModeToggleBtn.textContent = '表格目录';
+    this.tableModeToggleBtn.addEventListener('click', () => {
+      this.tableMode = true;
+      this.refreshTableModeControl();
+      this.renderList();
+    });
+    modeGroup.append(detailModeBtn, this.tableModeToggleBtn);
+    tableControls.append(modeGroup);
+    this.sidebar.appendChild(tableControls);
+    this.refreshTableModeControl();
+
+    const controls = this.dom.document.createElement('div');
     controls.className = 'toc-level-controls';
-    this.levelToggleBtn = document.createElement('button');
+    this.levelToggleBtn = this.dom.document.createElement('button');
     this.levelToggleBtn.className = 'toc-level-btn toc-level-toggle-btn active';
     this.levelToggleBtn.addEventListener('click', () => {
       // Toggle between "show all" and "collapsed to H1".
@@ -222,6 +579,7 @@ export class TableOfContents {
       }
       this.refreshLevelControls();
       this.renderList();
+      this.saveExpandState();
     });
     controls.appendChild(this.levelToggleBtn);
 
@@ -233,7 +591,7 @@ export class TableOfContents {
       { level: 5, label: 'H5', title: 'Show level 1-5 headings' },
     ];
     levelOptions.forEach((option) => {
-      const btn = document.createElement('button');
+      const btn = this.dom.document.createElement('button');
       btn.className = 'toc-level-btn';
       if (option.level === this.maxVisibleLevel) {
         btn.classList.add('active');
@@ -245,6 +603,7 @@ export class TableOfContents {
         this.maxVisibleLevel = this.maxVisibleLevel === option.level ? null : option.level;
         this.refreshLevelControls();
         this.renderList();
+        this.saveExpandState();
       });
       controls.appendChild(btn);
       this.levelButtons.push({ level: option.level, el: btn });
@@ -253,22 +612,22 @@ export class TableOfContents {
     this.refreshLevelControls();
 
     // List
-    this.tocList = document.createElement('ul');
+    this.tocList = this.dom.document.createElement('ul');
     this.tocList.className = 'toc-list';
     this.sidebar.appendChild(this.tocList);
 
-    this.statusBar = document.createElement('div');
+    this.statusBar = this.dom.document.createElement('div');
     this.statusBar.className = 'toc-status-bar';
 
-    this.statusTotalChars = document.createElement('span');
+    this.statusTotalChars = this.dom.document.createElement('span');
     this.statusTotalChars.className = 'toc-status-item';
     this.statusBar.appendChild(this.statusTotalChars);
 
-    this.statusLine = document.createElement('span');
+    this.statusLine = this.dom.document.createElement('span');
     this.statusLine.className = 'toc-status-item';
     this.statusBar.appendChild(this.statusLine);
 
-    this.statusSelectedChars = document.createElement('span');
+    this.statusSelectedChars = this.dom.document.createElement('span');
     this.statusSelectedChars.className = 'toc-status-item';
     this.statusBar.appendChild(this.statusSelectedChars);
 
@@ -279,17 +638,64 @@ export class TableOfContents {
       selectedChars: 0,
     });
 
-    // Insert into #editor-body before #editor-scroll-area
-    const editorBody = document.getElementById('editor-body');
+    this.resizer = this.dom.document.createElement('div');
+    this.resizer.className = 'toc-sidebar-resizer';
+    this.resizer.title = 'Drag to resize outline';
+    this.resizer.addEventListener('pointerdown', (event) => this.beginSidebarResize(event));
+    this.sidebar.appendChild(this.resizer);
+    this.applySidebarWidth();
+
+    // Insert beside the editor scroll area in the configured host position.
+    const editorBody = this.dom.getById('editor-body');
     if (editorBody && this.scrollAreaEl) {
-      editorBody.insertBefore(this.sidebar, this.scrollAreaEl);
+      if (this.options.position === 'right') editorBody.appendChild(this.sidebar);
+      else editorBody.insertBefore(this.sidebar, this.scrollAreaEl);
     }
 
     this.attachSidebarTransitionListener();
   }
 
+  private beginSidebarResize(event: PointerEvent): void {
+    if (!this.sidebar || !this.resizer || this.sidebar.classList.contains('hidden')) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidth = this.sidebar.getBoundingClientRect().width;
+    this.isResizingSidebar = true;
+    this.sidebar.classList.add('resizing');
+    this.resizer.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const direction = this.options.position === 'right' ? -1 : 1;
+      const nextWidth = startWidth + direction * (moveEvent.clientX - startX);
+      this.applySidebarWidth(nextWidth);
+      this.notifyLayoutChange();
+    };
+
+    const onUp = (upEvent: PointerEvent) => {
+      this.isResizingSidebar = false;
+      this.sidebar?.classList.remove('resizing');
+      try {
+        this.resizer?.releasePointerCapture(upEvent.pointerId);
+      } catch {
+        // Pointer may already be released by the browser.
+      }
+      this.resizer?.removeEventListener('pointermove', onMove);
+      this.resizer?.removeEventListener('pointerup', onUp);
+      this.resizer?.removeEventListener('pointercancel', onUp);
+      this.saveSidebarWidth();
+      this.dom.eventTarget.dispatchEvent(new CustomEvent('easyview-toc-width-change', { detail: this.sidebarWidth }));
+      this.scheduleLayoutChangeNotifications();
+    };
+
+    this.resizer.addEventListener('pointermove', onMove);
+    this.resizer.addEventListener('pointerup', onUp);
+    this.resizer.addEventListener('pointercancel', onUp);
+  }
+
   private notifyLayoutChange(): void {
-    window.dispatchEvent(new CustomEvent('easyview-toc-layout-change'));
+    this.dom.eventTarget.dispatchEvent(new CustomEvent('easyview-toc-layout-change'));
   }
 
   private scheduleLayoutChangeNotifications(): void {
@@ -349,15 +755,23 @@ export class TableOfContents {
     if (!this.tocList) return;
 
     this.tocList.innerHTML = '';
+    if (this.tableMode) {
+      this.renderTableTree();
+      return;
+    }
 
-    const headingPosSet = new Set(this.headings.map((h) => h.pos));
-    // Drop stale state for headings no longer present.
-    this.collapsedHeadingPos.forEach((pos) => {
-      if (!headingPosSet.has(pos)) this.collapsedHeadingPos.delete(pos);
-    });
-    this.expandedHeadingPos.forEach((pos) => {
-      if (!headingPosSet.has(pos)) this.expandedHeadingPos.delete(pos);
-    });
+    this.rebuildHeadingKeyMap();
+    // Only prune after real headings exist. An empty tree (e.g. mid file-switch)
+    // must not wipe freshly restored expand keys.
+    if (this.headings.length > 0) {
+      const headingKeySet = new Set(this.headingPosToKey.values());
+      this.collapsedHeadingKeys.forEach((key) => {
+        if (!headingKeySet.has(key)) this.collapsedHeadingKeys.delete(key);
+      });
+      this.expandedHeadingKeys.forEach((key) => {
+        if (!headingKeySet.has(key)) this.expandedHeadingKeys.delete(key);
+      });
+    }
 
     const visibleByTree = this.computeVisibleHeadings();
     this.visibleHeadingPosSet = new Set(visibleByTree.map((h) => h.pos));
@@ -367,7 +781,7 @@ export class TableOfContents {
       : visibleByTree;
 
     if (filtered.length === 0) {
-      const empty = document.createElement('li');
+      const empty = this.dom.document.createElement('li');
       empty.className = 'toc-empty';
       empty.textContent = this.filterText ? 'No matches' : 'No headings found';
       this.tocList.appendChild(empty);
@@ -389,15 +803,15 @@ export class TableOfContents {
       const current = this.headings[i];
       let hasChildren = false;
       let hasChildrenBeyondMax = false;
+      // The first deeper heading is the next-level child. Only that level is
+      // revealed by expanding this node; deeper descendants belong to the
+      // child node and must be expanded separately.
       for (let j = i + 1; j < this.headings.length; j++) {
         const next = this.headings[j];
         if (next.level <= current.level) break;
         hasChildren = true;
-        if (this.maxVisibleLevel !== null && next.level > this.maxVisibleLevel) {
-          hasChildrenBeyondMax = true;
-          // Found at least one descendant hidden by level mode; no need to keep scanning.
-          break;
-        }
+        hasChildrenBeyondMax = this.maxVisibleLevel !== null && next.level > this.maxVisibleLevel;
+        break;
       }
       hasChildrenMap.set(current.pos, hasChildren);
       hasChildrenBeyondMaxMap.set(current.pos, hasChildrenBeyondMax);
@@ -408,13 +822,13 @@ export class TableOfContents {
       const hasChildren = hasChildrenMap.get(heading.pos) ?? false;
       const hasChildrenBeyondMax = hasChildrenBeyondMaxMap.get(heading.pos) ?? false;
 
-      const item = document.createElement('li');
+      const item = this.dom.document.createElement('li');
       item.className = 'toc-item';
       item.setAttribute('data-level', String(heading.level - adjustment));
       item.setAttribute('data-pos', String(heading.pos));
       item.title = heading.text;
 
-      const toggleBtn = document.createElement('button');
+      const toggleBtn = this.dom.document.createElement('button');
       toggleBtn.className = 'toc-item-toggle';
       if (!hasChildren) {
         toggleBtn.classList.add('empty');
@@ -422,46 +836,34 @@ export class TableOfContents {
         toggleBtn.textContent = '';
         toggleBtn.title = 'No child headings';
       } else {
-        const explicitCollapsed = this.collapsedHeadingPos.has(heading.pos);
+        const explicitCollapsed = this.isHeadingCollapsed(heading.pos);
         const levelCollapsed = this.maxVisibleLevel !== null
           && hasChildrenBeyondMax
-          && !this.expandedHeadingPos.has(heading.pos);
+          && !this.isHeadingExpanded(heading.pos);
         const isCollapsed = explicitCollapsed || levelCollapsed;
         toggleBtn.textContent = isCollapsed ? '▸' : '▾';
         toggleBtn.title = isCollapsed ? 'Expand children' : 'Collapse children';
         toggleBtn.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          const explicitCollapsedNow = this.collapsedHeadingPos.has(heading.pos);
-          const expandedOverrideNow = this.expandedHeadingPos.has(heading.pos);
-          const levelCollapsedNow = this.maxVisibleLevel !== null
-            && hasChildrenBeyondMax
-            && !expandedOverrideNow;
-
-          if (explicitCollapsedNow) {
-            this.collapsedHeadingPos.delete(heading.pos);
-          } else if (levelCollapsedNow) {
-            this.expandedHeadingPos.add(heading.pos);
-            this.collapsedHeadingPos.delete(heading.pos);
-          } else if (expandedOverrideNow) {
-            this.expandedHeadingPos.delete(heading.pos);
-          } else {
-            this.collapsedHeadingPos.add(heading.pos);
-            this.expandedHeadingPos.delete(heading.pos);
-          }
-          this.renderList();
+          this.toggleHeadingCollapse(heading.pos, hasChildrenBeyondMax);
         });
       }
 
-      const text = document.createElement('span');
+      const text = this.dom.document.createElement('span');
       text.className = 'toc-item-text';
       text.textContent = heading.text || '(empty)';
       text.title = heading.text;
 
-      const actions = document.createElement('span');
+      const levelTag = this.dom.document.createElement('span');
+      levelTag.className = 'toc-item-level';
+      levelTag.textContent = `H${heading.level}`;
+      levelTag.setAttribute('aria-hidden', 'true');
+
+      const actions = this.dom.document.createElement('span');
       actions.className = 'toc-item-actions';
 
-      const dragBtn = document.createElement('button');
+      const dragBtn = this.dom.document.createElement('button');
       dragBtn.type = 'button';
       dragBtn.className = 'toc-item-action toc-item-drag-handle';
       dragBtn.title = actionsDisabled ? 'Move is available in EasyView mode only' : 'Drag to move this heading section';
@@ -488,7 +890,7 @@ export class TableOfContents {
         this.clearDropIndicators();
       });
 
-      const deleteBtn = document.createElement('button');
+      const deleteBtn = this.dom.document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'toc-item-action toc-item-delete';
       deleteBtn.title = actionsDisabled ? 'Delete is available in EasyView mode only' : 'Delete this heading and its content';
@@ -506,10 +908,18 @@ export class TableOfContents {
 
       item.appendChild(toggleBtn);
       item.appendChild(text);
+      item.appendChild(levelTag);
       item.appendChild(actions);
 
       item.addEventListener('click', (e) => {
         e.preventDefault();
+        // Clicking a visible heading must also be able to expand its hidden
+        // descendants when any H-level mode limits the rendered depth. Keep this
+        // behavior consistent with the table-mode tree, while preserving the
+        // existing click-to-navigate behavior.
+        if (hasChildren) {
+          this.toggleHeadingCollapse(heading.pos, hasChildrenBeyondMax);
+        }
         if (this.sourceClickHandler) {
           // Lock active heading to clicked one (same as scrollToHeading does for WYSIWYG)
           this.clickedPos = heading.pos;
@@ -558,6 +968,293 @@ export class TableOfContents {
     });
 
     this.highlightActiveHeading();
+  }
+
+  private refreshTableModeControl(): void {
+    if (!this.tableModeToggleBtn) return;
+    this.saveTableMode();
+    this.tableModeToggleBtn.textContent = '表格目录';
+    this.tableModeToggleBtn.setAttribute('role', 'switch');
+    this.tableModeToggleBtn.setAttribute('aria-checked', String(this.tableMode));
+    this.tableModeToggleBtn.classList.toggle('active', this.tableMode);
+    const detailModeBtn = this.tableModeToggleBtn.parentElement?.firstElementChild as HTMLButtonElement | null;
+    if (detailModeBtn) detailModeBtn.textContent = '全文目录';
+    detailModeBtn?.classList.toggle('active', !this.tableMode);
+    this.tableModeToggleBtn.title = this.tableMode ? '显示文档标题目录' : '显示文档第一个表格目录树';
+  }
+
+  private renderTableTree(): void {
+    if (!this.tocList) return;
+    this.activeTablePathKey = null;
+    const table = (this.view.dom.matches('table') ? this.view.dom : this.view.dom.querySelector('table'))
+      ?? this.dom.query('#editor .ProseMirror table')
+      ?? this.dom.query('.ProseMirror table');
+    const tableElement = table as HTMLTableElement | null;
+    if (!tableElement) {
+      const empty = this.dom.document.createElement('li');
+      empty.className = 'toc-table-empty';
+      empty.textContent = '正在加载表格…';
+      this.tocList.appendChild(empty);
+      // NodeViews can mount after the editor transaction that opens the sidebar.
+      // Retry once after layout without changing the existing document model.
+      setTimeout(() => { if (this.isVisible && this.tableMode) this.renderList(); }, 120);
+      return;
+    }
+    const rows = Array.from(tableElement.rows).slice(1);
+    const headers = Array.from(tableElement.rows[0]?.cells ?? []).map(cell => cell.textContent?.trim() ?? '');
+    const logicalColumnCount = Math.max(
+      headers.length,
+      ...rows.map(row => Array.from(row.cells).reduce((total, cell) => total + Math.max(1, cell.colSpan || 1), 0)),
+    );
+    const depth = Math.min(4, logicalColumnCount);
+    const tree = new Map<string, { path: string[]; childCount: number; itemCount: number }>();
+    this.tableTreeRows = [];
+    // Reconstruct the logical grid so rowspan cells continue to label every
+    // following data row instead of shifting later columns to the left.
+    const occupied: Array<Array<string | undefined>> = [];
+    rows.forEach((row, rowIndex) => {
+      const logical: string[] = [];
+      let column = 0;
+      Array.from(row.cells).forEach(cell => {
+        while (occupied[rowIndex]?.[column] !== undefined) column += 1;
+        const text = cell.textContent?.trim() ?? '';
+        const colspan = Math.max(1, cell.colSpan || 1);
+        const rowspan = Math.max(1, cell.rowSpan || 1);
+        for (let r = 0; r < rowspan; r++) {
+          const targetRow = rowIndex + r;
+          if (!occupied[targetRow]) occupied[targetRow] = [];
+          for (let c = 0; c < colspan; c++) occupied[targetRow][column + c] = text;
+        }
+        column += colspan;
+      });
+      for (let i = 0; i < depth; i++) logical.push(occupied[rowIndex]?.[i] ?? '');
+      while (logical.length && !logical[logical.length - 1]) logical.pop();
+      if (!logical.length) return;
+      this.tableTreeRows.push({ path: logical, row });
+      logical.forEach((_, index) => {
+        const key = logical.slice(0, index + 1).join('\u0001');
+        if (!tree.has(key)) tree.set(key, { path: logical.slice(0, index + 1), childCount: 0, itemCount: 0 });
+      });
+    });
+    tree.forEach((node, key) => {
+      node.itemCount = this.tableTreeRows.filter(({ path }) => node.path.every((value, index) => path[index] === value)).length;
+      const childKeys = new Set<string>();
+      tree.forEach((_, candidateKey) => {
+        if (candidateKey.startsWith(`${key}\u0001`)) {
+          const remainder = candidateKey.slice(key.length + 1);
+          if (!remainder.includes('\u0001')) childKeys.add(candidateKey);
+        }
+      });
+      node.childCount = childKeys.size;
+    });
+    if (!tree.size) { const empty = this.dom.document.createElement('li'); empty.className = 'toc-table-empty'; empty.textContent = '表格暂无目录数据'; this.tocList.appendChild(empty); return; }
+    // Drop collapse/expand overrides for nodes that no longer exist after table edits.
+    this.collapsedTablePathKeys.forEach((key) => {
+      if (!tree.has(key)) this.collapsedTablePathKeys.delete(key);
+    });
+    this.expandedTablePathKeys.forEach((key) => {
+      if (!tree.has(key)) this.expandedTablePathKeys.delete(key);
+    });
+    const maxDepth = this.maxVisibleLevel ?? Number.POSITIVE_INFINITY;
+    tree.forEach(node => {
+      if (!this.isTablePathVisible(node.path, maxDepth)) return;
+      const item = this.dom.document.createElement('li');
+      item.className = 'toc-table-item';
+      item.dataset.depth = String(node.path.length);
+      const pathKey = node.path.join('\u0001');
+      // Icon must match reality: ▾ only when at least one direct child is currently listed.
+      const hasVisibleChild = this.hasVisibleDirectTableChild(tree, pathKey, maxDepth);
+      const isCollapsed = node.childCount > 0 && !hasVisibleChild;
+
+      const toggleBtn = this.dom.document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'toc-table-node-toggle';
+      if (node.childCount <= 0) {
+        toggleBtn.classList.add('empty');
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = '';
+        toggleBtn.title = 'No child nodes';
+      } else {
+        toggleBtn.textContent = isCollapsed ? '▸' : '▾';
+        toggleBtn.title = isCollapsed ? 'Expand children' : 'Collapse children';
+        toggleBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.toggleTablePathCollapse(pathKey, tree, maxDepth);
+        });
+      }
+
+      const btn = this.dom.document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toc-table-node';
+      btn.dataset.depth = String(node.path.length);
+      btn.dataset.path = pathKey;
+      const label = this.dom.document.createElement('span');
+      label.className = 'toc-table-node-label';
+      label.textContent = node.path[node.path.length - 1];
+      label.title = node.path.join(' / ');
+      const count = this.dom.document.createElement('span');
+      count.className = 'toc-table-node-count';
+      count.textContent = node.childCount ? `${node.childCount} · ${node.itemCount}` : `${node.itemCount}`;
+      btn.append(label, count);
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (node.childCount > 0) {
+          this.toggleTablePathCollapse(pathKey, tree, maxDepth);
+        }
+        this.clickedTablePathKey = pathKey;
+        this.programmaticScroll = true;
+        this.applyActiveTableClass(pathKey);
+        this.revealTableRows(node.path);
+        setTimeout(() => { this.programmaticScroll = false; }, 600);
+      });
+      item.append(toggleBtn, btn);
+      this.tocList!.appendChild(item);
+    });
+    this.highlightActiveTableNode();
+  }
+
+  /** True when any strict ancestor of this path is collapsed. */
+  private isTablePathHiddenByCollapse(path: string[]): boolean {
+    for (let i = 1; i < path.length; i += 1) {
+      if (this.collapsedTablePathKeys.has(path.slice(0, i).join('\u0001'))) return true;
+    }
+    return false;
+  }
+
+  private isDirectTableChildKey(parentKey: string, candidateKey: string): boolean {
+    if (!candidateKey.startsWith(`${parentKey}\u0001`)) return false;
+    return !candidateKey.slice(parentKey.length + 1).includes('\u0001');
+  }
+
+  private tableNodeHasDescendantBeyondMax(
+    tree: Map<string, { path: string[]; childCount: number; itemCount: number }>,
+    pathKey: string,
+    maxDepth: number,
+  ): boolean {
+    if (!Number.isFinite(maxDepth)) return false;
+    for (const [key, node] of tree) {
+      if (key.startsWith(`${pathKey}\u0001`) && node.path.length > maxDepth) return true;
+    }
+    return false;
+  }
+
+  private hasVisibleDirectTableChild(
+    tree: Map<string, { path: string[]; childCount: number; itemCount: number }>,
+    pathKey: string,
+    maxDepth: number,
+  ): boolean {
+    for (const [key, node] of tree) {
+      if (!this.isDirectTableChildKey(pathKey, key)) continue;
+      if (this.isTablePathVisible(node.path, maxDepth)) return true;
+    }
+    return false;
+  }
+
+  private toggleTablePathCollapse(
+    pathKey: string,
+    tree: Map<string, { path: string[]; childCount: number; itemCount: number }>,
+    maxDepth: number,
+  ): void {
+    const hasVisibleChild = this.hasVisibleDirectTableChild(tree, pathKey, maxDepth);
+    if (hasVisibleChild) {
+      this.collapsedTablePathKeys.add(pathKey);
+      this.expandedTablePathKeys.delete(pathKey);
+    } else {
+      this.collapsedTablePathKeys.delete(pathKey);
+      if (this.tableNodeHasDescendantBeyondMax(tree, pathKey, maxDepth)) {
+        this.expandedTablePathKeys.add(pathKey);
+      }
+    }
+    this.renderList();
+    this.saveExpandState();
+  }
+
+  /**
+   * H1–H5 filters limit the default depth. Nodes deeper than the filter stay
+   * reachable by expanding an ancestor, matching normal-mode heading TOC.
+   */
+  private isTablePathVisible(path: string[], maxDepth: number): boolean {
+    if (this.isTablePathHiddenByCollapse(path)) return false;
+    if (path.length <= maxDepth) return true;
+    for (let i = 1; i < path.length; i += 1) {
+      if (this.expandedTablePathKeys.has(path.slice(0, i).join('\u0001'))) return true;
+    }
+    return false;
+  }
+
+  private revealTableRows(path: string[]): void {
+    const matches = this.tableTreeRows.filter(({ path: rowPath }) => path.every((value, i) => rowPath[i] === value));
+    this.tableTreeRows.forEach(({ row }) => row.classList.remove('toc-table-row-match'));
+    matches.forEach(({ row }) => row.classList.add('toc-table-row-match'));
+    matches[0]?.row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (matches.length) setTimeout(() => matches.forEach(({ row }) => row.classList.remove('toc-table-row-match')), 1600);
+  }
+
+  /** Highlight the TOC node matching the table row currently near the viewport top. */
+  private highlightActiveTableNode(): void {
+    if (!this.tocList || !this.tableMode || this.tableTreeRows.length === 0) return;
+
+    if (this.clickedTablePathKey !== null) {
+      if (this.clickedTablePathKey === this.activeTablePathKey) return;
+      this.applyActiveTableClass(this.clickedTablePathKey);
+      return;
+    }
+
+    if (!this.scrollAreaEl) return;
+    const scrollRect = this.scrollAreaEl.getBoundingClientRect();
+    const offset = 96;
+
+    let activePath: string[] | null = null;
+    for (const { path, row } of this.tableTreeRows) {
+      const top = row.getBoundingClientRect().top - scrollRect.top;
+      if (top <= offset) activePath = path;
+      else if (activePath) break;
+    }
+
+    if (!activePath) {
+      for (const { path, row } of this.tableTreeRows) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom > scrollRect.top && rect.top < scrollRect.bottom) {
+          activePath = path;
+          break;
+        }
+      }
+    }
+    if (!activePath) return;
+
+    const maxDepth = this.maxVisibleLevel ?? Number.POSITIVE_INFINITY;
+    let pathKey: string | null = null;
+    for (let d = activePath.length; d >= 1; d -= 1) {
+      const candidate = activePath.slice(0, d).join('\u0001');
+      if (d > maxDepth && !this.isTablePathVisible(activePath.slice(0, d), maxDepth)) continue;
+      let found = false;
+      this.tocList.querySelectorAll('.toc-table-node').forEach((node) => {
+        if ((node as HTMLElement).dataset.path === candidate) found = true;
+      });
+      if (found) {
+        pathKey = candidate;
+        break;
+      }
+    }
+    if (!pathKey) {
+      const depth = Math.min(activePath.length, maxDepth);
+      pathKey = activePath.slice(0, depth).join('\u0001');
+    }    if (pathKey === this.activeTablePathKey) return;
+    this.applyActiveTableClass(pathKey);
+  }
+
+  private applyActiveTableClass(pathKey: string): void {
+    if (!this.tocList) return;
+    this.activeTablePathKey = pathKey;
+    let activeNode: HTMLElement | null = null;
+    this.tocList.querySelectorAll('.toc-table-node').forEach((node) => {
+      const isActive = (node as HTMLElement).dataset.path === pathKey;
+      node.classList.toggle('active', isActive);
+      if (isActive) activeNode = node as HTMLElement;
+    });
+    const nodeToScroll = activeNode as HTMLElement | null;
+    nodeToScroll?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   // ─── Active Heading Detection ────────────────────────────────────────
@@ -678,11 +1375,15 @@ export class TableOfContents {
     if (to <= heading.pos) return;
 
     const tr = this.view.state.tr.delete(heading.pos, to).scrollIntoView();
-    this.collapsedHeadingPos.delete(heading.pos);
-    this.expandedHeadingPos.delete(heading.pos);
+    const key = this.headingKeyForPos(heading.pos);
+    if (key) {
+      this.collapsedHeadingKeys.delete(key);
+      this.expandedHeadingKeys.delete(key);
+    }
     this.clickedPos = null;
     this.view.dispatch(tr);
     this.view.focus();
+    this.saveExpandState();
   }
 
   private moveHeadingSection(sourcePos: number, targetPos: number, placement: TocDropPlacement): void {
@@ -721,37 +1422,76 @@ export class TableOfContents {
     this.view.focus();
   }
 
+  private toggleHeadingCollapse(headingPos: number, hasChildrenBeyondMax: boolean): void {
+    const key = this.headingKeyForPos(headingPos);
+    if (!key) return;
+    const explicitCollapsedNow = this.collapsedHeadingKeys.has(key);
+    const expandedOverrideNow = this.expandedHeadingKeys.has(key);
+    const levelCollapsedNow = this.maxVisibleLevel !== null
+      && hasChildrenBeyondMax
+      && !expandedOverrideNow;
+
+    if (explicitCollapsedNow) {
+      this.collapsedHeadingKeys.delete(key);
+    } else if (levelCollapsedNow) {
+      this.expandedHeadingKeys.add(key);
+      this.collapsedHeadingKeys.delete(key);
+    } else if (expandedOverrideNow) {
+      this.expandedHeadingKeys.delete(key);
+    } else {
+      this.collapsedHeadingKeys.add(key);
+      this.expandedHeadingKeys.delete(key);
+    }
+    this.renderList();
+    this.saveExpandState();
+  }
+
   private computeVisibleHeadings(): HeadingEntry[] {
     if (this.headings.length === 0) return [];
     const result: HeadingEntry[] = [];
-    const collapsedStack: Array<{ level: number; pos: number }> = [];
-    const expandedStack: Array<{ level: number; pos: number }> = [];
     const maxVisible = this.maxVisibleLevel ?? Number.POSITIVE_INFINITY;
+    const parentIndices: Array<number | null> = [];
+    const stack: number[] = [];
 
-    for (const heading of this.headings) {
-      while (collapsedStack.length > 0 && heading.level <= collapsedStack[collapsedStack.length - 1].level) {
-        collapsedStack.pop();
+    for (let index = 0; index < this.headings.length; index += 1) {
+      const heading = this.headings[index];
+      while (stack.length > 0 && this.headings[stack[stack.length - 1]].level >= heading.level) {
+        stack.pop();
       }
-      while (expandedStack.length > 0 && heading.level <= expandedStack[expandedStack.length - 1].level) {
-        expandedStack.pop();
-      }
-
-      const hiddenByCollapse = collapsedStack.length > 0;
-      const expandedByAncestor = expandedStack.length > 0;
-      const visibleByLevel = heading.level <= maxVisible || expandedByAncestor;
-
-      if (!hiddenByCollapse && visibleByLevel) {
-        result.push(heading);
-      }
-
-      if (this.collapsedHeadingPos.has(heading.pos)) {
-        collapsedStack.push({ level: heading.level, pos: heading.pos });
-      }
-      if (this.expandedHeadingPos.has(heading.pos)) {
-        expandedStack.push({ level: heading.level, pos: heading.pos });
-      }
+      parentIndices[index] = stack.length > 0 ? stack[stack.length - 1] : null;
+      stack.push(index);
     }
 
+    const visibilityCache = new Map<number, boolean>();
+    const isVisible = (index: number): boolean => {
+      const cached = visibilityCache.get(index);
+      if (cached !== undefined) return cached;
+
+      const heading = this.headings[index];
+      const parentIndex = parentIndices[index];
+      if (parentIndex !== null && !isVisible(parentIndex)) {
+        visibilityCache.set(index, false);
+        return false;
+      }
+      if (parentIndex !== null && this.isHeadingCollapsed(this.headings[parentIndex].pos)) {
+        visibilityCache.set(index, false);
+        return false;
+      }
+
+      let visible = heading.level <= maxVisible;
+      if (!visible && parentIndex !== null) {
+        // A filtered-out heading becomes visible only when its immediate
+        // parent is expanded. This prevents one click from revealing every
+        // deeper descendant at once.
+        visible = this.isHeadingExpanded(this.headings[parentIndex].pos);
+      }
+      visibilityCache.set(index, visible);
+      return visible;
+    };
+
+    for (let index = 0; index < this.headings.length; index += 1) {
+      if (isVisible(index)) result.push(this.headings[index]);
+    }
     return result;
   }
 
@@ -862,14 +1602,16 @@ export class TableOfContents {
       if (!this.isVisible) return;
 
       // Manual scroll detected — unlock click lock
-      if (this.clickedPos !== null && !this.programmaticScroll) {
-        this.clickedPos = null;
+      if (!this.programmaticScroll) {
+        if (this.clickedPos !== null) this.clickedPos = null;
+        if (this.clickedTablePathKey !== null) this.clickedTablePathKey = null;
       }
 
       if (this.throttleTimer) return;
       this.throttleTimer = setTimeout(() => {
         this.throttleTimer = null;
-        this.highlightActiveHeading();
+        if (this.tableMode) this.highlightActiveTableNode();
+        else this.highlightActiveHeading();
       }, 100);
     };
 
@@ -892,12 +1634,31 @@ export class TableOfContents {
 
   // ─── Public API ──────────────────────────────────────────────────────
 
+  /** Persist expand/collapse state per markdown file path (absolute). */
+  public setFilePath(filePath: string): void {
+    if (filePath === this.currentFilePath) return;
+    this.saveExpandState();
+    this.currentFilePath = filePath;
+    this.loadExpandState();
+    this.headings = [];
+    this.headingPosToKey.clear();
+    this.refreshLevelControls();
+    // Do not renderList here: empty headings would prune restored keys.
+    // update()/open() will render after the new document content is applied.
+  }
+
   /** Called from dispatchTransaction on every state change */
   public update(view: EditorView, transaction?: { docChanged?: boolean; selectionSet?: boolean }): void {
     this.view = view;
     if (!this.isVisible) return;
 
     const newHeadings = this.extractHeadings(view.state.doc);
+
+    if (this.tableMode) {
+      if (transaction?.docChanged) this.renderList();
+      else this.highlightActiveTableNode();
+      return;
+    }
 
     if (this.headingsChanged(this.headings, newHeadings)) {
       this.headings = newHeadings;
@@ -930,13 +1691,15 @@ export class TableOfContents {
     if (this.isVisible) return;
     this.isVisible = true;
     this.sidebar?.classList.remove('hidden');
-    document.body.classList.add('toc-visible');
+    this.applySidebarWidth();
+    this.dom.themeRoot.classList.add('toc-visible');
 
     // Reset filter
     this.filterText = '';
     if (this.filterInput) this.filterInput.value = '';
 
     this.headings = this.extractHeadings(this.view.state.doc);
+    this.refreshTableModeControl();
     this.activeIndex = -1;
     this.renderList();
     this.scheduleLayoutChangeNotifications();
@@ -945,8 +1708,10 @@ export class TableOfContents {
   public close(): void {
     if (!this.isVisible) return;
     this.isVisible = false;
+    this.isResizingSidebar = false;
+    this.sidebar?.classList.remove('resizing');
     this.sidebar?.classList.add('hidden');
-    document.body.classList.remove('toc-visible');
+    this.dom.themeRoot.classList.remove('toc-visible');
     this.scheduleLayoutChangeNotifications();
   }
 
@@ -990,6 +1755,11 @@ export class TableOfContents {
 
   public get visible(): boolean {
     return this.isVisible;
+  }
+
+  public setWidth(width: number): void {
+    this.applySidebarWidth(width);
+    this.saveSidebarWidth();
   }
 
   public setStatus(stats: { totalChars: number; line: number; selectedChars: number }): void {

@@ -48,7 +48,7 @@ export async function highlightCode(text: string, language: string, palette: Pdf
     walkAst(ast);
     return segments.length > 0 ? segments : null;
   } catch (err) {
-    console.warn('[InLineMd] highlightCode failed for', language, ':', err);
+    console.warn('[EasyView_Md] highlightCode failed for', language, ':', err);
     return null;
   }
 }

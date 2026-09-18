@@ -6,23 +6,7 @@
 import type { EditorView } from 'prosemirror-view';
 import type { MarkdownParser } from 'prosemirror-markdown';
 import { handlePastePlainText, handlePasteFromClipboard } from '../editor/EditorEventHandlers';
-
-let menuEl: HTMLElement | null = null;
-
-function getMenuEl(): HTMLElement {
-  if (!menuEl) {
-    menuEl = document.createElement('div');
-    menuEl.className = 'context-menu';
-    document.body.appendChild(menuEl);
-  }
-  return menuEl;
-}
-
-function hide() {
-  if (menuEl) {
-    menuEl.classList.remove('visible');
-  }
-}
+import { createEditorDomContext, type EditorDomContext, type EasyViewEditorRoot } from '../runtime/editorDomContext';
 
 interface ContextMenuOptions {
   view: EditorView;
@@ -31,103 +15,138 @@ interface ContextMenuOptions {
   y: number;
 }
 
-export function showContextMenu({ view, pasteParser, x, y }: ContextMenuOptions) {
-  const menu = getMenuEl();
-  menu.innerHTML = '';
+/** Initialize one context menu owned by one editor root. */
+export function initContextMenu(
+  editorElement: HTMLElement,
+  getView: () => EditorView | null,
+  getPasteParser: () => MarkdownParser,
+  root: EasyViewEditorRoot = document,
+): () => void {
+  const dom = createEditorDomContext(root);
+  let disposed = false;
+  let menuEl: HTMLElement | null = null;
+  let menuPositionFrame: number | null = null;
 
-  const items: { label: string; shortcut?: string; action: () => void }[] = [
-    {
-      label: 'Cut',
-      shortcut: 'Ctrl+X',
-      action: () => {
-        document.execCommand('cut');
-        hide();
-      },
-    },
-    {
-      label: 'Copy',
-      shortcut: 'Ctrl+C',
-      action: () => {
-        document.execCommand('copy');
-        hide();
-      },
-    },
-    {
-      label: 'Paste',
-      shortcut: 'Ctrl+V',
-      action: () => {
-        handlePasteFromClipboard(view, pasteParser);
-        hide();
-      },
-    },
-    {
-      label: 'Paste as Text',
-      shortcut: 'Ctrl+Shift+V',
-      action: () => {
-        handlePastePlainText(view);
-        hide();
-      },
-    },
-  ];
+  const getMenuEl = (): HTMLElement => {
+    if (!menuEl) {
+      menuEl = dom.document.createElement('div');
+      menuEl.className = 'context-menu';
+      dom.overlayRoot.appendChild(menuEl);
+    }
+    return menuEl;
+  };
 
-  for (const item of items) {
-    const el = document.createElement('div');
-    el.className = 'context-menu-item';
+  const hide = (): void => {
+    menuEl?.classList.remove('visible');
+  };
 
-    const labelSpan = document.createElement('span');
-    labelSpan.className = 'context-menu-label';
-    labelSpan.textContent = item.label;
-    el.appendChild(labelSpan);
+  const show = ({ view, pasteParser, x, y }: ContextMenuOptions): void => {
+    const menu = getMenuEl();
+    menu.innerHTML = '';
 
-    if (item.shortcut) {
-      const shortcutSpan = document.createElement('span');
-      shortcutSpan.className = 'context-menu-shortcut';
-      shortcutSpan.textContent = item.shortcut;
-      el.appendChild(shortcutSpan);
+    const items: { label: string; shortcut?: string; action: () => void }[] = [
+      {
+        label: 'Cut',
+        shortcut: 'Ctrl+X',
+        action: () => {
+          dom.document.execCommand('cut');
+          hide();
+        },
+      },
+      {
+        label: 'Copy',
+        shortcut: 'Ctrl+C',
+        action: () => {
+          dom.document.execCommand('copy');
+          hide();
+        },
+      },
+      {
+        label: 'Paste',
+        shortcut: 'Ctrl+V',
+        action: () => {
+          handlePasteFromClipboard(view, pasteParser);
+          hide();
+        },
+      },
+      {
+        label: 'Paste as Text',
+        shortcut: 'Ctrl+Shift+V',
+        action: () => {
+          handlePastePlainText(view);
+          hide();
+        },
+      },
+    ];
+
+    for (const item of items) {
+      const el = dom.document.createElement('div');
+      el.className = 'context-menu-item';
+
+      const labelSpan = dom.document.createElement('span');
+      labelSpan.className = 'context-menu-label';
+      labelSpan.textContent = item.label;
+      el.appendChild(labelSpan);
+
+      if (item.shortcut) {
+        const shortcutSpan = dom.document.createElement('span');
+        shortcutSpan.className = 'context-menu-shortcut';
+        shortcutSpan.textContent = item.shortcut;
+        el.appendChild(shortcutSpan);
+      }
+
+      el.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        item.action();
+      });
+      menu.appendChild(el);
     }
 
-    el.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      item.action();
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.classList.add('visible');
+
+    if (menuPositionFrame !== null) dom.window.cancelAnimationFrame(menuPositionFrame);
+    menuPositionFrame = dom.window.requestAnimationFrame(() => {
+      const rect = menu.getBoundingClientRect();
+      if (rect.right > dom.window.innerWidth) menu.style.left = `${x - rect.width}px`;
+      if (rect.bottom > dom.window.innerHeight) menu.style.top = `${y - rect.height}px`;
+      menuPositionFrame = null;
     });
+  };
 
-    menu.appendChild(el);
-  }
-
-  // Position menu, ensuring it stays within viewport
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  menu.classList.add('visible');
-
-  // Adjust if overflowing
-  requestAnimationFrame(() => {
-    const rect = menu.getBoundingClientRect();
-    if (rect.right > window.innerWidth) {
-      menu.style.left = `${x - rect.width}px`;
-    }
-    if (rect.bottom > window.innerHeight) {
-      menu.style.top = `${y - rect.height}px`;
-    }
-  });
-}
-
-/** Initialize context menu on the editor element */
-export function initContextMenu(editorElement: HTMLElement, getView: () => EditorView | null, getPasteParser: () => MarkdownParser) {
-  editorElement.addEventListener('contextmenu', (e) => {
+  const handleContextMenu = (event: MouseEvent): void => {
+    if (disposed) return;
     const view = getView();
     if (!view) return;
-    e.preventDefault();
-    showContextMenu({ view, pasteParser: getPasteParser(), x: e.clientX, y: e.clientY });
-  });
+    event.preventDefault();
+    show({ view, pasteParser: getPasteParser(), x: event.clientX, y: event.clientY });
+  };
 
-  // Hide on click outside or escape
-  document.addEventListener('mousedown', (e) => {
-    if (menuEl && !menuEl.contains(e.target as Node)) {
-      hide();
-    }
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hide();
-  });
+  const handleRootMouseDown = (event: MouseEvent): void => {
+    if (!disposed && menuEl && !menuEl.contains(event.target as Node)) hide();
+  };
+  const handleRootKeyDown = (event: KeyboardEvent): void => {
+    if (!disposed && event.key === 'Escape') hide();
+  };
+
+  editorElement.addEventListener('contextmenu', handleContextMenu);
+  dom.root.addEventListener('mousedown', handleRootMouseDown as EventListener);
+  dom.root.addEventListener('keydown', handleRootKeyDown as EventListener);
+
+  let cleanedUp = false;
+  return (): void => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    disposed = true;
+    editorElement.removeEventListener('contextmenu', handleContextMenu);
+    dom.root.removeEventListener('mousedown', handleRootMouseDown as EventListener);
+    dom.root.removeEventListener('keydown', handleRootKeyDown as EventListener);
+    if (menuPositionFrame !== null) dom.window.cancelAnimationFrame(menuPositionFrame);
+    menuPositionFrame = null;
+    hide();
+    menuEl?.remove();
+    menuEl = null;
+  };
 }

@@ -3,6 +3,7 @@
  */
 
 import { EditorView } from 'prosemirror-view';
+import { createEditorDomContext, type EditorDomContext } from '../../../runtime/editorDomContext';
 
 export class ImageToolbar {
   private el: HTMLDivElement;
@@ -26,22 +27,23 @@ export class ImageToolbar {
   private currentPreviewAlt = '';
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
   private activeDom: HTMLElement | null = null;
+  private destroyed = false;
 
-  constructor() {
-    ensureImagePreviewStyles();
+  constructor(private readonly dom: EditorDomContext = createEditorDomContext()) {
+    ensureImagePreviewStyles(dom.document);
 
-    this.el = document.createElement('div');
+    this.el = this.dom.document.createElement('div');
     this.el.className = 'image-toolbar';
 
     // ── Source display row ──
-    this.srcRow = document.createElement('div');
+    this.srcRow = this.dom.document.createElement('div');
     this.srcRow.className = 'image-toolbar-row';
 
-    this.srcDisplay = document.createElement('span');
+    this.srcDisplay = this.dom.document.createElement('span');
     this.srcDisplay.className = 'image-toolbar-src';
 
     // Preview large image button
-    this.previewBtn = document.createElement('button');
+    this.previewBtn = this.dom.document.createElement('button');
     this.previewBtn.className = 'link-edit-btn';
     this.previewBtn.title = 'View image';
     this.previewBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -52,7 +54,7 @@ export class ImageToolbar {
     });
 
     // Replace with URL button
-    this.replaceUrlBtn = document.createElement('button');
+    this.replaceUrlBtn = this.dom.document.createElement('button');
     this.replaceUrlBtn.className = 'link-edit-btn';
     this.replaceUrlBtn.title = 'Replace with URL';
     this.replaceUrlBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
@@ -62,7 +64,7 @@ export class ImageToolbar {
     });
 
     // Browse file button
-    this.browseBtn = document.createElement('button');
+    this.browseBtn = this.dom.document.createElement('button');
     this.browseBtn.className = 'link-edit-btn';
     this.browseBtn.title = 'Browse for image...';
     this.browseBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
@@ -72,7 +74,7 @@ export class ImageToolbar {
     });
 
     // Delete button
-    this.deleteBtn = document.createElement('button');
+    this.deleteBtn = this.dom.document.createElement('button');
     this.deleteBtn.className = 'link-edit-btn';
     this.deleteBtn.title = 'Delete image';
     this.deleteBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
@@ -89,11 +91,11 @@ export class ImageToolbar {
     this.el.appendChild(this.srcRow);
 
     // ── URL input row (hidden by default) ──
-    this.urlRow = document.createElement('div');
+    this.urlRow = this.dom.document.createElement('div');
     this.urlRow.className = 'image-toolbar-row';
     this.urlRow.style.display = 'none';
 
-    this.urlInput = document.createElement('input');
+    this.urlInput = this.dom.document.createElement('input');
     this.urlInput.className = 'link-edit-input';
     this.urlInput.type = 'url';
     this.urlInput.placeholder = 'Enter image URL...';
@@ -104,7 +106,7 @@ export class ImageToolbar {
       if (e.key === 'Escape') { e.preventDefault(); this.hideUrlInput(); }
     });
 
-    this.applyUrlBtn = document.createElement('button');
+    this.applyUrlBtn = this.dom.document.createElement('button');
     this.applyUrlBtn.className = 'link-edit-btn';
     this.applyUrlBtn.title = 'Apply';
     this.applyUrlBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -118,14 +120,14 @@ export class ImageToolbar {
     this.el.appendChild(this.urlRow);
 
     // ── Alt text row ──
-    const altRow = document.createElement('div');
+    const altRow = this.dom.document.createElement('div');
     altRow.className = 'image-toolbar-row';
 
-    const altLabel = document.createElement('span');
+    const altLabel = this.dom.document.createElement('span');
     altLabel.className = 'image-toolbar-label';
     altLabel.textContent = 'Alt';
 
-    this.altInput = document.createElement('input');
+    this.altInput = this.dom.document.createElement('input');
     this.altInput.className = 'image-toolbar-alt-input';
     this.altInput.type = 'text';
     this.altInput.placeholder = 'Alt text...';
@@ -143,10 +145,11 @@ export class ImageToolbar {
     altRow.appendChild(this.altInput);
     this.el.appendChild(altRow);
 
-    document.body.appendChild(this.el);
+    this.dom.overlayRoot.appendChild(this.el);
   }
 
   show(view: EditorView, pos: number, node: any, dom: HTMLElement) {
+    if (this.destroyed) return;
     this.view = view;
     this.currentPos = pos;
 
@@ -184,7 +187,7 @@ export class ImageToolbar {
         }
       };
       setTimeout(() => {
-        document.addEventListener('mousedown', this.outsideClickHandler!);
+        this.dom.root.addEventListener('mousedown', this.outsideClickHandler! as EventListener);
       }, 0);
     }
   }
@@ -202,7 +205,7 @@ export class ImageToolbar {
     }
 
     if (this.outsideClickHandler) {
-      document.removeEventListener('mousedown', this.outsideClickHandler);
+      this.dom.root.removeEventListener('mousedown', this.outsideClickHandler as EventListener);
       this.outsideClickHandler = null;
     }
 
@@ -212,6 +215,7 @@ export class ImageToolbar {
   get visible() { return this.isVisible; }
 
   preview(src: string, alt = '', caption = '') {
+    if (this.destroyed) return;
     this.openPreview(src, alt, caption);
   }
 
@@ -228,8 +232,8 @@ export class ImageToolbar {
     }
 
     // Keep within viewport.
-    left = Math.max(8, Math.min(left, window.innerWidth - popupWidth - 8));
-    top = Math.max(8, Math.min(top, window.innerHeight - popupHeight - 8));
+    left = Math.max(8, Math.min(left, this.dom.window.innerWidth - popupWidth - 8));
+    top = Math.max(8, Math.min(top, this.dom.window.innerHeight - popupHeight - 8));
 
     this.el.style.left = `${left}px`;
     this.el.style.top = `${top}px`;
@@ -298,7 +302,7 @@ export class ImageToolbar {
   }
 
   private requestFilePicker() {
-    window.dispatchEvent(new CustomEvent('inlinemd:pickImage', {
+    this.dom.eventTarget.dispatchEvent(new CustomEvent('inlinemd:pickImage', {
       detail: { pos: this.currentPos },
     }));
   }
@@ -306,7 +310,7 @@ export class ImageToolbar {
   private ensurePreviewModal() {
     if (this.previewOverlay && this.previewImage && this.previewCaption) return;
 
-    this.previewOverlay = document.createElement('div');
+    this.previewOverlay = this.dom.document.createElement('div');
     this.previewOverlay.className = 'image-preview-modal';
     this.previewOverlay.addEventListener('mousedown', (e) => {
       if (e.target === this.previewOverlay) {
@@ -315,29 +319,29 @@ export class ImageToolbar {
       }
     });
 
-    const dialog = document.createElement('div');
+    const dialog = this.dom.document.createElement('div');
     dialog.className = 'image-preview-dialog';
     dialog.addEventListener('mousedown', (e) => e.stopPropagation());
 
-    const closeBtn = document.createElement('button');
+    const closeBtn = this.dom.document.createElement('button');
     closeBtn.className = 'image-preview-close';
     closeBtn.type = 'button';
     closeBtn.title = 'Close';
     closeBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
     closeBtn.addEventListener('click', () => this.closePreview());
 
-    this.previewImage = document.createElement('img');
+    this.previewImage = this.dom.document.createElement('img');
     this.previewImage.className = 'image-preview-img';
     this.previewImage.draggable = false;
 
-    this.previewCaption = document.createElement('div');
+    this.previewCaption = this.dom.document.createElement('div');
     this.previewCaption.className = 'image-preview-caption';
 
     dialog.appendChild(closeBtn);
     dialog.appendChild(this.previewImage);
     dialog.appendChild(this.previewCaption);
     this.previewOverlay.appendChild(dialog);
-    document.body.appendChild(this.previewOverlay);
+    this.dom.overlayRoot.appendChild(this.previewOverlay);
   }
 
   private openPreview(src = this.currentPreviewSrc, alt = this.currentPreviewAlt, caption = this.srcDisplay.title) {
@@ -353,7 +357,7 @@ export class ImageToolbar {
 
     const existingHandler = (this.previewOverlay as any).__imagePreviewKeydown as ((event: KeyboardEvent) => void) | undefined;
     if (existingHandler) {
-      document.removeEventListener('keydown', existingHandler);
+      this.dom.root.removeEventListener('keydown', existingHandler as EventListener);
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -363,7 +367,7 @@ export class ImageToolbar {
     };
     this.previewOverlay.dataset.keyHandlerBound = 'true';
     (this.previewOverlay as any).__imagePreviewKeydown = onKeyDown;
-    document.addEventListener('keydown', onKeyDown);
+    this.dom.root.addEventListener('keydown', onKeyDown as EventListener);
   }
 
   private closePreview() {
@@ -371,24 +375,33 @@ export class ImageToolbar {
     this.previewOverlay.classList.remove('open');
     const handler = (this.previewOverlay as any).__imagePreviewKeydown as ((event: KeyboardEvent) => void) | undefined;
     if (handler) {
-      document.removeEventListener('keydown', handler);
+      this.dom.root.removeEventListener('keydown', handler as EventListener);
       delete (this.previewOverlay as any).__imagePreviewKeydown;
     }
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.closePreview();
     if (this.outsideClickHandler) {
-      document.removeEventListener('mousedown', this.outsideClickHandler);
+      this.dom.root.removeEventListener('mousedown', this.outsideClickHandler as EventListener);
+      this.outsideClickHandler = null;
     }
+    this.activeDom?.classList.remove('image-toolbar-active');
+    this.activeDom = null;
+    this.view = null;
+    this.isVisible = false;
+    this.currentPos = -1;
     this.previewOverlay?.remove();
+    this.previewOverlay = null;
+    this.previewImage = null;
+    this.previewCaption = null;
     this.el.remove();
   }
 }
 
-export const imageToolbar = new ImageToolbar();
-
-function ensureImagePreviewStyles() {
+function ensureImagePreviewStyles(document: Document) {
   const styleId = 'easyview-image-preview-styles';
   if (document.getElementById(styleId)) return;
 

@@ -1,8 +1,10 @@
-import type { HostToWebviewMessage } from '../shared/protocol';
+import type { HostToEditorMessage } from '@easyview/contracts/protocol';
 
 export interface HostMessageSideEffectHandlers {
   onCommitMessageGenerated(message: string, source: string): void;
   onCommitMessageGenerationFailed(message: string): void;
+  onStageFileCompleted(message: string): void;
+  onStageFileFailed(message: string): void;
   onCommitFileCompleted(message: string): void;
   onCommitFileFailed(message: string): void;
   onSyncFileCompleted(message: string): void;
@@ -15,8 +17,8 @@ export interface HostMessageSideEffectHandlers {
   onRequestExportHtml(theme: 'light' | 'dark'): void;
   onRequestExportPdf(theme: 'light' | 'dark'): void;
   onRequestExportDocx(): void;
-  onImageSelected(message: Extract<HostToWebviewMessage, { type: 'imageSelected' }>): void;
-  onImagesDropped(message: Extract<HostToWebviewMessage, { type: 'imagesDropped' }>): void;
+  onImageSelected(message: Extract<HostToEditorMessage, { type: 'imageSelected' }>): void;
+  onImagesDropped(message: Extract<HostToEditorMessage, { type: 'imagesDropped' }>): void;
 }
 
 /**
@@ -25,7 +27,7 @@ export interface HostMessageSideEffectHandlers {
  * and Git state reconciliation.
  */
 export function handleHostMessageSideEffect(
-  message: HostToWebviewMessage,
+  message: HostToEditorMessage,
   handlers: HostMessageSideEffectHandlers,
 ): boolean {
   switch (message.type) {
@@ -34,6 +36,12 @@ export function handleHostMessageSideEffect(
       return true;
     case 'commitMessageGenerationFailed':
       handlers.onCommitMessageGenerationFailed(message.message || 'Failed to generate commit message.');
+      return true;
+    case 'stageFileCompleted':
+      handlers.onStageFileCompleted(message.message || 'Staged current file');
+      return true;
+    case 'stageFileFailed':
+      handlers.onStageFileFailed(message.message || 'Failed to stage current file.');
       return true;
     case 'commitFileCompleted':
       handlers.onCommitFileCompleted(message.message || 'Committed current file');

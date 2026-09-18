@@ -7,7 +7,7 @@
 import refractor from 'refractor/core';
 import type { RefractorNode } from 'refractor';
 import { getRefractorLangForLanguage } from '../../../editor/lib/CodeLanguages';
-import { escapeHtml } from './HtmlDomCleanup';
+import { escapeHtml } from './ExportTypes';
 
 /**
  * Find all code blocks and replace their content with highlighted HTML.

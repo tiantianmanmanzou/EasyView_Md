@@ -816,13 +816,13 @@ export function createSourceEditor(options: SourceEditorOptions) {
   return {
     view,
     getContent: () => view.state.doc.toString(),
-    setContent: (text: string) => {
+    setContent: (text: string, options?: { addToHistory?: boolean }) => {
       suppressChange = true;
       const cursor = view.state.selection.main.head;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
         selection: { anchor: Math.min(cursor, text.length) },
-        annotations: Transaction.addToHistory.of(false),
+        annotations: Transaction.addToHistory.of(options?.addToHistory === true),
       });
       suppressChange = false;
     },

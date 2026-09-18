@@ -1,5 +1,5 @@
 /**
- * Token-to-ProseMirror mapping for InLineMd.
+ * Token-to-ProseMirror mapping for EasyView_Md.
  *
  * Maps markdown-it token types to ProseMirror node and mark definitions
  * used by prosemirror-markdown's MarkdownParser.

@@ -1,0 +1,1091 @@
+#file-preview-root,
+.preview-root {
+  --easyview-preview-text-color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  color: var(--easyview-preview-text-color);
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  scrollbar-gutter: auto !important;
+}
+body:not([data-mdpre-accent='default'])[data-mdpre-accent] #file-preview-root,
+body:not([data-mdpre-accent='default'])[data-mdpre-accent] .preview-root {
+  --easyview-preview-text-color: var(--mdpre-accent-text, var(--mdpre-accent, var(--vscode-editor-foreground)));
+}
+.preview-shell {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  scrollbar-gutter: auto !important;
+  color: var(--easyview-preview-text-color);
+  background: var(--file-viewer-bg, var(--vscode-editor-background));
+}
+.preview-tabs button, .preview-http-request button, .preview-archive-entry button { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 5px 9px; color: var(--easyview-preview-text-color); background: var(--vscode-button-secondaryBackground); cursor: pointer; font: inherit; }
+.preview-tabs button:hover, .preview-http-request button:hover:not(:disabled), .preview-archive-entry button:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
+.preview-content {
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  width: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  overflow: auto;
+  scrollbar-gutter: auto !important;
+  color: var(--easyview-preview-text-color);
+  background: var(--file-viewer-bg, var(--vscode-editor-background));
+}
+/* Office + universal viewers own the viewport — no host scrollbar gutter on either edge. */
+.preview-content:has(> .preview-word-editor),
+.preview-content:has(> .preview-spreadsheet-editor),
+.preview-content:has(> .preview-universal-viewer) {
+  overflow: hidden;
+  scrollbar-gutter: auto !important;
+}
+
+/*
+ * Flush every non-md preview surface to the webview left edge.
+ * Docx uses `scrollbar-gutter: stable both-edges` (left+right lanes);
+ * universal/xlsx can inherit similar gutters or transparent host tokens.
+ */
+.preview-root,
+#file-preview-root,
+.preview-shell,
+.preview-content,
+.preview-universal-viewer,
+.preview-spreadsheet-editor,
+.preview-word-editor,
+.preview-spreadsheet-mount,
+.preview-word-mount {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: 0 !important;
+  left: 0 !important;
+}
+.preview-viewer-message { display: grid; min-height: 160px; place-items: center; box-sizing: border-box; padding: 24px; opacity: .82; text-align: center; }
+.preview-viewer-error { color: var(--vscode-errorForeground, #f48771); }
+.preview-notice { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border); color: var(--vscode-editorWarning-foreground, inherit); background: var(--vscode-editorWarning-background, transparent); font-size: 12px; }
+.preview-url-viewer, .preview-universal-viewer, .preview-ppt-viewer {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--easyview-preview-text-color);
+  background: var(--file-viewer-bg, var(--vscode-editor-background));
+  border: 0;
+  border-left: 0;
+  outline: none;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+  /* Alias so children can beat library `--file-viewer-bg: transparent`. */
+  --easyview-surface-bg: var(--file-viewer-bg, #ffffff);
+}
+
+/*
+ * Universal / PDF / PPTX / xls: kill left IDE bleed (transparent host tokens + gutter).
+ * Same class of bug as Word scrollbar-gutter black strip.
+ */
+.preview-root:has(.preview-universal-viewer),
+#file-preview-root:has(.preview-universal-viewer),
+.preview-shell:has(.preview-universal-viewer),
+.preview-content:has(> .preview-universal-viewer),
+.preview-root:has(.preview-spreadsheet-editor),
+#file-preview-root:has(.preview-spreadsheet-editor),
+.preview-shell:has(.preview-spreadsheet-editor),
+.preview-content:has(> .preview-spreadsheet-editor),
+.preview-root:has(.preview-word-editor),
+#file-preview-root:has(.preview-word-editor),
+.preview-shell:has(.preview-word-editor),
+.preview-content:has(> .preview-word-editor) {
+  background: var(--file-viewer-bg, var(--vscode-editor-background)) !important;
+  border-left: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  scrollbar-gutter: auto !important;
+}
+.preview-universal-viewer .file-viewer-host,
+.preview-universal-viewer .file-viewer-web-shell,
+.preview-universal-viewer .file-viewer-web-content,
+.preview-universal-viewer .pdf-shell,
+.preview-universal-viewer .pdf-content,
+.preview-universal-viewer .pdf-nav-pane,
+.preview-universal-viewer .pdf-wrapper,
+.preview-universal-viewer .pptx-viewer-shell,
+.preview-universal-viewer .excel-wrapper {
+  border-left: 0 !important;
+  margin-left: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  scrollbar-gutter: auto !important;
+}
+.preview-universal-viewer .file-viewer-host,
+.preview-universal-viewer .file-viewer-web-shell,
+.preview-universal-viewer .file-viewer-web-content {
+  --file-viewer-bg: var(--easyview-surface-bg) !important;
+  --file-viewer-content-bg: var(--easyview-surface-bg) !important;
+  --file-viewer-render-surface-background: var(--easyview-surface-bg) !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  background: var(--easyview-surface-bg) !important;
+  background-color: var(--easyview-surface-bg) !important;
+}
+.preview-universal-viewer .pdf-nav-pane {
+  background: var(--file-viewer-toolbar-bg, var(--easyview-surface-bg)) !important;
+  border-right: 1px solid var(--file-viewer-toolbar-border, #d7dee8) !important;
+}
+.preview-toolbar-toggle,
+.preview-toolbar-theme {
+  margin: 0;
+  box-sizing: border-box;
+  cursor: pointer;
+  color: var(--file-viewer-button-color, var(--vscode-foreground, #1f1f1f));
+  font: inherit;
+}
+
+/* Shared non-md toolbar strip + control chrome (Office / PDF / image / Excel / Word). */
+.preview-universal-viewer,
+.preview-spreadsheet-editor,
+.preview-word-editor {
+  --preview-toolbar-strip-height: 30px;
+  --preview-toolbar-control-height: 22px;
+  --file-viewer-toolbar-min-height: var(--preview-toolbar-strip-height);
+}
+
+.preview-chrome-btn {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--preview-toolbar-control-height);
+  min-height: var(--preview-toolbar-control-height);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--file-viewer-button-color, var(--vscode-foreground, #1f1f1f));
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.preview-chrome-btn--icon {
+  width: var(--preview-toolbar-control-height);
+}
+.preview-chrome-btn--label {
+  min-width: 36px;
+  padding: 0 8px;
+}
+.preview-chrome-btn:hover:not(:disabled) {
+  border-color: var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+  background: var(--file-viewer-button-hover-bg, var(--vscode-toolbar-hoverBackground, #e8e8e8));
+  color: var(--file-viewer-button-hover-color, inherit);
+}
+.preview-chrome-btn:disabled {
+  opacity: .55;
+  cursor: default;
+}
+.preview-chrome-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex-shrink: 0;
+}
+.preview-document-chrome {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+/* One divider before EasyView actions — Word bar drops per-group lines (too dense). */
+.preview-document-chrome--embedded {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+}
+
+/* EasyView chrome groups (save / theme): light internal spacing, no extra lines when embedded. */
+.preview-document-chrome > [role='group'],
+.preview-document-chrome > [data-toolbar-group] {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  min-height: var(--preview-toolbar-control-height, 28px);
+}
+.preview-document-chrome:not(.preview-document-chrome--embedded) > [role='group'],
+.preview-document-chrome:not(.preview-document-chrome--embedded) > [data-toolbar-group] {
+  padding: 0 6px;
+  border-right: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+}
+.preview-document-chrome:not(.preview-document-chrome--embedded) > [role='group']:last-child,
+.preview-document-chrome:not(.preview-document-chrome--embedded) > [data-toolbar-group]:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+.preview-document-chrome:not(.preview-document-chrome--embedded) > [role='group']:first-child,
+.preview-document-chrome:not(.preview-document-chrome--embedded) > [data-toolbar-group]:first-child {
+  padding-left: 0;
+}
+
+/* Word formatting-bar: no group borders / native separators (group+separator doubled the lines). */
+.preview-word-editor [data-testid='formatting-bar'] > [role='group'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 2px;
+  border: 0 !important;
+  background: transparent;
+  min-height: var(--preview-toolbar-control-height, 28px);
+}
+.preview-word-editor [data-testid='formatting-bar'] > [role='separator'] {
+  display: none !important;
+}
+
+/* Excel: one btns row; dividers are the group separators. */
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .x-spreadsheet-toolbar-btns {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 2px !important;
+  flex-wrap: wrap;
+  height: var(--preview-toolbar-strip-height) !important;
+  min-height: var(--preview-toolbar-strip-height) !important;
+  line-height: var(--preview-toolbar-control-height) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar-divider {
+  align-self: center;
+  width: 0 !important;
+  height: 16px !important;
+  margin: 0 4px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-right: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+  background: transparent !important;
+  flex-shrink: 0;
+}
+.preview-shell-toolbar-actions {
+  position: absolute;
+  z-index: 10050;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: var(--preview-toolbar-strip-height, var(--file-viewer-toolbar-min-height, 30px));
+  padding: 0 4px;
+  box-sizing: border-box;
+  border: 0;
+  border-left: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+  background: var(--file-viewer-toolbar-bg, var(--vscode-editorWidget-background, #f3f3f3));
+  pointer-events: none;
+}
+.preview-shell-toolbar-actions > * {
+  pointer-events: auto;
+}
+.preview-shell-toolbar-actions .preview-toolbar-theme,
+.preview-shell-toolbar-actions .preview-toolbar-toggle,
+.preview-shell-toolbar-actions .preview-document-route-save,
+.preview-shell-toolbar-actions .preview-chrome-btn {
+  position: static;
+  background: transparent;
+}
+.preview-shell-toolbar-actions .preview-toolbar-collapse-dock {
+  width: var(--preview-toolbar-control-height, 22px);
+  height: var(--preview-toolbar-control-height, 22px);
+  min-height: var(--preview-toolbar-control-height, 22px);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--file-viewer-button-color, var(--vscode-foreground, #1f1f1f));
+  opacity: 1;
+}
+.preview-toolbar-pin-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Theme / collapse trail native toolbar actions as one stable group (no left/right flank). */
+.preview-universal-viewer .preview-file-viewer-chrome-slot {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.preview-universal-viewer .preview-file-viewer-chrome-slot .preview-chrome-btn {
+  width: var(--file-viewer-icon-button-size, var(--preview-toolbar-control-height, 22px));
+  min-width: var(--file-viewer-icon-button-size, var(--preview-toolbar-control-height, 22px));
+  height: var(--file-viewer-button-height, var(--preview-toolbar-control-height, 22px));
+  min-height: var(--file-viewer-button-height, var(--preview-toolbar-control-height, 22px));
+  padding: 0;
+  border: 0;
+  border-radius: var(--file-viewer-button-radius, 6px);
+  background: transparent;
+  color: var(--file-viewer-button-color, inherit);
+  opacity: 1;
+  box-shadow: none;
+  pointer-events: auto;
+}
+.preview-universal-viewer .preview-file-viewer-chrome-slot .preview-chrome-btn:hover:not(:disabled) {
+  border: 0;
+  background: var(--file-viewer-button-hover-bg, rgba(33, 163, 102, .1));
+  color: var(--file-viewer-button-hover-color, inherit);
+  opacity: 1;
+}
+.preview-universal-viewer .preview-file-viewer-chrome-slot .preview-toolbar-theme,
+.preview-universal-viewer .preview-file-viewer-chrome-slot .preview-toolbar-theme[data-mode] {
+  background: transparent;
+  opacity: 1;
+}
+.preview-universal-viewer .preview-file-viewer-chrome-slot .preview-toolbar-theme svg,
+.preview-universal-viewer .preview-file-viewer-chrome-slot .preview-toolbar-pin-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  opacity: 1;
+}
+
+/* Expand control floats at the visible top-right; inset enough for icon + leftward tip. */
+.preview-universal-viewer.is-toolbar-collapsed > .preview-toolbar-expand-dock,
+.preview-spreadsheet-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock,
+.preview-word-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock,
+.preview-universal-viewer.is-toolbar-collapsed > .preview-toolbar-toggle,
+.preview-spreadsheet-editor.is-toolbar-collapsed > .preview-toolbar-toggle,
+.preview-word-editor.is-toolbar-collapsed > .preview-toolbar-toggle {
+  position: absolute;
+  z-index: 10050;
+  top: 8px;
+  right: 12px;
+  box-sizing: border-box;
+  width: var(--preview-toolbar-control-height, 22px);
+  height: var(--preview-toolbar-control-height, 22px);
+  min-width: var(--preview-toolbar-control-height, 22px);
+  min-height: var(--preview-toolbar-control-height, 22px);
+  padding: 0;
+  border: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  box-shadow: none;
+  backdrop-filter: none;
+  background: var(--file-viewer-toolbar-bg, var(--vscode-editorWidget-background, #f3f3f3));
+  color: var(--file-viewer-button-color, var(--vscode-foreground, #1f1f1f));
+  overflow: visible;
+}
+.preview-universal-viewer.is-toolbar-collapsed > .preview-toolbar-expand-dock:hover,
+.preview-spreadsheet-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock:hover,
+.preview-word-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock:hover {
+  background: var(--file-viewer-button-hover-bg, var(--vscode-toolbar-hoverBackground, #e8e8e8));
+}
+/* Native title clips at the webview right edge — tip opens left of the control instead. */
+.preview-universal-viewer.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]::after,
+.preview-spreadsheet-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]::after,
+.preview-word-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  left: auto;
+  transform: translateY(-50%);
+  z-index: 1;
+  box-sizing: border-box;
+  max-width: min(240px, calc(100vw - 48px));
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, #1f1f1f 92%, transparent);
+  color: #f3f3f3;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+.preview-universal-viewer.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]:hover::after,
+.preview-spreadsheet-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]:hover::after,
+.preview-word-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]:hover::after,
+.preview-universal-viewer.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]:focus-visible::after,
+.preview-spreadsheet-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]:focus-visible::after,
+.preview-word-editor.is-toolbar-collapsed > .preview-toolbar-expand-dock[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+.preview-universal-viewer.is-toolbar-pinned .file-viewer-host::part(toolbar) {
+  padding-right: 96px;
+}
+.preview-universal-viewer .drawing-toolbar,
+.preview-universal-viewer .image-toolbar,
+.preview-universal-viewer .xmind-toolbar,
+.preview-universal-viewer .pdf-toolbar {
+  display: none !important;
+}
+.preview-universal-viewer .drawing-viewer { min-height: 0; }
+.preview-universal-viewer .drawing-stage { min-height: 0; flex: 1; }
+.preview-universal-viewer > *:not(.preview-toolbar-toggle):not(.preview-shell-toolbar-actions) { height: 100%; min-height: 0; }
+.preview-url-frame, .preview-pdf-frame, .preview-svg-frame, .preview-html-frame, .preview-archive-content { width: 100%; height: 100%; min-height: 400px; border: 0; color: var(--easyview-preview-text-color); background: var(--vscode-editor-background); }
+.preview-image-viewer { display: grid; min-width: min-content; min-height: 100%; place-items: center; padding: 28px; color: var(--easyview-preview-text-color); background: var(--vscode-editor-background); background-image: none; }
+.preview-image-viewer img { max-width: 100%; max-height: calc(100vh - 130px); object-fit: contain; }
+.preview-text-viewer, .preview-html-source, .preview-code-viewer { min-height: 100%; box-sizing: border-box; margin: 0; padding: 16px; overflow: auto; color: var(--easyview-preview-text-color); background: var(--vscode-editor-background); font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.preview-document-html { max-width: 960px; margin: 24px auto; padding: 28px; color: var(--easyview-preview-text-color); background: var(--vscode-editor-background); box-shadow: 0 1px 4px #0003; }
+.preview-document-html *, .preview-document-html { color: var(--easyview-preview-text-color) !important; }
+.preview-document-html img { max-width: 100%; height: auto; }
+.preview-html-viewer { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+.preview-tabs { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.preview-tabs button.active { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+.preview-html-frame { flex: 1; min-height: 0; }
+.preview-ppt-viewer { display: flex; min-height: 0; flex-direction: column; }
+.preview-ppt-canvas-root { min-height: 0; flex: 1; overflow: auto; color: var(--easyview-preview-text-color); background: var(--vscode-editor-background); }
+.preview-ppt-canvas-root canvas { display: block; max-width: 100%; margin: 0 auto 16px; }
+.preview-archive-viewer { display: grid; height: 100%; min-height: 0; grid-template-columns: minmax(240px, 38%) 1fr; }
+.preview-archive-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--file-viewer-bg, var(--vscode-editor-background));
+  color: var(--file-viewer-button-color, var(--easyview-preview-text-color));
+}
+.preview-archive-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  height: var(--preview-toolbar-strip-height, 30px);
+  min-height: var(--preview-toolbar-strip-height, 30px);
+  padding: 0 8px;
+  border-bottom: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+  background: var(--file-viewer-toolbar-bg, var(--vscode-editorWidget-background, #f3f3f3));
+}
+.preview-archive-toolbar .preview-document-chrome--embedded {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+.preview-archive-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-archive-body > .preview-archive-viewer,
+.preview-archive-body > .preview-viewer-message {
+  height: 100%;
+}
+.preview-archive-list { overflow: auto; color: var(--easyview-preview-text-color); background: var(--vscode-editor-background); border-right: 1px solid var(--vscode-panel-border); }
+.preview-archive-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--file-viewer-toolbar-bg, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
+}
+.preview-archive-list-title {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-archive-crumb {
+  overflow: hidden;
+  opacity: .72;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-archive-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 5px 8px; }
+.preview-archive-entry.is-directory button:first-child { font-weight: 600; }
+.preview-archive-entry button:first-child { overflow: hidden; border: 0; padding: 3px; background: none; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.preview-archive-entry span { opacity: .7; font-size: 12px; }
+.preview-archive-content { min-height: 0; }
+.preview-http-viewer { max-width: 960px; margin: 24px auto; }
+.preview-http-request { display: flex; gap: 8px; }
+.preview-http-request input { min-width: 0; flex: 1; border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 7px 9px; color: var(--easyview-preview-text-color); background: var(--vscode-input-background); font: inherit; }
+.preview-http-response { margin-top: 16px; }
+.preview-http-response pre { overflow: auto; padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
+.preview-heic-viewer { position: relative; padding: 0; background: transparent; }
+.preview-heic-viewer > .preview-viewer-message { position: absolute; z-index: 1; inset: 0; }
+.preview-heic-frame { width: 100%; height: 100%; min-height: 400px; border: 0; background: transparent; }
+
+/* Editable document routes (Excel/Word): same EasyView toolbar theme control as UniversalFilePreview */
+.preview-spreadsheet-editor,
+.preview-word-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0;
+  border-left: 0;
+  outline: none;
+  box-shadow: none;
+  background: var(--file-viewer-bg, var(--vscode-editor-background));
+}
+.preview-spreadsheet-mount,
+.preview-word-mount {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0;
+  background: inherit;
+}
+.preview-spreadsheet-editor .x-spreadsheet,
+.preview-spreadsheet-editor .x-spreadsheet-sheet,
+.preview-spreadsheet-editor .x-spreadsheet-table,
+.preview-spreadsheet-editor .x-spreadsheet-overlayer {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: 0 !important;
+  left: 0 !important;
+}
+/*
+ * DocxEditor ships `scrollbar-gutter: stable both-edges` + transparent track.
+ * Inside a dark IDE webview that left gutter paints as a full-height strip/gap.
+ * Beat `.ep-root .docx-editor__scroll-container` (including late-injected styles).
+ */
+.preview-word-editor .ep-root,
+.preview-word-editor .ep-root .docx-editor__scroll-container,
+.preview-word-editor .docx-editor__scroll-container,
+.preview-word-editor .ep-root .docx-editor-vue__pages-viewport,
+.preview-word-editor .docx-editor-vue__pages-viewport,
+.preview-word-editor .paged-editor,
+.preview-word-editor [data-testid='docx-editor'] {
+  scrollbar-gutter: auto !important;
+  scrollbar-width: thin !important;
+  background: var(--file-viewer-bg, var(--doc-bg, #fff)) !important;
+  background-color: var(--file-viewer-bg, var(--doc-bg, #fff)) !important;
+  border: 0 !important;
+  border-left: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  padding-left: 0 !important;
+  margin-left: 0 !important;
+}
+.preview-word-editor,
+.preview-word-editor .ep-root,
+.preview-word-editor .ep-root.dark,
+.preview-word-editor .preview-word-mount,
+.preview-word-editor .paged-editor,
+.preview-word-editor [data-testid='docx-editor'],
+.preview-word-editor [data-testid='editor-toolbar'],
+.preview-word-editor [data-testid='formatting-bar'] {
+  border: 0 !important;
+  border-left: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  margin-left: 0 !important;
+}
+.preview-word-editor .docx-vertical-ruler {
+  background: var(--file-viewer-bg, var(--doc-bg, #fff)) !important;
+}
+/* Outline toggle sits in the left margin; keep its backdrop from reading as a strip. */
+.preview-word-editor .docx-outline-toggle {
+  box-shadow: none !important;
+  left: 0 !important;
+}
+.preview-spreadsheet-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--file-viewer-bg, #fff) 88%, transparent);
+  pointer-events: none;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .x-spreadsheet-icon {
+  position: relative !important;
+  right: auto !important;
+  top: auto !important;
+  display: inline-block !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+.preview-spreadsheet-mount .x-spreadsheet,
+.preview-word-mount > * {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0;
+  min-height: 0;
+}
+.preview-document-route-actions {
+  z-index: 1200;
+}
+.preview-spreadsheet-editor.is-toolbar-collapsed .x-spreadsheet-toolbar {
+  display: none !important;
+}
+/* collapsed expand dock styles are shared above */
+
+/* Drive Excel chrome with EasyView palette; do not rely on x-spreadsheet/office theme toggles */
+.preview-spreadsheet-editor .x-spreadsheet-toolbar,
+.preview-spreadsheet-editor .x-spreadsheet-bottombar {
+  background: var(--file-viewer-toolbar-bg, var(--vscode-editorWidget-background)) !important;
+  color: var(--file-viewer-button-color, var(--vscode-foreground)) !important;
+  border-color: var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+}
+
+/* Sheet tab strip: compact bar; + / … after last sheet (Excel-like), not on the left. */
+.preview-spreadsheet-editor .x-spreadsheet-bottombar {
+  height: 24px !important;
+  min-height: 24px !important;
+  max-height: 24px !important;
+  padding: 0 6px !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  flex-shrink: 0 !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: nowrap;
+  height: 24px !important;
+  max-height: 24px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu > li {
+  float: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 24px !important;
+  max-height: 24px !important;
+  line-height: 24px !important;
+  padding: 0 8px !important;
+  box-sizing: border-box !important;
+  font-weight: 500 !important;
+  font-size: 12px !important;
+  color: var(--file-viewer-button-color, var(--vscode-foreground)) !important;
+  background: transparent !important;
+  border-color: var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu > li.active {
+  background: var(--file-viewer-button-hover-bg, var(--vscode-toolbar-hoverBackground)) !important;
+  color: var(--file-viewer-button-color, var(--vscode-foreground)) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu > li:first-child {
+  /* Library puts add/more as the first <li>; keep it after all sheet tabs. */
+  order: 9999;
+  border-right: 0 !important;
+  padding: 0 2px !important;
+  gap: 2px;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu > li .x-spreadsheet-icon {
+  margin: 0 2px !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu > li .x-spreadsheet-icon,
+.preview-spreadsheet-editor .x-spreadsheet-bottombar .x-spreadsheet-menu > li .x-spreadsheet-icon-img {
+  width: 14px !important;
+  height: 14px !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar {
+  width: 100% !important;
+  box-sizing: border-box;
+  height: var(--preview-toolbar-strip-height) !important;
+  min-height: var(--preview-toolbar-strip-height) !important;
+  border-bottom: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+  padding: 0 8px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px;
+  overflow: hidden;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .x-spreadsheet-toolbar-btns {
+  flex-shrink: 1;
+  min-width: 0;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar > [data-easyview-spreadsheet-chrome] {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 0 0 6px;
+  border-left: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border));
+  box-sizing: border-box;
+  min-height: var(--preview-toolbar-control-height, 24px);
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .preview-document-chrome--embedded {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn {
+  box-sizing: border-box !important;
+  height: var(--preview-toolbar-control-height) !important;
+  min-height: var(--preview-toolbar-control-height) !important;
+  min-width: var(--preview-toolbar-control-height) !important;
+  margin: 0 !important;
+  line-height: calc(var(--preview-toolbar-control-height) - 2px) !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: inherit !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn:hover,
+.preview-spreadsheet-editor .x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn.active {
+  border-color: var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+  background: var(--file-viewer-button-hover-bg, var(--vscode-toolbar-hoverBackground)) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet,
+.preview-spreadsheet-editor .x-spreadsheet-sheet,
+.preview-spreadsheet-editor .x-spreadsheet-table,
+.preview-spreadsheet-editor .x-spreadsheet-overlayer,
+.preview-spreadsheet-editor .x-spreadsheet-bottombar,
+.preview-spreadsheet-editor .x-spreadsheet-toolbar {
+  border: 0 !important;
+  border-left: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+  background: var(--file-viewer-bg, #fff) !important;
+  overflow: hidden !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-sheet {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  background: var(--file-viewer-bg, #fff) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-table {
+  background: var(--file-viewer-bg, #fff) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar,
+.preview-spreadsheet-editor .x-spreadsheet-bottombar {
+  flex: 0 0 auto !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-bottombar {
+  margin-top: auto !important;
+  border-top: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+}
+.preview-spreadsheet-editor .x-spreadsheet-toolbar {
+  border-bottom: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+}
+.preview-spreadsheet-editor.is-toolbar-pinned > .preview-document-route-actions {
+  display: none !important;
+}
+.preview-spreadsheet-editor[data-preview-theme='dark'] .x-spreadsheet,
+.preview-spreadsheet-editor[data-preview-theme='gray'] .x-spreadsheet {
+  color-scheme: dark;
+}
+.preview-spreadsheet-editor[data-preview-theme='light'] .x-spreadsheet {
+  color-scheme: light;
+}
+
+/* Universal file-viewer chrome (PDF / PPTX / image): full-width strip, controls centered */
+.preview-universal-viewer .file-viewer-host::part(toolbar),
+.preview-universal-viewer .file-viewer-web-toolbar {
+  display: flex !important;
+  flex: 0 0 auto !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  align-self: stretch !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--file-viewer-toolbar-border, var(--vscode-panel-border)) !important;
+  background: var(--file-viewer-toolbar-bg, var(--vscode-editorWidget-background)) !important;
+  color: var(--file-viewer-button-color, var(--vscode-foreground)) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  min-height: var(--preview-toolbar-strip-height) !important;
+  height: auto !important;
+  box-sizing: border-box !important;
+  padding: 3px 8px !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+}
+.preview-universal-viewer .file-viewer-web-toolbar[data-toolbar-position='top'],
+.preview-universal-viewer .file-viewer-web-toolbar[data-toolbar-position='top-center'] {
+  position: relative !important;
+  left: 0 !important;
+  right: 0 !important;
+  inset: auto !important;
+  transform: none !important;
+  justify-content: center !important;
+}
+.preview-universal-viewer .file-viewer-web-toolbar-group {
+  background: var(--file-viewer-group-bg, transparent);
+  border-color: var(--file-viewer-group-border, var(--file-viewer-toolbar-border, var(--vscode-panel-border)));
+  flex-shrink: 0;
+}
+.preview-universal-viewer .file-viewer-web-toolbar button,
+.preview-universal-viewer .file-viewer-web-print-menu > button {
+  background: transparent;
+  color: var(--file-viewer-button-color, inherit);
+}
+.preview-universal-viewer .file-viewer-web-toolbar button:hover:not(:disabled),
+.preview-universal-viewer .file-viewer-web-print-menu > button:hover:not(:disabled) {
+  background: var(--file-viewer-button-hover-bg, var(--vscode-toolbar-hoverBackground));
+  color: var(--file-viewer-button-hover-color, var(--file-viewer-button-color));
+}
+.preview-universal-viewer.is-toolbar-pinned .preview-shell-toolbar-actions {
+  height: var(--preview-toolbar-strip-height);
+}
+/* Portaled chrome replaces the absolute overlay strip for UniversalFilePreview. */
+.preview-universal-viewer.is-toolbar-pinned > .preview-shell-toolbar-actions {
+  display: none;
+}
+.preview-universal-viewer.is-toolbar-pinned .file-viewer-host::part(toolbar) {
+  padding-right: 0;
+}
+
+/* Word editor chrome follows EasyView shell vars; hide any residual theme switchers if present */
+.preview-word-editor [data-theme-toggle],
+.preview-word-editor .docx-theme-toggle,
+.preview-word-editor button[aria-label*='Dark mode' i],
+.preview-word-editor button[aria-label*='Appearance' i],
+.preview-word-editor button[title*='Dark mode' i] {
+  display: none !important;
+}
+
+/*
+ * Restyle DocxEditor chrome to EasyView flat panel (same language as Excel / UniversalFilePreview).
+ * Selector beats `.ep-root.dark` so light/gray/dark all use product palette — never IDE tokens.
+ */
+.preview-word-editor[data-preview-theme] .ep-root,
+.preview-word-editor[data-preview-theme] .ep-root.dark {
+  --doc-surface: var(--file-viewer-toolbar-bg);
+  --doc-card: var(--file-viewer-toolbar-bg);
+  --doc-bg: var(--file-viewer-bg);
+  --doc-bg-subtle: var(--file-viewer-toolbar-bg);
+  --doc-bg-hover: var(--file-viewer-button-hover-bg);
+  --doc-bg-input: var(--file-viewer-input-bg, var(--file-viewer-bg));
+  --doc-text: var(--file-viewer-button-color);
+  --doc-text-muted: color-mix(in srgb, var(--file-viewer-button-color) 72%, transparent);
+  --doc-text-subtle: color-mix(in srgb, var(--file-viewer-button-color) 48%, transparent);
+  --doc-text-placeholder: color-mix(in srgb, var(--file-viewer-button-color) 42%, transparent);
+  --doc-border: var(--file-viewer-toolbar-border);
+  --doc-border-light: var(--file-viewer-toolbar-border);
+  --doc-border-dark: var(--file-viewer-toolbar-border);
+  --doc-border-input: var(--file-viewer-toolbar-border);
+  --doc-primary: var(--file-viewer-button-color);
+  --doc-primary-hover: var(--file-viewer-button-color);
+  --doc-primary-light: color-mix(in srgb, var(--file-viewer-button-color) 14%, transparent);
+  --doc-accent: var(--file-viewer-button-color);
+  --doc-accent-bg: color-mix(in srgb, var(--file-viewer-button-color) 12%, transparent);
+  --doc-toggle-active-bg: var(--file-viewer-button-hover-bg);
+  --doc-toggle-active-fg: var(--file-viewer-button-color);
+  --doc-shadow-subtle: transparent;
+  --doc-card-shadow: none;
+  --doc-card-shadow-strong: none;
+  --doc-shadow: transparent;
+  --doc-page-bg: var(--file-viewer-bg);
+  --doc-scrollbar-track: var(--file-viewer-bg);
+  --doc-scrollbar-thumb: color-mix(in srgb, var(--file-viewer-button-color) 35%, transparent);
+  --doc-scrollbar-thumb-hover: color-mix(in srgb, var(--file-viewer-button-color) 55%, transparent);
+  color: var(--doc-text);
+  background: var(--doc-bg);
+  color-scheme: light;
+}
+
+.preview-word-editor[data-preview-theme='dark'] .ep-root,
+.preview-word-editor[data-preview-theme='dark'] .ep-root.dark {
+  color-scheme: dark;
+}
+
+.preview-word-editor [data-testid='editor-toolbar'] {
+  background: var(--file-viewer-toolbar-bg) !important;
+  box-shadow: none !important;
+  border-bottom: 1px solid var(--file-viewer-toolbar-border);
+  color: var(--file-viewer-button-color) !important;
+}
+
+/* Drop filename + File/Format/Insert menu row — one formatting strip only */
+.preview-word-editor [data-testid='title-bar'] {
+  display: none !important;
+}
+
+.preview-word-editor [data-testid='formatting-bar'] {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  border-top: 0 !important;
+  min-height: var(--preview-toolbar-strip-height) !important;
+  height: var(--preview-toolbar-strip-height) !important;
+  max-height: var(--preview-toolbar-strip-height) !important;
+  padding: 0 8px !important;
+  gap: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  box-shadow: none !important;
+  color: var(--file-viewer-button-color) !important;
+  box-sizing: border-box !important;
+}
+
+/* Embedded EasyView chrome stays inline after Word tools — do not pin to far right. */
+.preview-word-editor [data-testid='formatting-bar'] .preview-document-chrome--embedded {
+  display: inline-flex;
+  align-items: center;
+  height: var(--preview-toolbar-control-height, 24px);
+  max-height: var(--preview-toolbar-control-height, 24px);
+  flex-shrink: 0;
+}
+.preview-word-editor [data-testid='formatting-bar'] .preview-toolbar-collapse-dock,
+.preview-word-editor [data-testid='formatting-bar'] .preview-chrome-btn {
+  width: var(--preview-toolbar-control-height, 24px);
+  height: var(--preview-toolbar-control-height, 24px);
+  min-height: var(--preview-toolbar-control-height, 24px);
+  max-height: var(--preview-toolbar-control-height, 24px);
+  box-sizing: border-box;
+}
+
+/* Kill DocxEditor default group padding/border classes. */
+.preview-word-editor [data-testid='formatting-bar'] > [role='group'] {
+  gap: 2px !important;
+  padding: 0 2px !important;
+  border: 0 !important;
+}
+.preview-word-editor [data-testid='formatting-bar'] > [role='group']:first-child {
+  padding-left: 0 !important;
+}
+.preview-word-editor [data-testid='formatting-bar'] > [role='group']:last-child {
+  padding-right: 0 !important;
+}
+
+.preview-word-editor [data-testid='formatting-bar'] .ep-toolbar-toggle,
+.preview-word-editor [data-testid='formatting-bar'] button,
+.preview-word-editor [data-testid='formatting-bar'] [role='combobox'],
+.preview-word-editor [data-testid='formatting-bar'] input,
+.preview-word-editor [data-testid='formatting-bar'] .bg-doc-bg-input,
+.preview-word-editor [data-testid='font-size-display'],
+.preview-word-editor [data-testid='font-size-input'] {
+  box-sizing: border-box !important;
+  height: var(--preview-toolbar-control-height) !important;
+  min-height: var(--preview-toolbar-control-height) !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  color: var(--file-viewer-button-color) !important;
+  background: transparent !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.preview-word-editor [data-testid='formatting-bar'] [role='combobox'],
+.preview-word-editor [data-testid='formatting-bar'] input,
+.preview-word-editor [data-testid='font-size-display'],
+.preview-word-editor [data-testid='font-size-input'] {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+
+.preview-word-editor [data-testid='formatting-bar'] .ep-toolbar-toggle:hover,
+.preview-word-editor [data-testid='formatting-bar'] button:hover:not(:disabled),
+.preview-word-editor [data-testid='formatting-bar'] [role='combobox']:hover,
+.preview-word-editor [data-testid='font-size-display']:hover {
+  border-color: var(--file-viewer-toolbar-border) !important;
+  background: var(--file-viewer-button-hover-bg) !important;
+  color: var(--file-viewer-button-hover-color, var(--file-viewer-button-color)) !important;
+}
+
+.preview-word-editor [data-testid='formatting-bar'] .ep-toolbar-toggle[data-active='true'],
+.preview-word-editor [data-testid='formatting-bar'] button[aria-pressed='true'] {
+  background: var(--file-viewer-button-hover-bg) !important;
+  color: var(--file-viewer-button-color) !important;
+}
+
+.preview-word-editor [data-testid='formatting-bar'] .text-muted-foreground {
+  color: color-mix(in srgb, var(--file-viewer-button-color) 62%, transparent) !important;
+}
+
+.preview-word-editor.is-toolbar-pinned > .preview-document-route-actions {
+  height: var(--preview-toolbar-strip-height);
+}
+
+/* DocxEditor mode switcher (Editing/Suggesting/Viewing): icon-only */
+.preview-word-editor [data-testid='editor-toolbar'] button[title*='Ctrl+Shift+E'] {
+  box-sizing: border-box !important;
+  width: var(--preview-toolbar-control-height) !important;
+  min-width: var(--preview-toolbar-control-height) !important;
+  height: var(--preview-toolbar-control-height) !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  justify-content: center !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: var(--file-viewer-button-color) !important;
+  box-shadow: none !important;
+}
+.preview-word-editor [data-testid='editor-toolbar'] button[title*='Ctrl+Shift+E'] > span {
+  display: none !important;
+}
+.preview-word-editor [data-testid='editor-toolbar'] button[title*='Ctrl+Shift+E'] > :last-child {
+  display: none !important;
+}
+.preview-word-editor [data-testid='editor-toolbar'] button[title*='Ctrl+Shift+E']:hover {
+  border-color: var(--file-viewer-toolbar-border) !important;
+  background: var(--file-viewer-button-hover-bg) !important;
+}
+
+.preview-word-editor[data-preview-theme='gray'] .ep-root {
+  --doc-page-bg: color-mix(in srgb, var(--file-viewer-bg) 88%, #fff);
+}

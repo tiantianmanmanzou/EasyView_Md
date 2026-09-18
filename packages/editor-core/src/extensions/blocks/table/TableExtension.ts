@@ -10,16 +10,24 @@ import type { NodeSpec, Schema } from 'prosemirror-model';
 import type { NodeViewConstructor, EditorView } from 'prosemirror-view';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { columnResizing, tableEditing } from 'prosemirror-tables';
+import type { EditorHostTransport } from '@easyview/contracts';
 import { Extension, type SerializerNodeHandler } from '../../../editor/EditorExtension';
 import { gripSelectionPlugin } from './GripSelectionPlugin';
 import { tableKeywordsPlugin } from './TableKeywordsPlugin';
-import { TableView } from './TableView';
+import { createTableViewConstructor } from './TableView';
 import { TableCellView } from './TableCellView';
 import { columnResizeGuardPlugin, withoutRootResizeCursor } from './ColumnResizeGuard';
 
 // ─── Table Extension ─────────────────────────────────────────────────────────
 
 export class TableExtension extends Extension {
+  private readonly tableViewConstructor: ReturnType<typeof createTableViewConstructor>;
+
+  constructor(host: EditorHostTransport) {
+    super();
+    this.tableViewConstructor = createTableViewConstructor(host);
+  }
+
   get name() {
     return 'table';
   }
@@ -162,7 +170,7 @@ export class TableExtension extends Extension {
 
   get nodeViews(): Record<string, NodeViewConstructor> {
     return {
-      table: (node, view) => new TableView(node, 32, view),
+      table: (node, view) => new this.tableViewConstructor(node, 32, view),
       table_cell: (node) => new TableCellView(node),
       table_header: (node) => new TableCellView(node),
     };
@@ -177,7 +185,7 @@ export class TableExtension extends Extension {
           cellMinWidth: 32,
           defaultCellMinWidth: 32,
           lastColumnResizable: true,
-          View: TableView,
+          View: this.tableViewConstructor,
         })
       ),
       tableEditing(),

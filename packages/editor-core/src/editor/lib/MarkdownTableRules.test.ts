@@ -2,7 +2,8 @@
  * @vitest-environment happy-dom
  */
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
+import { resolve } from 'node:path';
 
 import { createParser, parseMarkdown } from './MarkdownParser';
 import { parseHtmlTableBlock } from './HtmlTableParser';
@@ -39,6 +40,15 @@ describe('HTML table reconstruction', () => {
     });
     expect(nestedTables).toBe(1);
     expect(lastCell.childCount).toBeGreaterThan(2);
+
+    // Outer row must keep only its own cells — nested <td>/<th> must not leak.
+    expect(doc!.child(0).child(1).childCount).toBe(2);
+
+    const saved = docToMarkdown(doc!);
+    expect(saved).toContain('| 状态大类 | 状态小类 |');
+    expect(saved).toMatch(/\|\s*库状态\s*\|\s*库\s*\|/);
+    // Nested table is pipe markdown inside the HTML cell, not a nested <table>.
+    expect(saved).not.toMatch(/<td[^>]*>[\s\S]*?<table[\s\S]*?<\/table>[\s\S]*?<\/td>/);
   });
 
   it('keeps outer table rows after a nested HTML table', () => {
@@ -163,6 +173,12 @@ intro paragraph
       return true;
     });
     expect(nestedTables).toBe(1);
+
+    const saved = docToMarkdown(doc!);
+    expect(saved).toMatch(/\|\s*子类\s*\|\s*范围\s*\|/);
+    expect(saved).toMatch(/\|\s*E1\s*\|\s*E1-1\s*\|/);
+    // Nested GFM table stays as pipe markdown inside the HTML cell.
+    expect(saved).not.toMatch(/<td[^>]*>[\s\S]*?<table[\s\S]*?<\/table>[\s\S]*?<\/td>/);
   });
 
   it('parses a standard GFM table embedded directly in an outer HTML td', () => {
@@ -210,12 +226,11 @@ intro paragraph
   });
 });
 
-const realSpecPath =
-  '/Users/zhangxy/GAFile/浙江中台/浙江数安中台5期/项目管理/技术规范书-采购包1-数安中台-软件功能要求模块清单.md';
+const mixedHtmlGfmFixturePath = resolve(__dirname, '../../../../../tests/fixtures/editor/mixed-html-gfm-spec.md');
 
-describe.runIf(existsSync(realSpecPath))('real-world spec file', () => {
+describe('fixed mixed HTML/GFM spec fixture', () => {
   it('keeps 【需求说明】 in cells that mix HTML tables and GFM tables', () => {
-    const markdown = readFileSync(realSpecPath, 'utf8');
+    const markdown = readFileSync(mixedHtmlGfmFixturePath, 'utf8');
     const doc = parseMarkdown(markdown, createParser());
     expect(doc).not.toBeNull();
 
@@ -268,18 +283,14 @@ leading paragraph
     expect(roundTrip!.textContent).toContain('第二行');
   });
 
-  it('compacts real spec file row boundaries on save', () => {
-    const realSpecPath =
-      '/Users/zhangxy/GAFile/浙江中台/浙江数安中台5期/项目管理/技术规范书-采购包1-数安中台-软件功能要求模块清单.md';
-    if (!existsSync(realSpecPath)) return;
-
-    const markdown = readFileSync(realSpecPath, 'utf8');
+  it('compacts fixed fixture row boundaries on save', () => {
+    const markdown = readFileSync(mixedHtmlGfmFixturePath, 'utf8');
     const saved = docToMarkdown(parseMarkdown(markdown, createParser())!);
     const lines = saved.split('\n');
     const standaloneTags = lines.filter((line) => /^<\/?(?:tr|td|th)>\s*$/.test(line));
 
     expect(standaloneTags).toEqual([]);
-    expect(lines.some((line) => /^<tr><td/.test(line))).toBe(true);
+    expect(lines.some((line) => /^<tr\b[^>]*><td\b/.test(line))).toBe(true);
   });
 
   it('compacts legacy standalone table tags line-by-line', () => {

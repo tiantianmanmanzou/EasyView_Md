@@ -1,5 +1,5 @@
 /**
- * InLineMd Webview Entry Point
+ * EasyView_Md Webview Entry Point
  *
  * Thin host shell: creates Extensions + EditorCore, handles VS Code messaging and UI.
  * All ProseMirror logic is in Extensions and EditorCore.
@@ -18,13 +18,14 @@ import { KeyboardOverridesExtension } from './extensions/behavior/keyboard-overr
 import { ListsExtension } from './extensions/blocks/lists/ListsExtension';
 import { SmartTextExtension } from './extensions/behavior/smart-text/SmartTextExtension';
 import { MarksExtension } from './extensions/inline/marks/MarksExtension';
-import { HeadingExtension, setHeadingOutlinePathCopyHandler, setToastFunction } from './extensions/blocks/heading/HeadingExtension';
+import { HeadingExtension } from './extensions/blocks/heading/HeadingExtension';
 import { BlockquoteExtension } from './extensions/blocks/blockquote/BlockquoteExtension';
 import { CodeBlockExtension } from './extensions/blocks/code-block/CodeBlockExtension';
 import { NoticeExtension } from './extensions/blocks/notice/NoticeExtension';
 import { HorizontalRuleExtension } from './extensions/blocks/horizontal-rule/HorizontalRuleExtension';
 import { TableExtension } from './extensions/blocks/table/TableExtension';
 import { setFirstRowStickyDefault } from './extensions/blocks/table/TablePreferences';
+import { cellPopupImageSelected } from './extensions/blocks/table/TableCellContentPopup';
 import { ImageExtension } from './extensions/inline/image/ImageExtension';
 import { MermaidExtension } from './extensions/blocks/mermaid/MermaidExtension';
 import { PlantUmlExtension } from './extensions/blocks/plantuml/PlantUmlExtension';
@@ -56,7 +57,7 @@ import {
 } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
 import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
-import { stripSettingsComment } from './editor/lib/EditorSettings';
+import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
 import { ExportController } from './controllers/ExportController';
 import { SourceModeController } from './controllers/SourceModeController';
 import { LayoutController } from './controllers/LayoutController';
@@ -65,51 +66,128 @@ import { EditorBootstrap } from './controllers/EditorBootstrap';
 
 // UI
 import { FloatingToolbar } from './extensions/behavior/toolbar/ToolbarFloating';
-import { linkEditPopup } from './extensions/behavior/toolbar/ToolbarLinkPopup';
-import { imageToolbar } from './extensions/inline/image/ImageToolbar';
+import { createToolbarButtons } from './extensions/behavior/toolbar/ToolbarButtons';
+import { LinkEditPopup } from './extensions/behavior/toolbar/ToolbarLinkPopup';
+import { ImageToolbar } from './extensions/inline/image/ImageToolbar';
 import { FindAndReplacePanel } from './extensions/behavior/find-replace/FindReplacePanel';
 import { TableOfContents } from './extensions/blocks/heading/TableOfContents';
 import { createSourceEditor } from './editor/SourceEditor';
 import { DualModeHistory } from './editor/DualModeHistory';
 import { EditOperationLog } from './editor/EditOperationLog';
 import { describeProseMirrorTransaction, describeSourceDocChange } from './editor/describeEditOperation';
-import { createFileHeader, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
+import { createFileHeader, type EasyViewAccentTheme, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
+export type { EasyViewAccentTheme } from './ui/FileHeader';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
 import { createTerminalModal, type TerminalAppearance } from './ui/TerminalModal';
-import type { HostToWebviewMessage, VscodeWebviewApi } from '../shared/protocol';
+import { createAiChatPanel } from './ui/AiChatPanel';
+import type { EditorHostTransport, EditorSourceDocumentRequest, HostToEditorMessage } from '@easyview/contracts';
+import type { EasyViewEditorHostActions } from './hosts/host-actions';
+export type { EasyViewEditorHostActions } from './hosts/host-actions';
 import { handleHostMessageSideEffect } from './hostMessageRouter';
+import { createEditorDomContext, type EasyViewEditorRoot } from './runtime/editorDomContext';
 
-// ─── VS Code API ────────────────────────────────────────────────────────────
-
-// @ts-expect-error — acquireVsCodeApi is injected by VS Code webview
-const vscode = acquireVsCodeApi() as VscodeWebviewApi;
-
-// Expose VS Code API globally for extensions (TableCommands CSV export, etc.)
-window.__vscodeApi = vscode;
-
-// Global reference to EditorView for TableView and table commands access
-let globalEditorView: EditorView | null = null;
-
-/** Get the current EditorView instance (used by TableView and table commands) */
-export function getEditorView(): EditorView | null {
-  return globalEditorView;
+export interface EasyViewEditorOptions {
+  host: EditorHostTransport;
+  initialMessage?: HostToEditorMessage;
+  hostActions?: EasyViewEditorHostActions;
+  uiMode?: 'standard' | 'desktop';
+  outlinePosition?: 'left' | 'right';
+  aiChatContainer?: HTMLElement | null;
+  /** DOM subtree owned by this editor instance. Defaults to the current document. */
+  root?: EasyViewEditorRoot;
 }
 
-// ─── State ──────────────────────────────────────────────────────────────────
+export type EasyViewEditorCommand =
+  | 'toggleOutline' | 'toggleSourceMode' | 'toggleFullWidth' | 'toggleTableWrap'
+  | 'toggleTheme'
+  | 'zoomIn' | 'zoomOut' | 'resetZoom' | 'scrollTop' | 'scrollBottom'
+  | 'toggleHeadingCollapse' | 'toggleHistory' | 'toggleStickyNote' | 'toggleAiChat' | 'openTerminal'
+  | 'stageFile' | 'openCommit' | 'syncGit' | 'exportHtmlLight' | 'exportHtmlDark'
+  | 'exportPdfLight' | 'exportPdfDark' | 'exportDocx' | 'findReplace';
+
+export interface EasyViewEditorUiState {
+  sourceMode: boolean;
+  outlineVisible: boolean;
+  fullWidth: boolean;
+  tableWrap: boolean;
+}
+
+export type EasyViewThemeMode = 'light' | 'gray' | 'dark';
+
+export interface EasyViewEditorThemeState {
+  mode: EasyViewThemeMode;
+  depth: number;
+}
+
+export interface EasyViewEditorInstance {
+  executeCommand(command: EasyViewEditorCommand): void;
+  setOutlineVisible(visible: boolean): void;
+  getUiState(): EasyViewEditorUiState;
+  subscribeUiState(listener: (state: EasyViewEditorUiState) => void): { unsubscribe(): void };
+  setOutlineWidth(width: number): void;
+  getThemeState(): EasyViewEditorThemeState;
+  setThemeDepth(depth: number): void;
+  getAccentTheme(): EasyViewAccentTheme;
+  setAccentTheme(theme: EasyViewAccentTheme): void;
+  setDocumentActive(active: boolean): void;
+  dispose(): void;
+}
+
+/** Creates one editor instance for the current document/page. */
+export function createEasyViewEditor({ host, initialMessage, hostActions = {}, uiMode = 'standard', outlinePosition = 'left', aiChatContainer = null, root = document }: EasyViewEditorOptions): EasyViewEditorInstance {
+  const dom = createEditorDomContext(root);
+
+  if (host.capabilities.sourceMode === 'native' && !hostActions.openSourceDocument) {
+    throw new Error('Native source mode requires the host openSourceDocument action');
+  }
+  if (host.capabilities.shortcutPersistence && !hostActions.persistOpenEditorShortcut) {
+    throw new Error('Shortcut persistence requires the host persistOpenEditorShortcut action');
+  }
+
+  let disposed = false;
+  let readyRetryTimer: ReturnType<typeof setInterval> | null = null;
+  let readyRetryStopTimer: ReturnType<typeof setTimeout> | null = null;
+  let globalEditorView: EditorView | null = null;
+
+  // ─── State ──────────────────────────────────────────────────────────────────
 
 let currentContent = '';
 let currentFilePath = '';
+let documentActive = true;
 let autoFollowExternalEdits = true;
 let isFullWidth = true;
-let isTocVisible = true;
+let isTocVisible = false; // TOC sidebar starts closed; keep button state in sync
 let isTableWrap = false; // default: disabled
 let isSourceMode = false;
+let getThemeStateImpl: () => EasyViewEditorThemeState = () => ({ mode: 'light', depth: 0.5 });
+let setThemeDepthImpl: (depth: number) => void = () => undefined;
+let setThemeModeImpl: (mode: EasyViewThemeMode) => void = () => undefined;
+let getAccentThemeImpl: () => EasyViewAccentTheme = () => 'default';
+let setAccentThemeImpl: (theme: EasyViewAccentTheme) => void = () => undefined;
+let setDocumentActiveImpl: (active: boolean) => void = (active) => { documentActive = active; };
+let setOutlineVisibleImpl: (visible: boolean) => void = (visible) => { isTocVisible = visible; };
+const uiStateListeners = new Set<(state: EasyViewEditorUiState) => void>();
+let executeCommandImpl: (command: EasyViewEditorCommand) => void = () => undefined;
+  const getUiState = (): EasyViewEditorUiState => ({
+  sourceMode: isSourceMode,
+  outlineVisible: isTocVisible,
+  fullWidth: isFullWidth,
+  tableWrap: isTableWrap,
+});
+const notifyUiState = (): void => {
+  const state = getUiState();
+  uiStateListeners.forEach((listener) => listener(state));
+};
 let canPostEditsToHost = false;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
 let sourceModeController: SourceModeController | null = null;
 const toggleSourceMode = (): void => { sourceModeController?.toggleSourceMode(); };
-const openNativeSourceMode = (): void => { sourceModeController?.openNativeSourceMode(); };
+const openSourceDocument = (): void => { sourceModeController?.openSourceDocument(); };
+const openPreferredSourceMode = (): void => {
+  if (host.capabilities.sourceMode === 'embedded') toggleSourceMode();
+  else openSourceDocument();
+};
 let terminalAppearance: TerminalAppearance = {};
 const dualHistory = new DualModeHistory();
 const editOperationLog = new EditOperationLog();
@@ -125,6 +203,7 @@ let toolbarShortcuts: ToolbarShortcutConfig = {
   toggleTheme: 'Alt+R',
   toggleTerminal: 'Alt+T',
   toggleStickyNote: 'Alt+N',
+  toggleAiChat: 'Alt+I',
   openSourceMode: 'Alt+Q',
   copyOutlinePath: 'Alt+Shift+O',
   copyFullPath: 'Alt+Shift+P',
@@ -274,9 +353,9 @@ function matchesToolbarShortcut(event: KeyboardEvent, action: ToolbarShortcutAct
 
 function ensurePlaceholderHorizontalFlowStyles(): void {
   const styleId = 'easyview-placeholder-horizontal-flow';
-  if (document.getElementById(styleId)) return;
+  if (dom.getById(styleId)) return;
 
-  const style = document.createElement('style');
+  const style = dom.document.createElement('style');
   style.id = styleId;
   style.textContent = `
     .ProseMirror .easyview-placeholder-host {
@@ -306,14 +385,14 @@ function ensurePlaceholderHorizontalFlowStyles(): void {
       z-index: 0;
     }
   `;
-  document.head.appendChild(style);
+  dom.document.head.appendChild(style);
 }
 
 function ensureMinimalGitChangeStyles(): void {
   const styleId = 'easyview-minimal-git-change-styles';
-  if (document.getElementById(styleId)) return;
+  if (dom.getById(styleId)) return;
 
-  const style = document.createElement('style');
+  const style = dom.document.createElement('style');
   style.id = styleId;
   style.textContent = `
     .ProseMirror .block-ai-modified,
@@ -363,23 +442,23 @@ function ensureMinimalGitChangeStyles(): void {
       background: var(--vscode-editorWarning-foreground, #f59e0b);
     }
   `;
-  document.head.appendChild(style);
+  dom.document.head.appendChild(style);
 }
 
 function ensureEditorContentGutterStyles(): void {
   const styleId = 'easyview-editor-content-gutter';
-  if (document.getElementById(styleId)) return;
+  if (dom.getById(styleId)) return;
 
-  const style = document.createElement('style');
+  const style = dom.document.createElement('style');
   style.id = styleId;
   style.textContent = `
     #editor {
-      padding-left: 8px !important;
+      padding-left: 48px !important;
       padding-right: 8px !important;
     }
     #editor.full-width,
     body.full-width #editor {
-      padding-left: 36px !important;
+      padding-left: 48px !important;
       padding-right: 8px !important;
     }
     #source-editor {
@@ -393,23 +472,15 @@ function ensureEditorContentGutterStyles(): void {
     #editor:not(.full-width) .ProseMirror .table-wrapper {
       max-width: 100% !important;
     }
-    .ProseMirror > h1 .block-drag-handle.with-heading-level,
-    .ProseMirror > h2 .block-drag-handle.with-heading-level,
-    .ProseMirror > h3 .block-drag-handle.with-heading-level,
-    .ProseMirror > h4 .block-drag-handle.with-heading-level,
-    .ProseMirror > h5 .block-drag-handle.with-heading-level,
-    .ProseMirror > h6 .block-drag-handle.with-heading-level {
-      margin-left: -34px;
-    }
   `;
-  document.head.appendChild(style);
+  dom.document.head.appendChild(style);
 }
 
 function ensureTableWidthStyles(): void {
   const styleId = 'easyview-table-width-without-minimum';
-  if (document.getElementById(styleId)) return;
+  if (dom.getById(styleId)) return;
 
-  const style = document.createElement('style');
+  const style = dom.document.createElement('style');
   style.id = styleId;
   style.textContent = `
     /* Brighter table borders for better visibility */
@@ -779,12 +850,12 @@ function ensureTableWidthStyles(): void {
       cursor: col-resize !important;
     }
   `;
-  document.head.appendChild(style);
+  dom.document.head.appendChild(style);
 }
 
 function updateGitChangeRailOffset(): void {
-  const scrollArea = document.getElementById('editor-scroll-area');
-  const proseMirror = document.querySelector('#editor .ProseMirror') as HTMLElement | null;
+  const scrollArea = dom.getById('editor-scroll-area');
+  const proseMirror = dom.query('#editor .ProseMirror') as HTMLElement | null;
   if (!scrollArea || !proseMirror) return;
 
   const scrollRect = scrollArea.getBoundingClientRect();
@@ -855,7 +926,7 @@ function persistEditorScrollPosition(scrollArea: HTMLElement, content: string): 
 }
 
 function scrollWysiwygToApproxLine(line: number, totalLines: number): void {
-  const scrollArea = document.getElementById('editor-scroll-area');
+  const scrollArea = dom.getById('editor-scroll-area');
   if (!scrollArea) return;
 
   const safeTotal = Math.max(1, totalLines);
@@ -875,12 +946,12 @@ function scrollWysiwygToApproxLine(line: number, totalLines: number): void {
 
 /** Show a brief toast notification */
 function showToast(message: string) {
-  const existing = document.querySelector('.inlinemd-toast');
+  const existing = dom.query('.inlinemd-toast');
   if (existing) existing.remove();
-  const toast = document.createElement('div');
+  const toast = dom.document.createElement('div');
   toast.className = 'inlinemd-toast';
   toast.textContent = message;
-  document.body.appendChild(toast);
+  dom.themeRoot.appendChild(toast);
   toast.offsetHeight;
   toast.classList.add('visible');
   setTimeout(() => {
@@ -970,10 +1041,10 @@ function updateSourceSettingsComment(): void {
 
 function postEdit(content: string): void {
   if (!canPostEditsToHost) {
-    console.debug('[InLineMd] Suppressed pre-init edit sync', {
+    console.debug('[EasyView_Md] Suppressed pre-init edit sync', {
       length: content.length,
     });
-    vscode.postMessage({
+    host.postMessage({
       type: 'openWithDebugLog',
       stage: 'suppressedPreInitEdit',
       meta: {
@@ -983,7 +1054,7 @@ function postEdit(content: string): void {
     });
     return;
   }
-  vscode.postMessage({
+  host.postMessage({
     type: 'openWithDebugLog',
     stage: 'postEdit',
     meta: {
@@ -991,7 +1062,7 @@ function postEdit(content: string): void {
       currentContentLength: currentContent.length,
     },
   });
-  vscode.postMessage({
+  host.postMessage({
     type: 'edit',
     content,
     fullWidth: isFullWidth,
@@ -1086,7 +1157,7 @@ async function copyTextToClipboard(text: string, successMessage: string): Promis
   } catch {
     // Fall back to host clipboard.
   }
-  vscode.postMessage({ type: 'copyTextToClipboard', text, successMessage });
+  host.postMessage({ type: 'copyTextToClipboard', text, successMessage });
 }
 
 async function copyOutlinePathText(outline: string): Promise<void> {
@@ -1119,13 +1190,13 @@ async function copyFullPathForSelection(): Promise<void> {
 function isDarkTheme(): boolean {
   try {
     const stored = localStorage.getItem('mdpre-zalman-theme');
-    if (stored === 'light') return false;
+    if (stored === 'light' || stored === 'gray') return false;
     if (stored === 'dark') return true;
   } catch {
     // Webview storage can be unavailable in restricted contexts.
   }
   try {
-    let bgColor = getComputedStyle(document.body).getPropertyValue('--vscode-editor-background').trim();
+    let bgColor = getComputedStyle(dom.themeRoot).getPropertyValue('--vscode-editor-background').trim();
     if (bgColor) {
       let r, g, b;
       if (bgColor.startsWith('#')) {
@@ -1168,15 +1239,18 @@ function toggleAllHeadings(view: EditorView, collapse: boolean): void {
 
 function initEditor() {
   const tInit = performance.now();
-  console.log('[InLineMd perf] initEditor START');
+  console.log('[EasyView_Md perf] initEditor START');
 
-  const editorElement = document.getElementById('editor');
+  const editorElement = dom.getById('editor');
   if (!editorElement) {
     console.error('Editor element not found');
     return;
   }
 
-  const wysiwygGhostEl = document.createElement('span');
+  const imageToolbar = new ImageToolbar(dom);
+  const linkEditPopup = new LinkEditPopup(dom);
+
+  const wysiwygGhostEl = dom.document.createElement('span');
   wysiwygGhostEl.style.position = 'fixed';
   wysiwygGhostEl.style.display = 'none';
   wysiwygGhostEl.style.pointerEvents = 'none';
@@ -1185,7 +1259,7 @@ function initEditor() {
     'var(--vscode-inlineSuggestion-foreground, var(--vscode-editorGhostText-foreground, rgba(128, 128, 128, 0.7)))';
   wysiwygGhostEl.style.opacity = '0.9';
   wysiwygGhostEl.style.zIndex = '40';
-  document.body.appendChild(wysiwygGhostEl);
+  dom.themeRoot.appendChild(wysiwygGhostEl);
 
   let wysiwygGhostSuggestion: WysiwygGhostSuggestion | null = null;
   let wysiwygGhostRequestToken = 0;
@@ -1207,7 +1281,7 @@ function initEditor() {
 
   // Apply default table-wrap class (enabled by default)
   editorElement.classList.add('table-wrap');
-  window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
+  dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
 
   const isDark = isDarkTheme();
 
@@ -1218,14 +1292,20 @@ function initEditor() {
     new ListsExtension(),
     new SmartTextExtension(),
     new MarksExtension(),
-    new HeadingExtension(),
+    new HeadingExtension({
+      document: dom.document,
+      onToast: showToast,
+      onCopyOutlinePath: (headingPos) => { void copyOutlinePathAtPos(headingPos); },
+    }),
     new BlockquoteExtension(),
     new CodeBlockExtension(),
     new NoticeExtension(),
     new HorizontalRuleExtension(),
-    new TableExtension(),
-    new ImageExtension(),
-    new MermaidExtension(isDark),
+    new TableExtension(host),
+    new ImageExtension(imageToolbar),
+    new MermaidExtension(isDark, (href) => {
+      host.postMessage({ type: 'openLink', href });
+    }),
     new PlantUmlExtension(),
     new ExternalDiagramExtension(),
     new FrontmatterExtension(),
@@ -1251,18 +1331,14 @@ function initEditor() {
     new AiChangesExtension(),
   ];
 
-  console.log(`[InLineMd perf] create extensions: ${(performance.now() - tExt).toFixed(1)}ms`);
-
-  // Register toast callback for HeadingExtension (anchor link copy)
-  setToastFunction(showToast);
-  setHeadingOutlinePathCopyHandler((headingPos) => {
-    void copyOutlinePathAtPos(headingPos);
-  });
+  console.log(`[EasyView_Md perf] create extensions: ${(performance.now() - tExt).toFixed(1)}ms`);
 
   // 2. Create UI components
   const tUI = performance.now();
   const fileHeader = createFileHeader({
-    postMessage: (msg) => vscode.postMessage(msg),
+    dom,
+    capabilities: host.capabilities,
+    postMessage: (msg) => host.postMessage(msg),
     getState: () => ({
       isFullWidth,
       isTocVisible,
@@ -1276,32 +1352,37 @@ function initEditor() {
     },
     onSettingsChange: () => updateSourceSettingsComment(),
   });
+  getThemeStateImpl = () => fileHeader.getThemeState();
+  setThemeDepthImpl = (depth) => fileHeader.setThemeDepth(depth);
+  setThemeModeImpl = (mode) => fileHeader.setThemeMode(mode);
+  getAccentThemeImpl = () => fileHeader.getAccentTheme();
+  setAccentThemeImpl = (theme) => fileHeader.setAccentTheme(theme);
   fileHeader.setShortcutChangeHandler((config) => {
     toolbarShortcuts = config;
-    vscode.postMessage({
-      type: 'syncOpenEditorShortcut',
-      shortcut: config.openWithEasyView,
-    });
+    if (host.capabilities.shortcutPersistence) {
+      hostActions.persistOpenEditorShortcut!(config.openWithEasyView);
+    }
   });
   fileHeader.setExternalFollowHandler((enabled) => {
     autoFollowExternalEdits = enabled;
   });
-  const editorBody = document.getElementById('editor-body');
-  if (editorBody) {
+  const editorBody = dom.getById('editor-body');
+  if (editorBody && uiMode === 'standard') {
     editorBody.parentElement?.insertBefore(fileHeader.el, editorBody);
   }
-  const toolbar = new FloatingToolbar();
-  window.addEventListener('easyview-table-cell-popup-open', () => toolbar.forceHide());
-  (window as any).__easyviewCopyOutlinePath = () => {
+  const toolbar = new FloatingToolbar(createToolbarButtons((view) => linkEditPopup.toggle(view)), dom);
+  const tableCellPopupOpenHandler = () => toolbar.forceHide();
+  dom.eventTarget.addEventListener('easyview-table-cell-popup-open', tableCellPopupOpenHandler);
+  (dom.root as any).__easyviewCopyOutlinePath = () => {
     void copyOutlinePathForSelection();
   };
-  (window as any).__easyviewCopyFullPath = () => {
+  (dom.root as any).__easyviewCopyFullPath = () => {
     void copyFullPathForSelection();
   };
-  console.log(`[InLineMd perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
+  console.log(`[EasyView_Md perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
   let stickyNote: StickyNoteFacade = createNoopStickyNote();
   const terminalModal = createTerminalModal({
-    postMessage: (msg) => vscode.postMessage(msg),
+    postMessage: (msg) => host.postMessage(msg),
     appearance: terminalAppearance,
     onVisibilityChange: (visible) => fileHeader.syncTerminalState(visible),
   });
@@ -1331,7 +1412,7 @@ function initEditor() {
       },
       'Mod-s': () => {
         editor.flushSync();
-        vscode.postMessage({ type: 'save' });
+        host.postMessage({ type: 'save' });
         return true;
       },
     },
@@ -1370,7 +1451,7 @@ function initEditor() {
       imageToolbar.show(view, pos, node, dom);
     },
     onOpenLink(href) {
-      vscode.postMessage({ type: 'openLink', url: href });
+      host.postMessage({ type: 'openLink', url: href });
     },
     onLinkSelect(view, href) {
       linkEditPopup.show(view, href);
@@ -1417,7 +1498,7 @@ function initEditor() {
     },
   });
 
-  console.log(`[InLineMd perf] new EditorCore(): ${(performance.now() - tCore).toFixed(1)}ms`);
+  console.log(`[EasyView_Md perf] new EditorCore(): ${(performance.now() - tCore).toFixed(1)}ms`);
 
   try {
     stickyNote = createStickyNoteModal({
@@ -1436,7 +1517,7 @@ function initEditor() {
         }
         postEdit(content);
         if (options?.save) {
-          vscode.postMessage({ type: 'save' });
+          host.postMessage({ type: 'save' });
         }
       },
       requestTabCompletion({ line, character, wordPrefix }) {
@@ -1447,8 +1528,8 @@ function initEditor() {
       },
     });
   } catch (error) {
-    console.error('[InLineMd] Sticky note initialization failed:', error);
-    vscode.postMessage({
+    console.error('[EasyView_Md] Sticky note initialization failed:', error);
+    host.postMessage({
       type: 'webviewRuntimeError',
       source: 'sticky-note-init',
       message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
@@ -1457,29 +1538,68 @@ function initEditor() {
     stickyNote = createNoopStickyNote();
   }
 
+  const aiChatPanel = createAiChatPanel({
+    postMessage: (msg) => host.postMessage(msg),
+    container: aiChatContainer,
+    getDocumentContent: () => documentActive
+      ? (isSourceMode && sourceEditor
+        ? stripSettingsComment(sourceEditor.getContent())
+        : currentContent || editor.getMarkdown())
+      : '',
+    getFilePath: () => documentActive ? currentFilePath : '',
+    getFileName: () => documentActive ? currentFilePath.split('/').pop() || '' : '',
+    applyDocumentEdit: (content) => {
+      if (!documentActive) return;
+      currentContent = content;
+      if (isSourceMode && sourceEditor) {
+        sourceEditor.setContent(content, { addToHistory: true });
+        updateTocStatusBar();
+      } else {
+        // externalChange meta lights up AiChangesExtension highlights;
+        // addToHistory makes the whole AI edit a single undo step.
+        editor.setContent(content, false, { externalChange: true, addToHistory: true, scrollIntoView: false });
+        updateTocStatusBar();
+      }
+      postEdit(content);
+    },
+    copyText: (text, successMessage) => {
+      void copyTextToClipboard(text, successMessage ?? '已复制');
+    },
+    onVisibilityChange: (visible) => {
+      fileHeader.syncAiChatState(visible);
+      dom.eventTarget.dispatchEvent(new CustomEvent('easyview-ai-chat-visibility-change', { detail: visible }));
+    },
+  });
+  setDocumentActiveImpl = (active) => {
+    documentActive = active;
+    aiChatPanel.setDocumentContextAvailable(active);
+    aiChatPanel.setFilePath(active ? currentFilePath : '');
+  };
+
   // 4. Initialize editor
   const tEditorInit = performance.now();
   editor.init(editorElement);
-  console.log(`[InLineMd perf] editor.init(): ${(performance.now() - tEditorInit).toFixed(1)}ms`);
+  console.log(`[EasyView_Md perf] editor.init(): ${(performance.now() - tEditorInit).toFixed(1)}ms`);
 
   const view = editor.view!;
   globalEditorView = view;
-  window.addEventListener('resize', renderWysiwygGhost);
-  window.addEventListener('resize', updateGitChangeRailOffset);
-  window.addEventListener('easyview-toc-layout-change', refreshChangeRailsAfterLayout);
-  window.addEventListener('easyview-editor-layout-change', refreshChangeRailsAfterLayout);
-  const editorScrollArea = document.getElementById('editor-scroll-area');
+  dom.eventTarget.addEventListener('resize', renderWysiwygGhost);
+  dom.eventTarget.addEventListener('resize', updateGitChangeRailOffset);
+  dom.eventTarget.addEventListener('easyview-toc-layout-change', refreshChangeRailsAfterLayout);
+  dom.eventTarget.addEventListener('easyview-editor-layout-change', refreshChangeRailsAfterLayout);
+  const editorScrollArea = dom.getById('editor-scroll-area');
   editorScrollArea?.addEventListener('scroll', renderWysiwygGhost, { passive: true });
-  if (editorScrollArea) {
-    editorScrollArea.addEventListener('scroll', () => {
-      persistEditorScrollPosition(editorScrollArea, currentContent || editor.getMarkdown());
-    }, { passive: true });
+  const persistScrollHandler = editorScrollArea
+    ? () => persistEditorScrollPosition(editorScrollArea, currentContent || editor.getMarkdown())
+    : null;
+  if (editorScrollArea && persistScrollHandler) {
+    editorScrollArea.addEventListener('scroll', persistScrollHandler, { passive: true });
     restoreEditorScrollPosition(editorScrollArea, currentContent || editor.getMarkdown());
   }
   const layoutController = new LayoutController({
     editorElement,
-    scrollArea: document.getElementById('editor-scroll-area'),
-    editorBody: document.getElementById('editor-body'),
+    scrollArea: dom.getById('editor-scroll-area'),
+    editorBody: dom.getById('editor-body'),
     isSourceMode: () => isSourceMode,
     getSourceEditor: () => sourceEditor,
     updateGitChangeRailOffset,
@@ -1489,15 +1609,16 @@ function initEditor() {
     isDarkTheme,
   }, isDark);
 
-  editorElement.addEventListener('focusout', () => {
+  const editorFocusOutHandler = (): void => {
     wysiwygGhostRequestToken++;
     hideWysiwygGhost();
-  });
+  };
+  editorElement.addEventListener('focusout', editorFocusOutHandler);
   toolbar.attach(view);
 
   // Initialize custom context menu (Cut/Copy/Paste/Paste as Text)
   const contextPasteParser = createPasteParser();
-  initContextMenu(
+  const contextMenuCleanup = initContextMenu(
     editorElement,
     () => editor.view,
     () => contextPasteParser
@@ -1511,7 +1632,23 @@ function initEditor() {
   );
 
   // Create Table of Contents sidebar
-  const toc = new TableOfContents(view);
+  const toc = new TableOfContents(view, { position: outlinePosition, dom });
+  toc.setFilePath(currentFilePath);
+  setOutlineVisibleImpl = (visible) => {
+    if (visible === toc.visible && visible === isTocVisible) return;
+    if (visible) toc.open();
+    else toc.close();
+    isTocVisible = toc.visible;
+    fileHeader.syncTocState(isTocVisible);
+    notifyUiState();
+  };
+  {
+    const previousSetDocumentActive = setDocumentActiveImpl;
+    setDocumentActiveImpl = (active) => {
+      previousSetDocumentActive(active);
+      if (active) toc.setFilePath(currentFilePath);
+    };
+  }
 
   // Create History panel — pure visualizer, reads from PM/CM/DualHistory
   const historyPanel = new HistoryPanel({
@@ -1547,23 +1684,26 @@ function initEditor() {
 
   fileHeader.setStageHandler(() => {
     editor.flushSync();
-    vscode.postMessage({ type: 'stageFile' });
+    host.postMessage({ type: 'stageFile' });
   });
-  fileHeader.setCommitHandler(() => {
+  const openCommitComposer = (): void => {
     editor.flushSync();
     fileHeader.openCommitModal();
-    fileHeader.setCommitMessageLoading(true);
-    vscode.postMessage({ type: 'generateCommitMessage' });
-  });
+    fileHeader.setCommitMessageLoading(host.capabilities.aiCommitMessage);
+    if (host.capabilities.aiCommitMessage) {
+      host.postMessage({ type: 'generateCommitMessage' });
+    }
+  };
+  fileHeader.setCommitHandler(openCommitComposer);
   fileHeader.setCommitConfirmHandler((message) => {
     editor.flushSync();
     fileHeader.setCommitInProgress(true, 'commit');
-    vscode.postMessage({ type: 'commitFile', message });
+    host.postMessage({ type: 'commitFile', message });
   });
   fileHeader.setCommitSyncHandler((message) => {
     editor.flushSync();
     fileHeader.setCommitInProgress(true, 'sync');
-    vscode.postMessage({ type: 'syncFile', message });
+    host.postMessage({ type: 'syncFile', message });
   });
   fileHeader.setTerminalHandler(() => {
     terminalModal.toggle();
@@ -1586,7 +1726,7 @@ function initEditor() {
     editor,
     view,
     fileHeader,
-    vscode,
+    host,
     isSourceMode: () => isSourceMode,
     getSourceEditor: () => sourceEditor,
   });
@@ -1794,7 +1934,7 @@ function initEditor() {
   const requestTabCompletionFromHost = (
     line: number,
     character: number,
-    wordPrefix: string
+    wordPrefix: string,
   ): Promise<{
     insertText: string;
     replaceStartCharacter?: number;
@@ -1802,16 +1942,10 @@ function initEditor() {
   } | null> => {
     return new Promise((resolve) => {
       const requestId = Math.random().toString(36).slice(2, 11);
-      const timeout = setTimeout(() => {
-        window.removeEventListener('message', handler);
-        resolve(null);
-      }, 1200);
-
-      const handler = (event: MessageEvent) => {
-        const message = event.data;
-        if (message?.type !== 'tabCompletionResponse' || message.requestId !== requestId) return;
+      const subscription = host.subscribe((message) => {
+        if (message.type !== 'tabCompletionResponse' || message.requestId !== requestId) return;
         clearTimeout(timeout);
-        window.removeEventListener('message', handler);
+        subscription.unsubscribe();
         if (typeof message.insertText !== 'string' || !message.insertText) {
           resolve(null);
           return;
@@ -1823,10 +1957,13 @@ function initEditor() {
           replaceEndCharacter:
             typeof message.replaceEndCharacter === 'number' ? message.replaceEndCharacter : undefined,
         });
-      };
+      });
+      const timeout = setTimeout(() => {
+        subscription.unsubscribe();
+        resolve(null);
+      }, 1200);
 
-      window.addEventListener('message', handler);
-      vscode.postMessage({
+      host.postMessage({
         type: 'requestTabCompletion',
         requestId,
         line,
@@ -1876,8 +2013,13 @@ function initEditor() {
 
   // 6. Source mode toggle
   sourceModeController = new SourceModeController({
+    dom,
     editor,
-    vscode,
+    openSourceDocument: (request: EditorSourceDocumentRequest) => {
+      const action = hostActions.openSourceDocument;
+      if (!action) throw new Error('Host source document action is unavailable');
+      action(request);
+    },
     fileHeader,
     toolbar,
     toc,
@@ -1890,7 +2032,10 @@ function initEditor() {
     getCurrentContent: () => currentContent,
     setCurrentContent: (content) => { currentContent = content; },
     isSourceMode: () => isSourceMode,
-    setSourceMode: (value) => { isSourceMode = value; },
+    setSourceMode: (value) => {
+      isSourceMode = value;
+      notifyUiState();
+    },
     getFullWidth: () => isFullWidth,
     getTocVisible: () => isTocVisible,
     getTableWrap: () => isTableWrap,
@@ -1910,65 +2055,132 @@ function initEditor() {
     getWysiwygApproxSourcePosition,
   });
 
-  fileHeader.setSourceHandler(() => openNativeSourceMode());
+  fileHeader.setSourceHandler(() => openPreferredSourceMode());
+  if (host.capabilities.sourceMode === 'embedded') {
+    fileHeader.getSourceBtn().title = 'Toggle source mode';
+  }
   fileHeader.setStickyNoteHandler(() => {
     stickyNote.toggle();
   });
+  fileHeader.setAiChatHandler(() => {
+    aiChatPanel.toggle();
+  });
 
-  new ShortcutController({
-    vscode,
+  let zoomLevel = 100;
+  const applyDesktopZoom = (next: number): void => {
+    zoomLevel = Math.max(50, Math.min(200, next));
+    const scrollArea = dom.getById('editor-scroll-area');
+    if (scrollArea) scrollArea.style.fontSize = `${zoomLevel}%`;
+    dom.eventTarget.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
+  };
+  executeCommandImpl = (command) => {
+    switch (command) {
+      case 'toggleOutline':
+        toc.toggle();
+        isTocVisible = toc.visible;
+        fileHeader.syncTocState(isTocVisible);
+        notifyUiState();
+        return;
+      case 'toggleSourceMode': openPreferredSourceMode(); notifyUiState(); return;
+      case 'toggleFullWidth':
+        isFullWidth = !isFullWidth;
+        dom.getById('editor')?.classList.toggle('full-width', isFullWidth);
+        fileHeader.syncFullWidthState(isFullWidth);
+        dom.eventTarget.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
+        notifyUiState();
+        return;
+      case 'toggleTableWrap':
+        isTableWrap = !isTableWrap;
+        dom.getById('editor')?.classList.toggle('table-wrap', isTableWrap);
+        fileHeader.syncTableWrapState(isTableWrap);
+        dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
+        notifyUiState();
+        return;
+      case 'toggleTheme': fileHeader.cycleTheme(); return;
+      case 'zoomIn': applyDesktopZoom(zoomLevel + 10); return;
+      case 'zoomOut': applyDesktopZoom(zoomLevel - 10); return;
+      case 'resetZoom': applyDesktopZoom(100); return;
+      case 'scrollTop': layoutController.scrollTop(); return;
+      case 'scrollBottom': layoutController.scrollBottom(); return;
+      case 'toggleHeadingCollapse': isAllCollapsed = !isAllCollapsed; toggleAllHeadings(view, isAllCollapsed); return;
+      case 'toggleHistory': historyPanel.toggle(); return;
+      case 'toggleStickyNote': stickyNote.toggle(); return;
+      case 'toggleAiChat':
+        if (host.capabilities.aiChat) aiChatPanel.toggle();
+        return;
+      case 'openTerminal': terminalModal.toggle(); return;
+      case 'stageFile': editor.flushSync(); host.postMessage({ type: 'stageFile' }); return;
+      case 'openCommit': openCommitComposer(); return;
+      case 'syncGit': openCommitComposer(); return;
+      case 'exportHtmlLight': void exportController.exportHtml('light'); return;
+      case 'exportHtmlDark': void exportController.exportHtml('dark'); return;
+      case 'exportPdfLight': void exportController.exportPdf('light'); return;
+      case 'exportPdfDark': void exportController.exportPdf('dark'); return;
+      case 'exportDocx': void exportController.exportDocx(); return;
+      case 'findReplace': findReplacePanel.open(true); return;
+    }
+  };
+
+  const shortcutUnregister = new ShortcutController({
+    host,
     fileHeader,
     layout: layoutController,
     terminal: terminalModal,
     stickyNote,
+    aiChat: aiChatPanel,
     getShortcut: (action) => toolbarShortcuts[action],
     matchesShortcut: eventMatchesShortcut,
     isSourceMode: () => isSourceMode,
     toggleSourceMode,
-    openNativeSourceMode,
+    openSourceDocument: openPreferredSourceMode,
+    openCommitComposer,
     copyOutlinePath: copyOutlinePathForSelection,
     copyFullPath: copyFullPathForSelection,
     flushEditor: () => editor.flushSync(),
+    keyEventTarget: dom.root,
   }).register();
 
   // 7. Event listeners
-  window.addEventListener('inlinemd:openLink', ((e: CustomEvent) => {
-    vscode.postMessage({ type: 'openLink', url: e.detail.url });
-  }) as EventListener);
-
-  window.addEventListener('inlinemd:imageSelected', ((e: CustomEvent) => {
+  const openLinkHandler = ((e: CustomEvent) => {
+    host.postMessage({ type: 'openLink', url: e.detail.url });
+  }) as EventListener;
+  const imageSelectedHandler = ((e: CustomEvent) => {
     const { pos, node, dom } = e.detail;
     imageToolbar.show(view, pos, node, dom);
-  }) as EventListener);
-
-  window.addEventListener('inlinemd:pickImage', ((e: CustomEvent) => {
-    vscode.postMessage({ type: 'pickImage', pos: e.detail.pos });
-  }) as EventListener);
-
-  window.addEventListener('inlinemd:dropImages', ((e: CustomEvent) => {
+  }) as EventListener;
+  const pickImageHandler = ((e: CustomEvent) => {
+    host.postMessage({ type: 'pickImage', pos: e.detail.pos });
+  }) as EventListener;
+  const dropImagesHandler = ((e: CustomEvent) => {
     const { paths, pos } = e.detail;
-    vscode.postMessage({ type: 'dropImages', paths, pos });
-  }) as EventListener);
-
-  window.addEventListener('inlinemd:pasteImage', ((e: CustomEvent) => {
+    host.postMessage({ type: 'dropImages', paths, pos });
+  }) as EventListener;
+  const pasteImageHandler = ((e: CustomEvent) => {
     const { dataUrl, mimeType, name, pos } = e.detail;
-    vscode.postMessage({ type: 'pasteImage', dataUrl, mimeType, name, pos });
-  }) as EventListener);
+    host.postMessage({ type: 'pasteImage', dataUrl, mimeType, name, pos });
+  }) as EventListener;
+  dom.eventTarget.addEventListener('inlinemd:openLink', openLinkHandler);
+  dom.eventTarget.addEventListener('inlinemd:imageSelected', imageSelectedHandler);
+  dom.eventTarget.addEventListener('inlinemd:pickImage', pickImageHandler);
+  dom.eventTarget.addEventListener('inlinemd:dropImages', dropImagesHandler);
+  dom.eventTarget.addEventListener('inlinemd:pasteImage', pasteImageHandler);
 
   // 8. Theme change observer
-  window.addEventListener('inlinemd:themeChanged', ((event: CustomEvent) => {
+  const themeChangeHandler = ((event: CustomEvent) => {
     layoutController.applyThemeChange(!!event.detail?.isDark);
-  }) as EventListener);
+  }) as EventListener;
+  dom.eventTarget.addEventListener('inlinemd:themeChanged', themeChangeHandler);
   const themeObserver = new MutationObserver(() => layoutController.applyThemeChange());
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
-  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
+  themeObserver.observe(dom.themeRoot, { attributes: true, attributeFilter: ['class', 'style'] });
 
   // 9. Message handling
   let initReceived = false;
 
-  window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) => {
-    const message = event.data;
+  const handleHostMessage = (message: HostToEditorMessage): void => {
     if (terminalModal.handleMessage(message)) {
+      return;
+    }
+    if (aiChatPanel.handleMessage(message)) {
       return;
     }
 
@@ -1981,6 +2193,8 @@ function initEditor() {
         fileHeader.setCommitError(messageText);
         showToast(messageText);
       },
+      onStageFileCompleted: (messageText) => showToast(messageText),
+      onStageFileFailed: (messageText) => showToast(messageText),
       onCommitFileCompleted: (messageText) => {
         fileHeader.setCommitInProgress(false);
         showToast(messageText);
@@ -2004,7 +2218,7 @@ function initEditor() {
       onClipboardCopyFailed: (messageText) => showToast(messageText),
       onFocus: () => editor.focus(),
       onRevealCursor: (cursorLine, totalLinesFromMsg) => {
-        const scrollArea = document.getElementById('editor-scroll-area');
+        const scrollArea = dom.getById('editor-scroll-area');
         if (!scrollArea) return;
         const totalLinesFromContent = Math.max(1, currentContent.split('\n').length);
         const safeTotal = Math.max(1, totalLinesFromMsg || totalLinesFromContent);
@@ -2024,6 +2238,9 @@ function initEditor() {
       onRequestExportDocx: () => void exportController.exportDocx(),
       onImageSelected: ({ src, originalSrc, pos }) => {
         if (!src) return;
+        // Image paste initiated inside the cell content popup editor: route
+        // the reply to the popup editor instead of the main document.
+        if (cellPopupImageSelected(src, originalSrc, typeof pos === 'number' ? pos : -1)) return;
         editor.insertImage(src, originalSrc, pos);
         if (typeof pos === 'number' && pos >= 0) showToast('Image replaced');
       },
@@ -2042,7 +2259,7 @@ function initEditor() {
         const tMsg = message.type === 'init' ? performance.now() : 0;
         const isInit = message.type === 'init';
         const previousContent = currentContent;
-        vscode.postMessage({
+        host.postMessage({
           type: 'openWithDebugLog',
           stage: message.type === 'init' ? 'initReceived' : 'documentChangedReceived',
           meta: {
@@ -2053,7 +2270,7 @@ function initEditor() {
           },
         });
         if (message.type === 'init') {
-          console.log('[InLineMd perf] init message received');
+          console.log('[EasyView_Md perf] init message received');
           dualHistory.clear();
           editOperationLog.clear();
         }
@@ -2073,6 +2290,10 @@ function initEditor() {
         }
         if (typeof message.filePath === 'string') {
           currentFilePath = message.filePath;
+          aiChatPanel.setFilePath(documentActive ? currentFilePath : '');
+          // Always bind TOC expand state to the document path (not documentActive),
+          // so file switches cannot drop restored keys during tab transitions.
+          toc.setFilePath(currentFilePath);
         }
         if (message.terminalAppearance && typeof message.terminalAppearance === 'object') {
           terminalAppearance = message.terminalAppearance as TerminalAppearance;
@@ -2082,10 +2303,10 @@ function initEditor() {
         if (message.type === 'init') {
           if (typeof message.fullWidth === 'boolean') {
             isFullWidth = message.fullWidth;
-            document.getElementById('editor')?.classList.toggle('full-width', isFullWidth);
+            dom.getById('editor')?.classList.toggle('full-width', isFullWidth);
             fileHeader.syncFullWidthState(isFullWidth);
           }
-          if (typeof message.tocVisible === 'boolean') {
+          if (typeof message.tocVisible === 'boolean' && uiMode !== 'desktop') {
             isTocVisible = message.tocVisible;
             if (isTocVisible) toc.open();
             if (!isTocVisible) toc.close();
@@ -2096,10 +2317,11 @@ function initEditor() {
           }
           if (typeof message.tableWrap === 'boolean') {
             isTableWrap = message.tableWrap;
-            document.getElementById('editor')?.classList.toggle('table-wrap', isTableWrap);
-            window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
+            dom.getById('editor')?.classList.toggle('table-wrap', isTableWrap);
+            dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
             fileHeader.syncTableWrapState(isTableWrap);
           }
+          notifyUiState();
         }
 
         if (content === currentContent && message.type !== 'init') return;
@@ -2117,7 +2339,7 @@ function initEditor() {
         }
 
         const tSetContent = isInit ? performance.now() : 0;
-        const scrollArea = document.getElementById('editor-scroll-area');
+        const scrollArea = dom.getById('editor-scroll-area');
         const prevScrollRatio =
           !isInit && scrollArea && scrollArea.scrollHeight > scrollArea.clientHeight
             ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
@@ -2148,11 +2370,11 @@ function initEditor() {
           );
         }
         if (isInit) {
-          console.log(`[InLineMd perf] editor.setContent(init): ${(performance.now() - tSetContent).toFixed(1)}ms`);
+          console.log(`[EasyView_Md perf] editor.setContent(init): ${(performance.now() - tSetContent).toFixed(1)}ms`);
           toolbar.update(view);
           toc.update(view);
           requestAnimationFrame(() => {
-            const scrollArea = document.getElementById('editor-scroll-area');
+            const scrollArea = dom.getById('editor-scroll-area');
             if (scrollArea) {
               const cursorLine =
                 typeof (message as any).initialCursorLine === 'number' ? (message as any).initialCursorLine : 0;
@@ -2175,11 +2397,11 @@ function initEditor() {
               restoreEditorScrollPosition(scrollArea, content);
             }
             editor.view?.dom.querySelectorAll('.mdpre-source-line-gutter').forEach((el) => el.remove());
-            document.body.classList.remove('inlinemd-booting');
-            document.body.classList.add('inlinemd-ready');
+            dom.themeRoot.classList.remove('inlinemd-booting');
+            dom.themeRoot.classList.add('inlinemd-ready');
           });
-          console.log(`[InLineMd perf] init message TOTAL: ${(performance.now() - tMsg).toFixed(1)}ms`);
-          console.log(`[InLineMd perf] initEditor TOTAL: ${(performance.now() - tInit).toFixed(1)}ms`);
+          console.log(`[EasyView_Md perf] init message TOTAL: ${(performance.now() - tMsg).toFixed(1)}ms`);
+          console.log(`[EasyView_Md perf] initEditor TOTAL: ${(performance.now() - tInit).toFixed(1)}ms`);
         }
         break;
       }
@@ -2200,68 +2422,183 @@ function initEditor() {
         }
         break;
 
+      case 'setProductTheme': {
+        const mode = message.mode;
+        if (mode === 'light' || mode === 'gray' || mode === 'dark') {
+          setThemeModeImpl(mode);
+        }
+        break;
+      }
+
     }
-  });
+  };
+
+  const hostSubscription = host.subscribe(handleHostMessage);
 
   const isResizeObserverLoopDiagnostic = (message: string): boolean =>
     message === 'ResizeObserver loop completed with undelivered notifications.' ||
     message === 'ResizeObserver loop limit exceeded';
 
-  window.addEventListener('error', (event) => {
+  const errorHandler = (event: ErrorEvent): void => {
     if (isResizeObserverLoopDiagnostic(event.message)) {
       // Chromium reports this as a window error even though it is a recoverable
       // layout diagnostic. Keep it out of the user-facing VS Code error dialog.
-      console.warn(`[InLineMd] ${event.message}`);
+      console.warn(`[EasyView_Md] ${event.message}`);
       return;
     }
 
-    vscode.postMessage({
+    host.postMessage({
       type: 'webviewRuntimeError',
       source: 'window-error',
       message: event.message,
       stack: event.error?.stack ?? '',
     });
-  });
+  };
+  dom.eventTarget.addEventListener('error', errorHandler as EventListener);
 
-  window.addEventListener('unhandledrejection', (event) => {
+  const unhandledRejectionHandler = (event: PromiseRejectionEvent): void => {
     const reason = event.reason;
-    vscode.postMessage({
+    host.postMessage({
       type: 'webviewRuntimeError',
       source: 'unhandled-rejection',
       message: reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason),
       stack: reason instanceof Error ? (reason.stack ?? '') : '',
     });
-  });
+  };
+  dom.eventTarget.addEventListener('unhandledrejection', unhandledRejectionHandler as EventListener);
 
   // 10. Bootstrap
   const tBootstrap = performance.now();
-  console.log(`[InLineMd perf] pre-bootstrap setup: ${(tBootstrap - tInit).toFixed(1)}ms`);
-  const embeddedData = (window as any).__INITIAL_DATA__;
-  if (embeddedData) {
-    console.log(`[InLineMd perf] dispatching embedded __INITIAL_DATA__`);
-    window.dispatchEvent(new MessageEvent('message', { data: embeddedData }));
-    delete (window as any).__INITIAL_DATA__;
+  console.log(`[EasyView_Md perf] pre-bootstrap setup: ${(tBootstrap - tInit).toFixed(1)}ms`);
+  if (initialMessage) {
+    console.log(`[EasyView_Md perf] applying explicit initial host message`);
+    handleHostMessage(initialMessage);
   } else {
-    vscode.postMessage({ type: 'ready' });
-    const readyRetry = setInterval(() => {
-      if (initReceived) {
-        clearInterval(readyRetry);
+    host.postMessage({ type: 'ready' });
+    readyRetryTimer = setInterval(() => {
+      if (initReceived || disposed) {
+        if (readyRetryTimer) clearInterval(readyRetryTimer);
+        readyRetryTimer = null;
         return;
       }
-      vscode.postMessage({ type: 'ready' });
+      host.postMessage({ type: 'ready' });
     }, 500);
-    setTimeout(() => clearInterval(readyRetry), 10000);
+    readyRetryStopTimer = setTimeout(() => {
+      if (readyRetryTimer) clearInterval(readyRetryTimer);
+      readyRetryTimer = null;
+      readyRetryStopTimer = null;
+    }, 10000);
   }
+
+  return {
+    executeCommand: (command: EasyViewEditorCommand) => executeCommandImpl(command),
+    setOutlineVisible: (visible: boolean) => setOutlineVisibleImpl(visible),
+    getUiState,
+    subscribeUiState: (listener: (state: EasyViewEditorUiState) => void) => {
+      uiStateListeners.add(listener);
+      listener(getUiState());
+      return { unsubscribe: () => uiStateListeners.delete(listener) };
+    },
+    setOutlineWidth: (width: number) => toc.setWidth(width),
+    getThemeState: getThemeStateImpl,
+    setThemeDepth: setThemeDepthImpl,
+    getAccentTheme: getAccentThemeImpl,
+    setAccentTheme: setAccentThemeImpl,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      hostSubscription.unsubscribe();
+      if (readyRetryTimer) clearInterval(readyRetryTimer);
+      if (readyRetryStopTimer) clearTimeout(readyRetryStopTimer);
+      readyRetryTimer = null;
+      readyRetryStopTimer = null;
+      dom.eventTarget.removeEventListener('error', errorHandler as EventListener);
+      dom.eventTarget.removeEventListener('unhandledrejection', unhandledRejectionHandler as EventListener);
+      dom.eventTarget.removeEventListener('inlinemd:openLink', openLinkHandler);
+      dom.eventTarget.removeEventListener('inlinemd:imageSelected', imageSelectedHandler);
+      dom.eventTarget.removeEventListener('inlinemd:pickImage', pickImageHandler);
+      dom.eventTarget.removeEventListener('inlinemd:dropImages', dropImagesHandler);
+      dom.eventTarget.removeEventListener('inlinemd:pasteImage', pasteImageHandler);
+      dom.eventTarget.removeEventListener('inlinemd:themeChanged', themeChangeHandler);
+      dom.eventTarget.removeEventListener('easyview-toc-layout-change', refreshChangeRailsAfterLayout);
+      dom.eventTarget.removeEventListener('easyview-editor-layout-change', refreshChangeRailsAfterLayout);
+      dom.eventTarget.removeEventListener('easyview-table-cell-popup-open', tableCellPopupOpenHandler);
+      dom.eventTarget.removeEventListener('resize', renderWysiwygGhost);
+      dom.eventTarget.removeEventListener('resize', updateGitChangeRailOffset);
+      editorScrollArea?.removeEventListener('scroll', renderWysiwygGhost);
+      if (editorScrollArea && persistScrollHandler) editorScrollArea.removeEventListener('scroll', persistScrollHandler);
+      editorElement.removeEventListener('focusout', editorFocusOutHandler);
+      if (wysiwygGhostTimer) clearTimeout(wysiwygGhostTimer);
+      wysiwygGhostTimer = null;
+      wysiwygGhostRequestToken++;
+      wysiwygGhostEl.remove();
+      themeObserver.disconnect();
+      contextMenuCleanup();
+      shortcutUnregister();
+      exportController.dispose();
+      sourceModeController?.dispose();
+      imageToolbar.destroy();
+      linkEditPopup.destroy();
+      fileHeader.destroy();
+      terminalModal.destroy();
+      aiChatPanel.destroy();
+      historyPanel.destroy();
+      findReplacePanel.destroy();
+      layoutController.dispose();
+      toc.destroy();
+      toolbar.destroy();
+      stickyNote.destroy();
+      editor.destroy();
+      (dom.root as any).__easyviewCopyOutlinePath = undefined;
+      (dom.root as any).__easyviewCopyFullPath = undefined;
+      globalEditorView = null;
+    },
+  };
 }
 
-// ─── Bootstrap ──────────────────────────────────────────────────────────────
+  const bootstrap = new EditorBootstrap({
+    initialize: () => {
+      try {
+        return initEditor();
+      } catch (error) {
+        throw error;
+      }
+    },
+    document: dom.document,
+    installStyles: () => {
+      ensurePlaceholderHorizontalFlowStyles();
+      ensureMinimalGitChangeStyles();
+      ensureEditorContentGutterStyles();
+      ensureTableWidthStyles();
+    },
+  }).start();
 
-new EditorBootstrap({
-  initialize: initEditor,
-  installStyles: () => {
-    ensurePlaceholderHorizontalFlowStyles();
-    ensureMinimalGitChangeStyles();
-    ensureEditorContentGutterStyles();
-    ensureTableWidthStyles();
-  },
-}).start();
+  return {
+    executeCommand: (command: EasyViewEditorCommand) => executeCommandImpl(command),
+    setOutlineVisible: (visible: boolean) => setOutlineVisibleImpl(visible),
+    getUiState,
+    subscribeUiState: (listener: (state: EasyViewEditorUiState) => void) => {
+      uiStateListeners.add(listener);
+      listener(getUiState());
+      return { unsubscribe: () => uiStateListeners.delete(listener) };
+    },
+    setOutlineWidth: (width: number) => {
+      // The command facade is available after bootstrap; this method is safe
+      // during host initialization because it only changes the TOC shell.
+      const sidebar = dom.query<HTMLElement>('.toc-sidebar');
+      if (sidebar) {
+        const safeWidth = Math.max(220, Math.min(520, Math.round(width)));
+        sidebar.style.width = `${safeWidth}px`;
+        sidebar.style.minWidth = `${safeWidth}px`;
+      }
+    },
+    getThemeState: () => getThemeStateImpl(),
+    setThemeDepth: (depth: number) => setThemeDepthImpl(depth),
+    getAccentTheme: () => getAccentThemeImpl(),
+    setAccentTheme: (theme: EasyViewAccentTheme) => setAccentThemeImpl(theme),
+    setDocumentActive: (active: boolean) => setDocumentActiveImpl(active),
+    dispose: () => {
+      bootstrap.dispose();
+    },
+  };
+}

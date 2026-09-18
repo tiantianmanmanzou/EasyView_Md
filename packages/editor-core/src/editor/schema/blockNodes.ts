@@ -1,5 +1,5 @@
 /**
- * Block node specs for the InLineMd ProseMirror schema.
+ * Block node specs for the EasyView_Md ProseMirror schema.
  */
 
 import type { NodeSpec } from 'prosemirror-model';
@@ -58,7 +58,7 @@ const heading: NodeSpec = {
   toDOM(node) {
     return [
       `h${node.attrs.level}`,
-      { class: 'heading-content', dir: 'auto', title: 'Copy outline path' },
+      { class: 'heading-content', dir: 'auto' },
       0
     ];
   },

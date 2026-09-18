@@ -12,7 +12,7 @@
 
 import type { Node } from 'prosemirror-model';
 import type { EditorView, NodeView } from 'prosemirror-view';
-import { imageToolbar } from './ImageToolbar';
+import type { ImageToolbar } from './ImageToolbar';
 
 type HandlePosition = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -24,6 +24,7 @@ export class ImageView implements NodeView {
   private getPos: () => number | undefined;
   private handles: HTMLElement[] = [];
   private isSelected = false;
+  private imageToolbar: ImageToolbar;
   private resizing = false;
   private readonly onImageDoubleClick = (event: MouseEvent) => {
     event.preventDefault();
@@ -32,7 +33,7 @@ export class ImageView implements NodeView {
     const src = this.img.currentSrc || this.img.src || String(this.node.attrs.src || '');
     const originalSrc = String(this.node.attrs.originalSrc || '');
     const alt = String(this.node.attrs.alt || '');
-    imageToolbar.preview(src, alt, originalSrc || src);
+    this.imageToolbar.preview(src, alt, originalSrc || src);
   };
   private readonly onImageError = () => {
     const currentSrc = String(this.node.attrs.src || '');
@@ -55,10 +56,11 @@ export class ImageView implements NodeView {
     }));
   };
 
-  constructor(node: Node, view: EditorView, getPos: () => number | undefined) {
+  constructor(node: Node, view: EditorView, getPos: () => number | undefined, imageToolbar: ImageToolbar) {
     this.node = node;
     this.view = view;
     this.getPos = getPos;
+    this.imageToolbar = imageToolbar;
 
     // Wrapper — <span> because image is inline
     this.dom = document.createElement('span');

@@ -1,3 +1,4 @@
+import { createEditorRuntimeContext, type EditorRuntimeContext } from '../../../runtime/editorRuntimeContext';
 /**
  * TableView — ProseMirror NodeView for tables
  *
@@ -15,7 +16,6 @@ import {
 } from 'prosemirror-tables';
 import { TableStyleHelper } from './TableStyleHelper';
 import * as tableCommands from './TableCommands';
-import { getEditorView } from '../../../index';
 import { TableGripToolbar } from './TableGripToolbar';
 import { syncTableCellVerticalAlignmentLayout } from './TableCellView';
 import { isColumnSelection, isRowSelection, isTableSelected } from './TableQueries';
@@ -23,6 +23,7 @@ import { TableSelectionController } from './controllers/TableSelectionController
 import { RowHeightController } from './controllers/RowHeightController';
 import { NestedTableScrollController } from './controllers/NestedTableScrollController';
 import { closeTableCellContentPopup, showTableCellContentPopup } from './TableCellContentPopup';
+import type { EditorHostTransport } from '@easyview/contracts';
 
 let tableViewportStyleSequence = 0;
 
@@ -74,6 +75,7 @@ export class TableView extends ProsemirrorTableView {
   // editable and can still be dragged normally afterwards.
   private readonly compactColumnWidth = 100;
   private readonly rowHeightController = new RowHeightController();
+  private readonly runtime: EditorRuntimeContext;
   private readonly nestedTableScrollController = new NestedTableScrollController();
   private selectionController: TableSelectionController | null = null;
   // Keep the table-select dot off the row/column dashed bars and the table's
@@ -120,6 +122,9 @@ export class TableView extends ProsemirrorTableView {
 
   private readonly handleEditorScrollForStickyHeader = (): void => {
     this.scheduleStickyHeaderLayout();
+    // Row borders move under a stationary pointer during scroll — no
+    // pointermove fires, so drop any lingering resize cursor hint.
+    this.clearRowResizeCursor();
   };
   private readonly clearRowResizeCursor = (): void => {
     if (this.isRowResizing) return;
@@ -132,7 +137,12 @@ export class TableView extends ProsemirrorTableView {
   private readonly handleTablePointerMove = (event: PointerEvent): void => {
     // Events from a nested table also hit the ancestor TableView. The outer
     // table must not run geometry / control work or it janks the whole page.
-    if (this.isEventFromNestedTable(event.target)) return;
+    // Clear the hover state first so a stale row-resize cursor cannot linger
+    // once the pointer enters the nested table.
+    if (this.isEventFromNestedTable(event.target)) {
+      this.table.classList.remove('easyview-row-resize-ready');
+      return;
+    }
 
     if (this.isRowResizing || this.isTableControlTarget(event.target)) return;
     const rowIndex = this.getRowIndexAtHorizontalBorder(event.clientY);
@@ -200,6 +210,9 @@ export class TableView extends ProsemirrorTableView {
     // only on the nearest table so an outer TableView cannot steal a nested
     // cell's own overflow viewport (code, long prose).
     if (event.target.closest('.table-wrapper') !== this.dom) return;
+    // Layout moves under a stationary pointer while wheeling — clear any
+    // stale row-resize cursor hint.
+    this.clearRowResizeCursor();
 
     const horizontalDelta =
       Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : event.shiftKey ? event.deltaY : 0;
@@ -285,7 +298,7 @@ export class TableView extends ProsemirrorTableView {
     if (!cell || cell.closest('.table-wrapper') !== this.dom) return;
     if (event.clientX >= cell.getBoundingClientRect().right - 8) return;
     event.preventDefault();
-    showTableCellContentPopup(cell);
+    showTableCellContentPopup(cell, this.runtime);
   };
 
   private readonly handleTableMouseDownCapture = (event: MouseEvent): void => {
@@ -321,7 +334,7 @@ export class TableView extends ProsemirrorTableView {
       return false;
     }
 
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     const pluginState = view ? columnResizingPluginKey.getState(view.state) : null;
     if (!view || pluginState?.dragging) return false;
 
@@ -377,8 +390,13 @@ export class TableView extends ProsemirrorTableView {
     });
   };
 
-  constructor(node: ProsemirrorNode, cellMinWidth: number, _view: EditorView) {
+  constructor(
+    node: ProsemirrorNode,
+    cellMinWidth: number,
+    runtime: EditorRuntimeContext,
+  ) {
     super(node, cellMinWidth);
+    this.runtime = runtime;
     this.dom.dataset.easyviewRowViewport = this.rowViewportStyleKey;
     this.rowViewportStyle = document.createElement('style');
     document.head.appendChild(this.rowViewportStyle);
@@ -411,14 +429,14 @@ export class TableView extends ProsemirrorTableView {
     this.controlsContainer.contentEditable = 'false';
     this.controlsContainer.setAttribute('oncontextmenu', 'return false');
     this.selectionController = new TableSelectionController({
-      getEditorView,
+      getEditorView: () => this.runtime.getEditorView(),
       tableDom: this.dom,
       rowControls: this.controlsContainer,
       columnControls: this.columnControlsContainer,
     });
 
     // Initialize grip toolbar
-    this.gripToolbar = new TableGripToolbar();
+    this.gripToolbar = new TableGripToolbar(this.runtime);
 
     // Close toolbar when clicking inside table cells
     this.table.addEventListener('dblclick', this.handleTableDoubleClick);
@@ -743,7 +761,7 @@ export class TableView extends ProsemirrorTableView {
    * Create and position control elements (grips and add buttons)
    */
   private updateControls(node: ProsemirrorNode): void {
-    if (!this.controlsContainer || !this.columnControlsContainer || !this.scrollable || !this.table || !getEditorView())
+    if (!this.controlsContainer || !this.columnControlsContainer || !this.scrollable || !this.table || !this.runtime.getEditorView())
       return;
 
     // Check if we have a toolbar request from grip click, otherwise save current state
@@ -772,7 +790,7 @@ export class TableView extends ProsemirrorTableView {
       return;
     }
 
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const selectedRows = new Set<number>();
     const selectedColumns = new Set<number>();
@@ -849,7 +867,7 @@ export class TableView extends ProsemirrorTableView {
       colGrip.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const view = getEditorView();
+        const view = this.runtime.getEditorView();
         if (!view) return;
 
         // Selection-only transactions retain this table node. Keep the existing
@@ -874,7 +892,7 @@ export class TableView extends ProsemirrorTableView {
       addCol.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const view = getEditorView();
+        const view = this.runtime.getEditorView();
         if (view) {
           const targetIndex = colIndex + 1;
           tableCommands.addColumnBefore({ index: targetIndex })(view.state, view.dispatch);
@@ -893,7 +911,7 @@ export class TableView extends ProsemirrorTableView {
         addColBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          const view = getEditorView();
+          const view = this.runtime.getEditorView();
           if (view) {
             tableCommands.addColumnBefore({ index: 0 })(view.state, view.dispatch);
           }
@@ -942,7 +960,7 @@ export class TableView extends ProsemirrorTableView {
       rowGrip.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const view = getEditorView();
+        const view = this.runtime.getEditorView();
         if (!view) return;
 
         // See the column-grip handler: selection-only updates deliberately do
@@ -968,7 +986,7 @@ export class TableView extends ProsemirrorTableView {
       addRow.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const view = getEditorView();
+        const view = this.runtime.getEditorView();
         if (view) {
           tableCommands.addRowBefore({ index: rowIndex + 1 })(view.state, view.dispatch);
         }
@@ -986,7 +1004,7 @@ export class TableView extends ProsemirrorTableView {
         addRowBefore.addEventListener('mousedown', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          const view = getEditorView();
+          const view = this.runtime.getEditorView();
           if (view) {
             tableCommands.addRowBefore({ index: 0 })(view.state, view.dispatch);
           }
@@ -1009,7 +1027,7 @@ export class TableView extends ProsemirrorTableView {
     tableGrip.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (!view) return;
 
       // Show inline toolbar for table
@@ -1501,7 +1519,7 @@ export class TableView extends ProsemirrorTableView {
     } as const;
     console.info('[EasyView RowResize]', message);
     try {
-      window.__vscodeApi?.postMessage(message);
+      void this.runtime.host.postMessage(message);
     } catch {
       // Diagnostics must never interrupt normal table editing.
     }
@@ -1539,7 +1557,7 @@ export class TableView extends ProsemirrorTableView {
   }
 
   private isColumnResizeDragging(): boolean {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return false;
     return Boolean(columnResizingPluginKey.getState(view.state)?.dragging);
   }
@@ -1557,7 +1575,7 @@ export class TableView extends ProsemirrorTableView {
   }
 
   private isColumnResizeInteractionOnThisTable(): boolean {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return false;
     const pluginState = columnResizingPluginKey.getState(view.state);
     if (!pluginState || pluginState.activeHandle < 0) return false;
@@ -1719,7 +1737,7 @@ export class TableView extends ProsemirrorTableView {
   private startRowResize(event: PointerEvent, rowIndex: number, renderedHeight: number): void {
     event.preventDefault();
     event.stopPropagation();
-    if (event.button !== 0 || !getEditorView()) return;
+    if (event.button !== 0 || !this.runtime.getEditorView()) return;
 
     // A mouseup can be lost when the pointer leaves the webview. End any stale
     // session first so one interrupted drag never disables later drags.
@@ -1813,7 +1831,7 @@ export class TableView extends ProsemirrorTableView {
   }
 
   private commitRowHeight(rowIndex: number, height: number): void {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view || !this.node) {
       this.logRowResize('commitSkipped', {
         rowIndex,
@@ -1986,12 +2004,12 @@ export class TableView extends ProsemirrorTableView {
   }
 
   private isColumnResizing(): boolean {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     return Boolean(view && columnResizingPluginKey.getState(view.state)?.dragging);
   }
 
   private hasActiveColumnResizeHandle(): boolean {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     const activeHandle = view ? columnResizingPluginKey.getState(view.state)?.activeHandle : undefined;
     return activeHandle !== undefined && activeHandle >= 0;
   }
@@ -2324,7 +2342,7 @@ export class TableView extends ProsemirrorTableView {
 
   destroy(): void {
     this.table.removeEventListener('dblclick', this.handleTableDoubleClick);
-    closeTableCellContentPopup();
+    closeTableCellContentPopup(this.runtime);
     this.dom.removeEventListener('pointermove', this.handleTablePointerMove, true);
     this.dom.removeEventListener('pointerleave', this.clearRowResizeCursor, true);
     this.dom.removeEventListener('pointerdown', this.handleTablePointerDown, true);
@@ -2368,4 +2386,25 @@ export class TableView extends ProsemirrorTableView {
     this.rowViewportStyle = null;
     window.removeEventListener('easyview-table-wrap-layout-change', this.handleTableWrapLayoutChange);
   }
+}
+
+export type EasyViewTableViewConstructor = new (
+  node: ProsemirrorNode,
+  cellMinWidth: number,
+  view: EditorView,
+) => TableView;
+
+/**
+ * prosemirror-tables constructs its custom View with exactly three arguments.
+ * Bind the host once at extension construction time so every table NodeView
+ * receives the same explicit runtime context without using a global runtime.
+ */
+export function createTableViewConstructor(
+  host: EditorHostTransport,
+): EasyViewTableViewConstructor {
+  return class HostTableView extends TableView {
+    constructor(node: ProsemirrorNode, cellMinWidth: number, view: EditorView) {
+      super(node, cellMinWidth, createEditorRuntimeContext(view, host));
+    }
+  };
 }

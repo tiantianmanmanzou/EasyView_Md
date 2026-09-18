@@ -187,11 +187,12 @@ export interface TerminalModal {
   close: () => void;
   isOpen: () => boolean;
   updateAppearance: (appearance?: TerminalAppearance) => void;
-  handleMessage: (message: HostToWebviewMessage) => boolean;
+  handleMessage: (message: HostToEditorMessage) => boolean;
+  destroy: () => void;
 }
 
 export function createTerminalModal(options: {
-  postMessage: (message: WebviewToHostMessage) => void;
+  postMessage: (message: EditorToHostMessage) => void;
   appearance?: TerminalAppearance;
   onVisibilityChange?: (visible: boolean) => void;
 }): TerminalModal {
@@ -235,6 +236,7 @@ export function createTerminalModal(options: {
   const host = root.querySelector('.easyview-terminal-xterm') as HTMLElement;
 
   let terminal: Terminal | null = null;
+  let terminalDataDisposable: { dispose: () => void } | null = null;
   let fitAddon: FitAddon | null = null;
   let openState = false;
   let pinned = false;
@@ -251,6 +253,9 @@ export function createTerminalModal(options: {
   // Local font size override controlled by the +/- buttons
   // null means use the appearance value (from VS Code settings)
   let localFontSizeOverride: number | null = null;
+  let disposed = false;
+  const pendingTimeouts = new Set<number>();
+  const pendingAnimationFrames = new Set<number>();
 
   const FONT_SIZE_MIN = 8;
   const FONT_SIZE_MAX = 28;
@@ -355,15 +360,45 @@ export function createTerminalModal(options: {
     };
   };
 
+  const scheduleTimeout = (callback: () => void, delay: number): number => {
+    const timerId = window.setTimeout(() => {
+      pendingTimeouts.delete(timerId);
+      if (disposed) return;
+      callback();
+    }, delay);
+    pendingTimeouts.add(timerId);
+    return timerId;
+  };
+
+  const scheduleAnimationFrame = (callback: () => void): number => {
+    const frameId = window.requestAnimationFrame(() => {
+      pendingAnimationFrames.delete(frameId);
+      if (disposed) return;
+      callback();
+    });
+    pendingAnimationFrames.add(frameId);
+    return frameId;
+  };
+
+  const clearScheduledTasks = (): void => {
+    for (const timerId of pendingTimeouts) window.clearTimeout(timerId);
+    pendingTimeouts.clear();
+    for (const frameId of pendingAnimationFrames) window.cancelAnimationFrame(frameId);
+    pendingAnimationFrames.clear();
+    fitSequenceToken += 1;
+  };
+
   const refreshAfterFontReady = (): void => {
+    if (disposed) return;
     const family = resolveTerminalFontFamily();
     const size = typeof appearance.fontSize === 'number' && appearance.fontSize > 0 ? appearance.fontSize : 12.5;
     const weight = appearance.fontWeight || 'normal';
     const fontsApi = (document as Document & { fonts?: FontFaceSet }).fonts;
     if (!fontsApi || typeof fontsApi.load !== 'function') return;
     void fontsApi.load(`${weight} ${size}px ${family}`).then(() => {
+      if (disposed) return;
       scheduleFitSequence('fontReady');
-      requestAnimationFrame(() => {
+      scheduleAnimationFrame(() => {
         terminal?.refresh(0, Math.max(0, (terminal?.rows || 1) - 1));
       });
     }).catch(() => {
@@ -372,7 +407,7 @@ export function createTerminalModal(options: {
   };
 
   const ensureTerminal = (): void => {
-    if (terminal) return;
+    if (disposed || terminal) return;
     fitAddon = new FitAddon();
     applyAppearance();
     terminal = new Terminal({
@@ -389,7 +424,7 @@ export function createTerminalModal(options: {
     terminal.open(host);
     applyAppearance();
     refreshAfterFontReady();
-    terminal.onData((data) => {
+    terminalDataDisposable = terminal.onData((data) => {
       if (!openState || !sessionId) return;
       const sanitized = data.replace(/\x1b\[<\d+;\d+;\d+[mM]/g, '');
       if (!sanitized) return;
@@ -445,12 +480,14 @@ export function createTerminalModal(options: {
   const clearResizePostTimer = (): void => {
     if (resizePostTimer !== null) {
       window.clearTimeout(resizePostTimer);
+      pendingTimeouts.delete(resizePostTimer);
       resizePostTimer = null;
     }
   };
 
   const flushTerminalResize = (): void => {
     resizePostTimer = null;
+    if (disposed) return;
     if (!terminal || !sessionId) return;
     if (lastPostedCols === terminal.cols && lastPostedRows === terminal.rows) return;
     lastPostedCols = terminal.cols;
@@ -461,7 +498,7 @@ export function createTerminalModal(options: {
   const scheduleTerminalResizePost = (): void => {
     if (!sessionId) return;
     clearResizePostTimer();
-    resizePostTimer = window.setTimeout(() => {
+    resizePostTimer = scheduleTimeout(() => {
       flushTerminalResize();
     }, 80);
   };
@@ -540,13 +577,14 @@ export function createTerminalModal(options: {
       if (token !== fitSequenceToken || !openState) return;
       fitTerminal(`${reason}:${label}`);
     };
-    requestAnimationFrame(() => runFit('raf'));
-    window.setTimeout(() => runFit('t40'), 40);
-    window.setTimeout(() => runFit('t140'), 140);
-    window.setTimeout(() => runFit('t280'), 280);
+    scheduleAnimationFrame(() => runFit('raf'));
+    scheduleTimeout(() => runFit('t40'), 40);
+    scheduleTimeout(() => runFit('t140'), 140);
+    scheduleTimeout(() => runFit('t280'), 280);
   };
 
   const setVisible = (visible: boolean): void => {
+    if (disposed) return;
     openState = visible;
     root.classList.toggle('visible', visible);
     options.onVisibilityChange?.(visible);
@@ -561,7 +599,7 @@ export function createTerminalModal(options: {
       lastPostedCols = 0;
       lastPostedRows = 0;
       clearResizePostTimer();
-      requestAnimationFrame(() => {
+      scheduleAnimationFrame(() => {
         scheduleFitSequence('open');
         focusTerminal();
       });
@@ -575,6 +613,7 @@ export function createTerminalModal(options: {
   };
 
   const open = (): void => {
+    if (disposed) return;
     if (openState) {
       focusTerminal();
       return;
@@ -583,11 +622,12 @@ export function createTerminalModal(options: {
   };
 
   const close = (): void => {
-    if (!openState) return;
+    if (disposed || !openState) return;
     setVisible(false);
   };
 
   const toggle = (): void => {
+    if (disposed) return;
     if (openState) close();
     else open();
   };
@@ -656,17 +696,22 @@ export function createTerminalModal(options: {
   header.addEventListener('pointerup', clearDrag);
   header.addEventListener('pointercancel', clearDrag);
 
-  window.addEventListener('inlinemd:themeChanged', () => {
+  const handleThemeChanged = (): void => {
+    if (disposed) return;
     applyAppearance();
     refreshAfterFontReady();
     scheduleFitSequence('themeChanged');
-  });
-  window.addEventListener('resize', () => {
+  };
+  const handleWindowResize = (): void => {
+    if (disposed) return;
     clampModalBounds();
     if (openState) scheduleFitSequence('windowResize');
-  });
+  };
+  window.addEventListener('inlinemd:themeChanged', handleThemeChanged);
+  window.addEventListener('resize', handleWindowResize);
 
-  const handleMessage = (message: HostToWebviewMessage): boolean => {
+  const handleMessage = (message: HostToEditorMessage): boolean => {
+    if (disposed) return false;
     switch (message?.type) {
       case 'terminalOpened':
         if (!openState) return true;
@@ -674,7 +719,7 @@ export function createTerminalModal(options: {
         sessionId = typeof message.sessionId === 'string' ? message.sessionId : '';
         lastPostedCols = 0;
         lastPostedRows = 0;
-        requestAnimationFrame(() => {
+        scheduleAnimationFrame(() => {
           scheduleFitSequence('terminalOpened');
           focusTerminal();
         });
@@ -705,18 +750,48 @@ export function createTerminalModal(options: {
     }
   };
 
+  const destroy = (): void => {
+    if (disposed) return;
+
+    const shouldCloseHostSession = openState || Boolean(sessionId);
+    disposed = true;
+    openState = false;
+    clearResizePostTimer();
+    clearScheduledTasks();
+    dragState = null;
+
+    if (shouldCloseHostSession) {
+      options.postMessage({ type: 'terminalClose' });
+    }
+    sessionId = '';
+
+    window.removeEventListener('inlinemd:themeChanged', handleThemeChanged);
+    window.removeEventListener('resize', handleWindowResize);
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    terminalDataDisposable?.dispose();
+    terminalDataDisposable = null;
+    fitAddon?.dispose();
+    fitAddon = null;
+    terminal?.dispose();
+    terminal = null;
+    root.remove();
+  };
+
   return {
     toggle,
     open,
     close,
     isOpen: () => openState,
     updateAppearance(nextAppearance?: TerminalAppearance) {
+      if (disposed) return;
       appearance = { ...appearance, ...(nextAppearance ?? {}) };
       applyAppearance();
       refreshAfterFontReady();
       scheduleFitSequence('appearanceChanged');
     },
     handleMessage,
+    destroy,
   };
 }
-import type { HostToWebviewMessage, WebviewToHostMessage } from '../../shared/protocol';
+import type { HostToEditorMessage, EditorToHostMessage } from '@easyview/contracts/protocol';

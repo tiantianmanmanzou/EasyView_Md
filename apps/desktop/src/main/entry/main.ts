@@ -1,0 +1,1 @@
+import '../adapters/electron/desktopHost';

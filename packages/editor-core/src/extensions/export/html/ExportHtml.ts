@@ -19,18 +19,11 @@ import { buildTemplate, type TemplateOptions } from './ExportTemplate';
 import { highlightCodeBlocks } from './HtmlCodeHighlighting';
 import { processMermaidBlocks, processPlantUmlBlocks, processExternalDiagramBlocks, renderMathBlocks, processHtmlComments, processFootnotes, renderTocBlocks, processTableKeywords } from './HtmlContentProcessors';
 import type { TocEntry } from './HtmlContentProcessors';
-import { cleanupDom, escapeHtml } from './HtmlDomCleanup';
+import { cleanupDom } from './HtmlDomCleanup';
+import { escapeHtml } from './ExportTypes';
+import type { ExportImage, ExportResult } from './ExportTypes';
 
-export interface ExportImage {
-  originalSrc: string;
-  exportFilename: string;
-  isExternal: boolean;
-}
-
-export interface ExportResult {
-  html: string;
-  images: ExportImage[];
-}
+export type { ExportImage, ExportResult } from './ExportTypes';
 
 /**
  * Generate a complete standalone HTML string from the current editor state.

@@ -224,7 +224,7 @@ export async function loadAllImages(
 
     // Validate: only accept data URIs with image MIME type
     if (base64 && !base64.startsWith('data:image/')) {
-      console.warn('[InLineMd] Image has invalid data URI format, discarding:', src.substring(0, 60));
+      console.warn('[EasyView_Md] Image has invalid data URI format, discarding:', src.substring(0, 60));
       base64 = null;
     }
 
@@ -238,7 +238,7 @@ export async function loadAllImages(
     }
 
     if (!base64) {
-      console.warn('[InLineMd] Image NOT loaded:', src.substring(0, 60), '← originalSrc:', originalSrc || '(none)');
+      console.warn('[EasyView_Md] Image NOT loaded:', src.substring(0, 60), '← originalSrc:', originalSrc || '(none)');
     }
     result.set(src, base64 || FALLBACK_IMAGE);
   });

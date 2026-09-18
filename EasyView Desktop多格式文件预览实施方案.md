@@ -4,7 +4,7 @@
 > 适用范围：`apps/desktop`
 > 目标形态：在 EasyView Desktop 工作区中提供安全、稳定、可扩展的只读文件预览能力，Markdown 继续使用现有 EasyView 编辑器。
 
-## 1\. 建设目标
+## 1. 建设目标
 
 EasyView Desktop 在现有 Markdown 编辑能力之外，增加常见办公文档、文本、图片、设计文件、电子书和压缩包的应用内只读预览能力。
 
@@ -14,10 +14,10 @@ EasyView Desktop 在现有 Markdown 编辑能力之外，增加常见办公文�
 2. Markdown 始终复用现有 `@easyview/editor-core`，不迁移到 React，不改变现有保存、导出、历史记录和大纲能力。
 3. 非 Markdown 文件在中间工作区以只读方式预览，不承诺完整编辑和原格式写回。
 4. 任意普通文件均可通过右键菜单使用系统默认应用打开或在系统文件管理器中显示。
-5. 文件读取、协议访问、压缩包处理、HTTP 请求和 Java 反ßß编译均通过受控宿主能力完成，Renderer 不直接获得任意本地文件访问权限。
+5. 文件读取、协议访问、压缩包处理、HTTP 请求和 Java 反编译均通过受控宿主能力完成，Renderer 不直接获得任意本地文件访问权限。
 6. 各格式 Viewer 独立加载、独立失败、独立释放资源，避免单一格式影响整个应用。
 
-## 2\. 建设边界
+## 2. 建设边界
 
 ### 2.1 本期建设内容
 
@@ -38,19 +38,19 @@ EasyView Desktop 在现有 Markdown 编辑能力之外，增加常见办公文�
 - HTTP Client 和 Java Class Decompiler 作为独立工具能力分阶段交付，不作为基础预览首期的阻塞项。
 - 不直接复制或整仓引入 vscode-office 源码，仅参考其格式路由和开源库选型。
 
-## 3\. 当前实现基础
+## 3. 当前实现基础
 
 EasyView Desktop 当前具备以下基础：
 
 - Renderer 使用 `@easyview/editor-core` 创建 Markdown 编辑器。
 - BrowserWindow 已启用 `contextIsolation`、`sandbox`、`webSecurity`，并关闭 `nodeIntegration`。
 - 工作区服务已具备根目录约束、目录读取和符号链接隔离。
-- 工作区点击 Markdown 时进入编辑器，点击其他文件时调用系统默认应用。
-- 主进程已具备脏文档保存、放弃和取消切换的确认逻辑。
+- 工作区文件统一通过标签路由：Markdown 进入单实例编辑器，可预览文件进入中央 PreviewShell，不支持格式显示明确提示。
+- 主进程按 Markdown 标签维护独立文档会话；关闭标签、切换工作区和退出应用时执行保存、放弃或取消确认。
 
-现有状态模型仅记录 Markdown 活动文档，现有 Renderer 构建为单入口 IIFE Bundle。多格式预览建设必须先补齐活动视图状态和真正的代码拆分能力，不能只通过隐藏 `#editor` 接入。
+Desktop 已改为多标签工作区模型：Markdown 与可预览文件均作为独立标签，同一路径只保留一个标签；Renderer 使用 ESM 拆包。中央内容区在任一时刻只显示选中标签对应的 Markdown 编辑器或文件预览。
 
-## 4\. 总体架构
+## 4. 总体架构
 
 ```mermaid
 flowchart TB
@@ -92,40 +92,52 @@ flowchart TB
 | Web Worker                    | PDF、Office、图片和设计格式的浏览器侧重型解析     |
 | Utility Process / Node Worker | 压缩包、Java 反编译等可能阻塞主进程的任务         |
 
-## 5\. 活动视图模型
+## 5. Desktop 多标签工作区模型
 
-工作区状态新增明确的活动视图，不再使用 `activeDocumentPath` 同时表达编辑和预览状态。
+Desktop 使用标签集合表达已打开文件，不再以单一 `activeDocumentPath` 或单一 `ActiveWorkspaceView` 表达整个工作区。
 
 ```ts
-type ActiveWorkspaceView =
-  | { kind: 'empty' }
-  | { kind: 'editor'; filePath: string }
-  | {
-      kind: 'preview';
-      filePath: string;
-      previewId: string;
-      route: PreviewRoute;
-      fileName: string;
-    };
+type DesktopTab =
+  | { id: string; kind: 'editor'; filePath: string; fileName: string; dirty: boolean }
+  | { id: string; kind: 'preview'; relativePath: string; fileName: string; route: PreviewRoute };
+
+interface DesktopTabSnapshot {
+  tabs: DesktopTab[];
+  activeTabId: string | null;
+}
 ```
 
-### 5.1 视图切换规则
+主进程是标签集合、Markdown 文档会话和活动标签的唯一事实来源。Renderer 的 `TabController` 只负责标签栏交互，`ActiveViewController` 只负责在中央内容区互斥显示单实例 Markdown 编辑器或 React 预览岛。
 
-1. Markdown → Markdown：复用现有保存确认和文档加载流程。
-2. Markdown → 预览：先处理脏文档。
-   - 保存：保存成功后进入预览。
-   - 不保存：恢复磁盘内容并清除脏状态后进入预览。
-   - 取消：保留当前编辑状态，不切换。
-3. 预览 → Markdown：释放当前 Viewer 资源，再读取 Markdown 文件。
-4. 预览 → 预览：取消前一个解析任务，释放 Object URL、Worker、Canvas 和临时资源，再创建新预览会话。
-5. 预览状态下禁用仅适用于 Markdown 的重命名、编辑、大纲、导出、历史记录等菜单。
-6. 应用重启恢复预览时重新创建预览会话，不持久化临时 token 和解析结果。
+### 5.1 标签打开与切换规则
 
-## 6\. 文件路由设计
+1. Markdown 和可预览文件均创建标签并立即选中；同一路径重复打开时激活已有标签。
+2. Markdown 编辑器在窗口生命周期内保持单实例；切换 Markdown 标签时向同一实例发送目标文档 `init`，各标签的内容、脏状态、mtime 和外部冲突由主进程独立保存。
+3. 打开或切换其他标签不触发脏文档确认。脏 Markdown 仅在关闭标签、切换工作区或退出应用时确认。
+4. 激活预览标签时创建 PreviewSession；离开标签时关闭 Session 并释放 Worker、Canvas、Object URL 和 Viewer，重新激活时重新创建。
+5. 单标签关闭使用“保存 / 不保存 / 取消”；多个脏标签退出时使用“全部保存 / 全部不保存 / 取消”。
+6. 工作区持久化文件标签和选中标签，不持久化临时 PreviewSession、解析结果或未保存内容。
+7. AI 对话面板作为 Desktop 全局最右侧面板，可在 Markdown、预览和空状态下打开并跨标签保持；Agent 文档修改能力仅在 Markdown 标签启用。大纲、重命名、历史和导出等文档能力仍根据选中标签类型启用。
+
+### 5.2 中央显示结构
+
+```text
+Desktop Workbench
+├── WorkspaceExplorer
+└── CenterPane
+    ├── TabBar
+    └── ActiveContent
+        ├── EasyView Markdown Editor
+        └── React Preview Shell
+```
+
+`ActiveContent` 内的编辑器和预览容器互斥显示，预览不得作为 Markdown 编辑器右侧的并排区域。AI 对话面板位于工作区最右侧：Markdown 模式下排在文档目录右侧，预览模式下排在预览内容右侧。标签栏支持横向滚动，不提供重复标签、拖拽排序、固定标签、分栏或分屏。
+
+## 6. 文件路由设计
 
 ### 6.1 单一路由注册表
 
-在 Desktop contracts 中建立声明式路由表，主进程和 Renderer 共用类型定义，避免两端分别维护后缀列表。
+在 `apps/desktop/src/contracts/preview.ts` 中建立声明式路由表，主进程和 Renderer 共用类型定义，避免主进程、ActiveViewController 和 React Viewer 分别维护后缀列表。React 预览目录内不得再建立独立 PreviewRegistry。
 
 ```ts
 interface PreviewRouteDefinition {
@@ -157,7 +169,7 @@ interface PreviewRouteDefinition {
 | PDF        | `.pdf`                                          | `pdfjs-dist` + 独立 Worker                                                         | 阶段一  |
 | Excel      | `.xls` `.xlsx` `.xlsm` `.ods`                   | `xlsx` 解析 + 只读虚拟表格；不执行宏                                                          | 阶段二  |
 | Word       | `.doc` `.docx` `.dotx`                          | `.doc`：`@file-viewer/doc` 解析 OLE/CFBF 并输出净化 HTML；`.docx/.dotx`：`docx-preview` 只读渲染 | 阶段二  |
-| PowerPoint | `.ppt` `.pptx` `.pptm`                          | `.ppt`：经分发授权的 `@file-viewer/ppt` WASM/Canvas Viewer；`.pptx/.pptm`：`pptxviewjs` 只读渲染；不执行宏 | 阶段二  |
+| PowerPoint | `.ppt` `.pptx` `.pptm`                          | `.ppt`：按公共水印许可分发的 `@file-viewer/ppt` WASM/Canvas Viewer；`.pptx/.pptm`：`pptxviewjs` 只读渲染；不执行宏 | 阶段二  |
 | 电子书        | `.epub`                                         | `epubjs`                                                                         | 阶段二  |
 | 特殊图片       | `.heic` `.heif` `.tiff` `.tif`                  | `heic2any`、`utif`                                                                | 阶段三  |
 | 设计文件       | `.psd` `.xmind` `.icns`                         | `ag-psd`、`mind-elixir`、ICNS Parser                                               | 阶段三  |
@@ -167,9 +179,9 @@ interface PreviewRouteDefinition {
 | HTTP       | `.http` `.rest`                                 | CodeMirror + 显式请求执行                                                              | 阶段四  |
 | Java Class | `.class`                                        | 可选 Java Decompiler                                                               | 阶段四  |
 
-所有第三方库在正式接入前必须完成许可证、维护状态、安装包体积和 Electron 兼容性核查。`@file-viewer/ppt` 属于非标准开源许可依赖，必须先取得与 EasyView Desktop 发布方式相匹配的分发授权，并在构建检查中验证许可证文件和 WASM 资产完整性；未完成授权不得进入发布包。实际预览效果以项目样例集为准，不承诺与 Microsoft Office、Adobe 或 XMind 原生应用完全一致。
+所有第三方库在正式接入前必须完成许可证、维护状态、安装包体积和 Electron 兼容性核查。当前 `@file-viewer/ppt` 使用 Flyfish Public Watermarked Runtime License v2：保留完整可见水印、LICENSE、NOTICE 和未修改运行时即可随集成产品分发；只有移除、遮挡或修改水印时才需要另行取得书面商业授权。构建检查必须验证许可证文件、NOTICE、WASM、Worker 和字体资产完整性。实际预览效果以项目样例集为准，不承诺与 Microsoft Office、Adobe 或 XMind 原生应用完全一致。
 
-## 7\. 内容交付与 IPC
+## 7. 内容交付与 IPC
 
 ### 7.1 预览会话
 
@@ -243,33 +255,76 @@ interface ArchiveApi {
 - 拒绝符号链接和工作区外路径。
 - 返回统一 `OperationResult`，不向 Renderer 暴露异常栈和宿主内部路径。
 
-## 8\. Renderer 与构建方案
+## 8. Renderer 与构建方案
 
 ### 8.1 React 作为独立预览岛
 
-React 仅用于 `apps/desktop/src/renderer/preview/`，不迁移现有标题栏、目录树和 Markdown 编辑器。
+React 仅作为 Desktop 产品层的预览渲染容器，负责 PreviewShell、各格式 Viewer 的界面、局部交互和组件生命周期；不迁移现有标题栏、目录树和 Markdown 编辑器。
+
+React 不负责以下能力：
+
+- 不管理工作区活动视图状态。
+- 不创建、销毁或持有 Markdown 编辑器实例。
+- 不维护文件后缀和 PreviewRoute 的独立路由表。
+- 不直接解析工作区路径或接触绝对路径。
+- 不直接调用 `window.easyViewDesktop` 和 Electron IPC。
+- 不控制应用菜单、标题栏、大纲或脏文档确认。
+
+框架无关的 `ActiveViewController` 是编辑器、预览和空状态的唯一状态所有者；`PreviewController` 负责把 PreviewShell 的操作转换为受控 preload API 调用。React Viewer 只接收已经验证的 `PreviewDescriptor` 和显式操作回调。
+
+```ts
+interface PreviewShellProps {
+  descriptor: PreviewDescriptor;
+  onCancel(): void;
+  onClose(): void;
+  onOpenWithDefaultApp(): void;
+}
+```
+
+推荐目录结构：
 
 ```text
-apps/desktop/src/renderer/preview/
-├── PreviewShell.tsx
-├── PreviewRegistry.ts
-├── PreviewState.ts
-├── components/
-├── viewers/
-│   ├── text/
-│   ├── image/
-│   ├── pdf/
-│   ├── excel/
-│   ├── word/
-│   ├── powerpoint/
-│   ├── epub/
-│   ├── design/
-│   ├── archive/
-│   ├── html/
-│   ├── http/
-│   └── class/
-└── workers/
+apps/desktop/src/contracts/
+└── preview.ts                  # PreviewRoute、Descriptor、路由定义和共享契约
+
+apps/desktop/src/renderer/
+├── renderer.ts                 # Desktop 组合入口
+├── ActiveViewController.ts     # 活动视图唯一状态所有者
+├── workspace/
+│   └── WorkspaceExplorer.ts
+└── preview/
+    ├── bootstrap.tsx           # React Root 创建、更新和销毁
+    ├── PreviewController.ts    # preload API 适配和 Viewer 生命周期
+    ├── PreviewShell.tsx        # 纯预览 UI
+    ├── components/
+    ├── viewers/
+    │   ├── text/
+    │   ├── image/
+    │   ├── pdf/
+    │   ├── excel/
+    │   ├── word/
+    │   ├── powerpoint/
+    │   ├── epub/
+    │   ├── design/
+    │   ├── archive/
+    │   ├── html/
+    │   ├── http/
+    │   └── class/
+    └── workers/
 ```
+
+职责边界：
+
+| 模块 | 职责 |
+|---|---|
+| `renderer.ts` | 创建并组合 WorkspaceExplorer、ActiveViewController、editor-core 和预览入口 |
+| `TabController` | 展示标签集合，发起打开、激活和关闭，不保存第二份宿主标签状态 |
+| `ActiveViewController` | 根据选中标签管理中央编辑器/预览容器显隐与预览生命周期 |
+| `PreviewController` | 管理 PreviewSession、取消、关闭、过期结果和 preload API 调用 |
+| `bootstrap.tsx` | 首次进入预览时创建 React Root，窗口卸载时统一销毁 |
+| `PreviewShell` | 展示文件信息、加载、错误、操作按钮和当前 Viewer |
+| Viewer | 负责单一文件格式的展示及其局部交互，不拥有工作区状态 |
+| `contracts/preview.ts` | 格式路由、大小限制、内容交付方式和接口类型的单一事实来源 |
 
 PreviewShell 统一提供：
 
@@ -278,6 +333,10 @@ PreviewShell 统一提供：
 - 格式不支持、文件损坏、文件过大和依赖缺失状态。
 - 使用系统默认应用打开按钮。
 - Viewer 挂载、卸载和错误边界。
+
+Markdown 编辑器在应用生命周期内保持单实例。切换标签时中央内容区互斥显示编辑器或预览；切换到预览时关闭上一个 PreviewSession 并释放 Viewer 资源，切回 Markdown 时向现有编辑器实例发送目标标签文档。不得为每个 Markdown 标签创建独立 `@easyview/editor-core` 实例。
+
+整个 React PreviewShell 与 Markdown 编辑器运行在同一个受信 Renderer 中，不额外使用 iframe。只有 HTML、EPUB 内部文档及可能包含活动内容的 SVG 渲染结果进入独立 sandbox iframe，并禁止其访问顶层 DOM、preload API 和 EasyView 状态。
 
 ### 8.2 真正的按需拆包
 
@@ -290,7 +349,19 @@ Desktop renderer 构建调整为：
 - Worker、WASM、PDF.js、旧版 PPT Viewer 资源和字体使用显式资源清单复制
 - 生产构建生成 metafile，用于安装包体积分析
 
-不得只写动态 `import()` 而继续输出单一 IIFE Bundle。
+按需加载分为两级：
+
+1. 应用启动和仅编辑 Markdown 时不加载 React；首次进入预览时，由 `renderer.ts` 动态加载 `preview/bootstrap.tsx`、React Runtime 和 PreviewShell。
+2. PreviewShell 根据 `PreviewRoute` 再动态加载当前格式 Viewer，不加载其他格式依赖。
+
+```text
+Desktop Renderer
+└── 首次进入预览
+    └── React Runtime + PreviewShell
+        └── 当前格式 Viewer
+```
+
+不得只写动态 `import()` 而继续输出单一 IIFE Bundle，也不得在 Desktop 启动入口静态导入全部 Viewer。
 
 ### 8.3 CSP
 
@@ -304,7 +375,7 @@ Desktop renderer 构建调整为：
 
 HTML 和 EPUB 中的活动内容必须运行在独立 sandbox iframe 内，不能访问顶层 DOM、preload API 或 EasyView 状态。
 
-## 9\. 重型任务隔离
+## 9. 重型任务隔离
 
 ### 9.1 Web Worker
 
@@ -332,7 +403,7 @@ HTML 和 EPUB 中的活动内容必须运行在独立 sandbox iframe 内，不�
 - 临时目录清理。
 - 切换文件后丢弃过期结果。
 
-## 10\. 特殊能力设计
+## 10. 特殊能力设计
 
 ### 10.1 旧版 Office 二进制格式
 
@@ -348,7 +419,7 @@ Word 97–2003 `.doc` 和 PowerPoint 97–2003 `.ppt` 均属于 OLE/CFBF 复合�
 
 #### PowerPoint `.ppt`
 
-- 使用取得合法分发授权的 `@file-viewer/ppt`，通过 WebAssembly、Web Worker、OffscreenCanvas 和虚拟化页面渲染幻灯片。
+- 使用符合 Flyfish Public Watermarked Runtime License v2 的 `@file-viewer/ppt`，通过 WebAssembly、Web Worker、OffscreenCanvas 和虚拟化页面渲染幻灯片。
 - 支持幻灯片尺寸、母版、背景、文本、常用形状、图片、填充、渐变、组合对象和图层顺序的只读预览。
 - 不播放宏、ActiveX、嵌入程序、外部对象、音视频和不受信任的超链接动作。
 - 大型演示文稿仅渲染视口附近幻灯片，离屏 Canvas 和帧缓存必须设置数量及字节上限。
@@ -409,7 +480,7 @@ Java Decompiler 为可选能力：
 - JRE 缺失时显示明确提示和系统打开按钮。
 - Decompiler JAR 的许可证和 NOTICE 必须随安装包分发。
 
-## 11\. 右键菜单
+## 11. 右键菜单
 
 WorkspaceExplorer 增加文件右键菜单：
 
@@ -423,7 +494,7 @@ WorkspaceExplorer 增加文件右键菜单：
 - Renderer 只传工作区相对路径，主进程解析真实路径。
 - 文件夹右键仅显示适用操作，不进入预览路由。
 
-## 12\. 分阶段交付
+## 12. 分阶段交付
 
 ### 阶段零：预览基础设施
 
@@ -440,8 +511,8 @@ WorkspaceExplorer 增加文件右键菜单：
 
 阶段验收：
 
-- Markdown 与空预览壳反复切换无状态错乱。
-- 保存、不保存、取消三种脏文档路径正确。
+- 多个 Markdown/预览标签反复切换无状态错乱，预览始终位于中央内容区。
+- 单标签关闭和多脏文档退出时，保存、不保存、取消路径正确。
 - 菜单、大纲、标题和活动文件状态与当前视图一致。
 - 无绝对路径泄露和工作区越界读取。
 
@@ -508,7 +579,7 @@ WorkspaceExplorer 增加文件右键菜单：
 - Java 缺失、Decompiler 失败、超时和无输出均有明确结果。
 - 两项能力失败时不影响其他 Viewer。
 
-## 13\. 测试与验收矩阵
+## 13. 测试与验收矩阵
 
 ### 13.1 功能验证
 
@@ -522,8 +593,11 @@ WorkspaceExplorer 增加文件右键菜单：
 
 ### 13.2 生命周期验证
 
-- Markdown → 预览 → Markdown。
-- 预览 A → 预览 B → 预览 A。
+- 脏 Markdown 标签 → 预览标签 → 原 Markdown 标签，未保存内容保持。
+- Markdown A → Markdown B → Markdown A，内容和保存目标互不串写。
+- 预览 A → 预览 B → 预览 A，PreviewSession 正确释放并重建。
+- 同一路径重复打开只激活已有标签。
+- 重启恢复标签集合和选中标签。
 - 快速连续点击多个文件，只显示最后一次结果。
 - 解析中关闭预览、关闭窗口或切换工作区。
 - 外部修改、删除或替换正在预览的文件。
@@ -554,7 +628,7 @@ WorkspaceExplorer 增加文件右键菜单：
 
 构建成功不等于运行成功；最终结论必须以打包应用中的真实文件预览结果为准。
 
-## 14\. 体积与性能约束
+## 14. 体积与性能约束
 
 每个阶段合入前输出构建体积报告：
 
@@ -574,7 +648,7 @@ WorkspaceExplorer 增加文件右键菜单：
 - 大表格、大文本和压缩包目录必须采用虚拟化或分批渲染。
 - Viewer 卸载后释放 Worker、事件监听、Object URL、临时文件和缓存。
 
-## 15\. 主要代码改动位置
+## 15. 主要代码改动位置
 
 ```text
 apps/desktop/src/contracts/
@@ -598,10 +672,15 @@ apps/desktop/src/preload/
 
 apps/desktop/src/renderer/
   renderer.ts
+  ActiveViewController.ts
   index.html
   desktop.css
   workspace/WorkspaceExplorer.ts
-  preview/**
+  preview/bootstrap.tsx
+  preview/PreviewController.ts
+  preview/PreviewShell.tsx
+  preview/viewers/**
+  preview/workers/**
 
 apps/desktop/esbuild.mjs
 apps/desktop/forge.config.cjs
@@ -612,12 +691,12 @@ apps/desktop/scripts/verify-packaged-runtime.mjs
 
 如通用文件解析能力后续需要被 VS Code 扩展复用，再迁移至 `packages/node-runtime` 或独立 package；本期不为尚未发生的复用提前抽象。
 
-## 16\. 最终完成标准
+## 16. 最终完成标准
 
 满足以下条件后，多格式文件预览能力才视为完成：
 
 1. Markdown 编辑器现有行为无回归。
-2. 活动视图、标题、菜单、大纲和目录树状态一致。
+2. 标签集合、选中标签、标题、菜单、大纲和目录树状态一致，预览只占据中央内容区。
 3. 所有已声明格式均通过对应样例集，而不是只验证一个简单样例。
 4. 大文件、损坏文件、加密文件和解析取消不会导致应用失去响应。
 5. HTML、SVG、压缩包、HTTP 和 IPC 安全用例通过。
@@ -626,3 +705,4 @@ apps/desktop/scripts/verify-packaged-runtime.mjs
 8. 系统默认打开和文件管理器定位在 macOS、Windows 均可用。
 9. 第三方依赖许可证、NOTICE 和分发要求已经核查并随包保留。
 10. 完成构建、打包、安装和真实运行闭环验证。
+11. 主进程是标签和文档会话的唯一事实来源，TabController 与 ActiveViewController 不保存第二份宿主状态；React Viewer 不直接调用 Electron IPC，editor-core 未引入 React 或预览格式依赖。

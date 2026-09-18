@@ -16,6 +16,8 @@ import { findBlockNodes, type NodeWithPos, findParentNode } from "../../../edito
 
 export const pluginKey = new PluginKey("mermaid");
 
+export type MermaidOpenExternalLink = (href: string) => void;
+
 export type MermaidState = {
   decorationSet: DecorationSet;
   isDark: boolean;
@@ -402,7 +404,13 @@ function getNewState({
   };
 }
 
-export default function Mermaid({ isDark }: { isDark: boolean }) {
+export default function Mermaid({
+  isDark,
+  openExternalLink,
+}: {
+  isDark: boolean;
+  openExternalLink: MermaidOpenExternalLink;
+}) {
   return new Plugin({
     key: pluginKey,
     state: {
@@ -551,8 +559,7 @@ export default function Mermaid({ isDark }: { isDark: boolean }) {
             if (href) {
               event.stopPropagation();
               event.preventDefault();
-              // Reuse the single Host bridge created by the webview entry point.
-              window.__vscodeApi?.postMessage({ type: 'openLink', href });
+              openExternalLink(href);
             }
 
             return false;

@@ -5,7 +5,7 @@ import {
   applyEasyViewTableMeta,
   collectEasyViewTableMeta,
   type EasyViewTableMeta,
-} from './TableStyleMetadata';
+} from '@easyview/markdown-core/table-style-metadata';
 
 function cell(text: string, colwidth: number[] | null = null) {
   return schema.nodes.table_cell.create(

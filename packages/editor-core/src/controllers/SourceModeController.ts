@@ -2,21 +2,23 @@ import type { EditorView } from 'prosemirror-view';
 import type { EditorState as CodeMirrorState } from '@codemirror/state';
 import { createSourceEditor } from '../editor/SourceEditor';
 import type { EditorCore } from '../editor/EditorCore';
-import { stripSettingsComment } from '../editor/lib/EditorSettings';
+import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
 import type { DualModeHistory } from '../editor/DualModeHistory';
 import type { EditOperationLog } from '../editor/EditOperationLog';
 import type { FloatingToolbar } from '../extensions/behavior/toolbar/ToolbarFloating';
 import type { TableOfContents } from '../extensions/blocks/heading/TableOfContents';
 import type { HistoryPanel } from '../ui/HistoryPanel';
 import type { createFileHeader } from '../ui/FileHeader';
-import type { VscodeWebviewApi } from '../../shared/protocol';
+import type { EditorSourceDocumentRequest } from '@easyview/contracts';
+import { createEditorDomContext, type EditorDomContext } from '../runtime/editorDomContext';
 
 type SourceEditor = ReturnType<typeof createSourceEditor>;
 type FileHeader = ReturnType<typeof createFileHeader>;
 
 export interface SourceModeControllerDeps {
+  dom?: EditorDomContext;
   editor: EditorCore;
-  vscode: VscodeWebviewApi;
+  openSourceDocument: (request: EditorSourceDocumentRequest) => void;
   fileHeader: FileHeader;
   toolbar: Pick<FloatingToolbar, 'forceHide'>;
   toc: TableOfContents;
@@ -24,7 +26,7 @@ export interface SourceModeControllerDeps {
   editOperationLog: EditOperationLog;
   historyPanel: HistoryPanel;
   getSourceEditor: () => SourceEditor | null;
-  setSourceEditor: (editor: SourceEditor) => void;
+  setSourceEditor: (editor: SourceEditor | null) => void;
   getView: () => EditorView | null;
   getCurrentContent: () => string;
   setCurrentContent: (content: string) => void;
@@ -48,9 +50,35 @@ export interface SourceModeControllerDeps {
 }
 
 export class SourceModeController {
-  constructor(private readonly deps: SourceModeControllerDeps) {}
+  private readonly dom: EditorDomContext;
+  private disposed = false;
+  private sourceContainer: HTMLElement | null = null;
 
-  getNativeSourcePosition(): { line: number; character: number } {
+  constructor(private readonly deps: SourceModeControllerDeps) {
+    this.dom = deps.dom ?? createEditorDomContext();
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    const sourceEditor = this.deps.getSourceEditor();
+    if (sourceEditor) {
+      sourceEditor.destroy();
+      this.deps.setSourceEditor(null);
+    }
+
+    this.deps.toc.sourceClickHandler = null;
+    this.deps.toc.exitSourceMode();
+    this.dom.getById('editor')?.style.removeProperty('display');
+    this.sourceContainer?.remove();
+    this.sourceContainer = null;
+    this.deps.fileHeader.getSourceBtn().classList.remove('active');
+    this.deps.setSourceMode(false);
+  }
+
+  getSourcePosition(): { line: number; character: number } {
+    if (this.disposed) return { line: 0, character: 0 };
     const sourceEditor = this.deps.getSourceEditor();
     if (this.deps.isSourceMode() && sourceEditor) {
       const head = sourceEditor.view.state.selection.main.head;
@@ -61,17 +89,17 @@ export class SourceModeController {
     return view ? this.deps.getWysiwygApproxSourcePosition(view) : { line: 0, character: 0 };
   }
 
-  openNativeSourceMode(): void {
+  openSourceDocument(): void {
+    if (this.disposed) return;
     const sourceEditor = this.deps.getSourceEditor();
-    const sourcePosition = this.getNativeSourcePosition();
+    const sourcePosition = this.getSourcePosition();
     const content = this.deps.isSourceMode() && sourceEditor
       ? stripSettingsComment(sourceEditor.getContent())
       : this.deps.editor.getMarkdown();
     this.deps.hideGhost();
     this.deps.editor.flushSync();
     this.deps.setCurrentContent(content);
-    this.deps.vscode.postMessage({
-      type: 'openNativeSourceMode',
+    this.deps.openSourceDocument({
       content,
       fullWidth: this.deps.getFullWidth(),
       tocVisible: this.deps.getTocVisible(),
@@ -82,8 +110,9 @@ export class SourceModeController {
   }
 
   toggleSourceMode(): void {
-    const scrollArea = document.getElementById('editor-scroll-area');
-    const editorElement = document.getElementById('editor');
+    if (this.disposed) return;
+    const scrollArea = this.dom.getById('editor-scroll-area');
+    const editorElement = this.dom.getById('editor');
     if (!scrollArea || !editorElement) return;
 
     if (!this.deps.isSourceMode()) {
@@ -105,13 +134,14 @@ export class SourceModeController {
       : 0;
     const rawMarkdown = editor.getMarkdown();
     editorElement.style.display = 'none';
-    let sourceContainer = document.getElementById('source-editor');
+    let sourceContainer = this.dom.getById('source-editor');
     if (!sourceContainer) {
-      sourceContainer = document.createElement('div');
+      sourceContainer = this.dom.document.createElement('div');
       sourceContainer.id = 'source-editor';
       scrollArea.appendChild(sourceContainer);
     }
     sourceContainer.style.display = 'block';
+    this.sourceContainer = sourceContainer;
 
     if (!this.deps.getSourceEditor()) {
       this.deps.setSourceEditor(createSourceEditor({
@@ -203,11 +233,11 @@ export class SourceModeController {
       ? scroller.scrollTop / (scroller.scrollHeight - scroller.clientHeight)
       : 0;
     const markdown = stripSettingsComment(rawMarkdown);
-    document.getElementById('source-editor')?.style.setProperty('display', 'none');
+    this.dom.getById('source-editor')?.style.setProperty('display', 'none');
     editorElement.style.display = '';
     editorElement.classList.toggle('full-width', this.deps.getFullWidth());
     editorElement.classList.toggle('table-wrap', this.deps.getTableWrap());
-    window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
+    this.dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
     if (this.deps.getTocVisible() && !this.deps.toc.visible) this.deps.toc.open();
     if (!this.deps.getTocVisible() && this.deps.toc.visible) this.deps.toc.close();
 

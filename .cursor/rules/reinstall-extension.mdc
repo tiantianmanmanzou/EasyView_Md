@@ -1,16 +1,31 @@
 ---
-description: After EasyView_Md code changes, rebuild and reinstall the VS Code extension without asking
+description: After EasyView_Md code changes, rebuild Extension and Desktop without asking
 alwaysApply: true
 ---
 
 # Rebuild and reinstall after changes
 
-When extension/editor code in this repo is changed (host, webview, export, etc.), **do not ask** whether to reinstall. Directly:
+When extension / preview / editor code in this repo is changed (host, webview, export, `@easyview/preview-ui`, desktop renderer, etc.), **do not ask** whether to reinstall. Directly run:
 
-1. `npm run build`
-2. `npm run package`
-3. `code --install-extension <generated-vsix> --force`
+```bash
+npm run apply:local
+```
 
-Use the VS Code `code` CLI. `--force` overwrites the already installed EasyView_Md. After install, tell the user to reload the VS Code window (or close and reopen the Markdown file) so the new bundle loads.
+This installs the VSIX into Cursor + VS Code **and** packages Desktop into `/Applications/EasyView_Md.app` so shared preview edits (docx / excel / chrome / image) land on both surfaces.
 
-Do this at the end of the task, after the code changes are complete. Skip only for pure Q&A or docs-only edits that do not affect the installed extension.
+Or target one surface:
+
+- Editors only: `npm run install:both` (or `install:cursor` / `install:code`)
+- Desktop only: `npm run install:desktop` (packages + installs Applications app)
+- Desktop source-run only: `npm run build:desktop` then `npm run start:desktop`
+
+## How updates become active
+
+1. The VSIX from `apps/vscode-extension` is installed with `--force`
+2. Desktop is packaged and copied to `/Applications/EasyView_Md.app` (not only `apps/desktop/dist`)
+3. **Do not** auto Restart Extension Host, soft-reload panels, or drive Command Palette from the install script
+4. Tell the user to:
+   - Extension: **Developer: Reload Window** (or fully restart the editor)
+   - Desktop: quit and relaunch **Applications → EasyView_Md** (or `npm run start:desktop` if developing from source)
+
+Skip only for pure Q&A or docs-only edits that do not affect the installed extension or desktop runtime.

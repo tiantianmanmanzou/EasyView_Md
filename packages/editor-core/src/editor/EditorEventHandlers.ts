@@ -29,7 +29,7 @@ import {
   preserveScrollAround,
 } from './lib/ScrollPreserve';
 import { getMarkRange } from './lib/MarkRange';
-import type { EditorCoreConfig } from './EditorCore';
+import type { EditorCoreConfig } from './EditorCoreTypes';
 
 // ── handleClickOn ──
 

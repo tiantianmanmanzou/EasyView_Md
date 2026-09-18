@@ -1,26 +1,73 @@
-# EasyView_Md - VS Code Markdown 可视化编辑器
+# EasyView_Md - VS Code 与桌面端 Markdown 可视化编辑器
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器与可选的可视化编辑器。Markdown 文件可保留在 VS Code 原生 `TextEditor` 中；需要可视化编辑时，可手动使用 **Open with EasyView_Md** 打开。
+EasyView_Md 同时提供 VS Code/Cursor 插件和 Electron 桌面 APP。两种产品形态共用同一套编辑器内核、Markdown 序列化、表格能力和导出能力。
+
+## Monorepo 目录架构
+
+```text
+apps/vscode-extension   VS Code/Cursor 插件产品及 VSIX 清单
+apps/desktop            macOS、Windows Electron 桌面产品
+packages/editor-core    纯浏览器编辑器、扩展、控制器和 UI
+packages/markdown-core  平台无关的 Markdown 解析、模型和转换
+packages/contracts      跨端消息、能力接口、结果和运行校验契约
+packages/node-runtime   Git、终端、导出、转换和文件 Node 运行时
+tests/e2e               编辑器、扩展宿主和桌面运行测试
+tests/fixtures          两端共用测试文档与样本
+resources               公共品牌、演示、字体和运行样式源文件
+tooling                  架构、维护和品牌资源工具
+```
+
+仓库根目录只负责编排。插件与桌面端的产品清单、版本、构建产物和打包规则均位于各自的 `apps/*` 工作区；两端必须复用公共包，不复制编辑器和宿主能力。
+
+```bash
+npm run build                 # 构建 VS Code 插件
+npm run build:desktop         # 构建 Electron APP
+npm run package:vscode        # 在 apps/vscode-extension 生成 VSIX
+npm run package:desktop       # 生成 Electron APP 包
+npm run verify:quick          # 类型、架构边界、构建和单元测试
+npm run verify:vscode         # 扩展宿主和 VSIX 验证
+npm run verify:desktop        # 桌面端验证
+```
+
+## 桌面 APP
+
+桌面 APP 可在 macOS、Windows 上脱离 VS Code 独立运行，支持 Markdown 可视化编辑、内置源码模式、文件打开/保存/重命名、本地图片资源、HTML/PDF/DOCX/XLSX 导出、Git 文件操作和内置终端。
+
+```bash
+npm install
+npm run start:desktop
+npm run test:e2e:desktop
+npm run package:desktop
+```
+
+生成平台安装产物：
+
+```bash
+npm run make:desktop        # macOS ZIP 或 Windows ZIP/Squirrel
+npm run make:desktop:mac    # macOS ZIP 和 DMG
+```
+
+桌面端源码和平台说明位于 `apps/desktop`。当前本地桌面构建属于开发产物，尚未进行代码签名和 macOS 公证。VS Code 原生编辑器集成功能继续由插件形态提供。
 
 ## 示例
 
 ### 演示一
 
-![](./assets/demo_part1.gif)
+![](./resources/demo/demo_part1.gif)
 
 ### 演示二
 
-![](./assets/demo_part2.gif)
+![](./resources/demo/demo_part2.gif)
 
 ### 演示三
 
-![](./assets/demo_part3.gif)
+![](./resources/demo/demo_part3.gif)
 
 ## 2.0.0 更新内容
 
-- **Word 转 Markdown**：在 `.docx` 或 `.doc` 文件上右键，选择 `Convert to Markdown with Easyview_Md`。生成的 Markdown 位于源文件同级目录，图片提取至对应的 `.assets` 目录。
+- **Word 转 Markdown**：在 `.docx` 或 `.doc` 文件上右键，选择 `Convert to Markdown with EasyView_Md`。生成的 Markdown 位于源文件同级目录，图片提取至对应的 `.assets` 目录。
 - **Word 图片稳定转换**：保留 Word 图片的尺寸属性；带透明通道的 PNG 自动合成为白色背景，避免预览出现透明底。
 - **图片粘贴资源化**：在 VS Code 原生编辑器粘贴含 Base64 图片的 Markdown 或 HTML 时，图片会自动保存到当前文档的 `.assets` 目录，并替换为相对路径。
 - **图片富文本复制**：复制包含图片的选中内容时，剪贴板保留格式化 HTML 并内嵌图片，可直接粘贴到其他富文本编辑器。
@@ -106,7 +153,7 @@ EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器与�
 ### Word 转 Markdown
 
 1. 在 VS Code Explorer 中右键 `.docx` 或 `.doc` 文件。
-2. 选择 **Convert to Markdown with Easyview_Md**。
+2. 选择 **Convert to Markdown with EasyView_Md**。
 3. 插件在源文件同级目录创建 Markdown 文件，并将图片保存到 `<文档名>.assets`。
 4. 转换完成后选择 **Open Markdown**，即可使用 EasyView_Md 打开。
 
@@ -143,7 +190,7 @@ EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器与�
 ### CSV
 
 - 从表格操作工具栏导出任意表格。
-- 根据系统区域自动选择逗号或分号，也可通过 `inlineMd.csvDelimiter` 配置。
+- 根据系统区域自动选择逗号或分号，也可通过 `easyviewMd.csvDelimiter` 配置。
 - UTF-8 BOM 保证 Excel 中中文显示正常。
 
 ## AI 与变更识别
@@ -162,7 +209,7 @@ EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器与�
 | 命令 | 说明 |
 | --- | --- |
 | `Open with EasyView_Md` | 使用可选的可视化编辑器打开当前 Markdown 文件 |
-| `Convert to Markdown with Easyview_Md` | 在 Explorer 中将 `.docx` 或 `.doc` 转换为 Markdown |
+| `Convert to Markdown with EasyView_Md` | 在 Explorer 中将 `.docx` 或 `.doc` 转换为 Markdown |
 | `Export to HTML (Light)` | 导出浅色 HTML |
 | `Export to HTML (Dark)` | 导出深色 HTML |
 | `Export to PDF (Light)` | 导出浅色 PDF |
@@ -178,11 +225,11 @@ EasyView_Md 是一款 VS Code Markdown 编辑扩展，支持原生编辑器与�
 
 | 设置项 | 说明 | 默认值 |
 | --- | --- | --- |
-| `inlineMd.csvDelimiter` | CSV 分隔符：`,`、`;` 或 `auto` | `auto` |
-| `inlineMd.nativeDecorations.enabled` | 启用原生编辑器中的轻量 Markdown 装饰 | `true` |
-| `inlineMd.nativeDecorations.mermaid.enabled` | 启用原生编辑器中的安全 Mermaid 预览 | `false` |
-| `inlineMd.nativeDecorations.tables.enabled` | 启用保守的 Markdown 表格样式 | `true` |
-| `inlineMd.nativeEditor.forceMonospaceFont` | 保持中文等宽语言默认字体，同时尊重用户和工作区显式字体设置 | `true` |
+| `easyviewMd.csvDelimiter` | CSV 分隔符：`,`、`;` 或 `auto` | `auto` |
+| `easyviewMd.nativeDecorations.enabled` | 启用原生编辑器中的轻量 Markdown 装饰 | `true` |
+| `easyviewMd.nativeDecorations.mermaid.enabled` | 启用原生编辑器中的安全 Mermaid 预览 | `false` |
+| `easyviewMd.nativeDecorations.tables.enabled` | 启用保守的 Markdown 表格样式 | `true` |
+| `easyviewMd.nativeEditor.forceMonospaceFont` | 保持中文等宽语言默认字体，同时尊重用户和工作区显式字体设置 | `true` |
 
 ### 单文件设置
 

@@ -3,13 +3,17 @@
  * Extracted from index.ts as a standalone UI component.
  */
 
-import type { WebviewToHostMessage } from '../../shared/protocol';
+import type { EditorHostCapabilities } from '@easyview/contracts';
+import type { EditorToHostMessage } from '@easyview/contracts/protocol';
+import { createEditorDomContext, type EditorDomContext } from '../runtime/editorDomContext';
 
 export interface FileHeaderDeps {
-  postMessage: (msg: WebviewToHostMessage) => void;
+  dom?: EditorDomContext;
+  postMessage: (msg: EditorToHostMessage) => void;
   getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; currentContent: string };
   setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean }>) => void;
   onSettingsChange: () => void;
+  capabilities: EditorHostCapabilities;
 }
 
 export type ToolbarShortcutAction =
@@ -21,6 +25,7 @@ export type ToolbarShortcutAction =
   | 'toggleTheme'
   | 'toggleTerminal'
   | 'toggleStickyNote'
+  | 'toggleAiChat'
   | 'openSourceMode'
   | 'copyOutlinePath'
   | 'copyFullPath'
@@ -43,6 +48,7 @@ const DEFAULT_SHORTCUTS: ToolbarShortcutConfig = {
   toggleTheme: 'Alt+R',
   toggleTerminal: 'Alt+T',
   toggleStickyNote: 'Alt+N',
+  toggleAiChat: 'Alt+I',
   openSourceMode: 'Alt+Q',
   copyOutlinePath: 'Alt+Shift+O',
   copyFullPath: 'Alt+Shift+P',
@@ -61,6 +67,7 @@ const SHORTCUT_LABELS: Record<ToolbarShortcutAction, string> = {
   toggleTheme: 'Toggle light/dark theme',
   toggleTerminal: 'Toggle embedded terminal',
   toggleStickyNote: 'Toggle sticky note',
+  toggleAiChat: 'Toggle AI chat',
   openSourceMode: 'Open source mode',
   copyOutlinePath: 'Copy outline path',
   copyFullPath: 'Copy file and outline path',
@@ -70,7 +77,6 @@ const SHORTCUT_LABELS: Record<ToolbarShortcutAction, string> = {
   scrollBottom: 'Scroll to bottom',
 };
 
-const LINKED_SHORTCUT_ACTIONS: ToolbarShortcutAction[] = ['openWithEasyView', 'openSourceMode'];
 
 const IS_MAC = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
 
@@ -235,12 +241,6 @@ function readStoredShortcuts(): ToolbarShortcutConfig {
       merged[action] = normalizeShortcut(value);
     }
   });
-  // Keep these two actions linked as one shared shortcut.
-  const linked = merged.openSourceMode || merged.openWithEasyView;
-  if (linked) {
-    merged.openSourceMode = linked;
-    merged.openWithEasyView = linked;
-  }
   return merged;
 }
 
@@ -345,20 +345,212 @@ function ensureFileHeaderCompactStyles(): void {
     .file-header-accent-option.active {
       font-weight: 650;
     }
-    body.mdpre-light {
+    body.mdpre-light,
+    body.mdpre-gray {
       --vscode-dropdown-background: #ffffff;
       --vscode-dropdown-foreground: #1f2328;
       --vscode-dropdown-border: #d0d7de;
     }
-    body.mdpre-light .file-header-accent-select {
+    body.mdpre-gray {
+      --vscode-dropdown-background: #c2c7d0;
+      --vscode-dropdown-foreground: #050608;
+      --vscode-dropdown-border: #8e96a3;
+    }
+    body.mdpre-light .file-header-accent-select,
+    body.mdpre-gray .file-header-accent-select {
       background: var(--vscode-editor-background, #ffffff);
       border-color: var(--vscode-input-border, #d0d7de);
     }
-    body.mdpre-light[data-mdpre-accent="default"] .file-header-accent-select {
+    body.mdpre-light[data-mdpre-accent="default"] .file-header-accent-select,
+    body.mdpre-gray[data-mdpre-accent="default"] .file-header-accent-select {
       color: var(--vscode-editor-foreground, #1f2328);
+    }
+    .file-header-theme-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .file-header-theme-depth {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: 28px;
+      height: 96px;
+      padding: 8px 0;
+      border-radius: 999px;
+      background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #252526));
+      border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1300;
+      touch-action: none;
+      user-select: none;
+      pointer-events: auto;
+    }
+    /* Invisible bridge so the pointer can cross the gap without losing hover. */
+    .file-header-theme-depth::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: -14px;
+      width: 40px;
+      height: 14px;
+      transform: translateX(-50%);
+    }
+    .file-header-theme-wrap:hover .file-header-theme-depth,
+    .file-header-theme-wrap.depth-open .file-header-theme-depth,
+    .file-header-theme-wrap.depth-dragging .file-header-theme-depth {
+      display: flex;
+    }
+    .file-header-theme-depth-track {
+      position: relative;
+      width: 4px;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(
+        to bottom,
+        color-mix(in srgb, var(--vscode-editor-foreground, #ccc) 18%, transparent),
+        color-mix(in srgb, var(--vscode-editor-foreground, #ccc) 55%, transparent)
+      );
+    }
+    .file-header-theme-depth-thumb {
+      position: absolute;
+      left: 50%;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--vscode-editor-foreground, #d4d4d4);
+      border: 2px solid var(--vscode-editor-background, #1e1e1e);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+      cursor: ns-resize;
+      touch-action: none;
     }
   `;
   document.head.appendChild(style);
+}
+
+type ThemeModeName = 'light' | 'gray' | 'dark';
+export type EasyViewAccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple' | 'cherryRed';
+type RgbTuple = [number, number, number];
+
+const THEME_DEPTH_STORAGE_KEY = 'mdpre-zalman-theme-depth';
+const THEME_DEPTH_DEFAULT = 0.5;
+
+/** Per-mode bg/fg anchors at depth 0 (top/light), 0.5 (default), 1 (bottom/deep). */
+const THEME_DEPTH_AXIS: Record<ThemeModeName, { bg: [string, string, string]; fg: [string, string, string] }> = {
+  light: {
+    bg: ['#ffffff', '#ffffff', '#8b929e'],
+    fg: ['#050608', '#1f2328', '#f3f5f7'],
+  },
+  gray: {
+    bg: ['#e4e7ec', '#b0b6c0', '#5c6470'],
+    fg: ['#020304', '#050608', '#f5f6f8'],
+  },
+  dark: {
+    bg: ['#3c3c3c', '#1e1e1e', '#0a0a0a'],
+    fg: ['#9a9a9a', '#d4d4d4', '#ffffff'],
+  },
+};
+
+function parseHexColor(hex: string): RgbTuple {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+function rgbToHex([r, g, b]: RgbTuple): string {
+  return `#${[r, g, b]
+    .map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+function lerpRgb(a: RgbTuple, b: RgbTuple, t: number): RgbTuple {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function lerpHex(a: string, b: string, t: number): string {
+  return rgbToHex(lerpRgb(parseHexColor(a), parseHexColor(b), t));
+}
+
+function axisLerp(low: string, mid: string, high: string, depth: number): string {
+  if (depth <= 0.5) return lerpHex(low, mid, depth / 0.5);
+  return lerpHex(mid, high, (depth - 0.5) / 0.5);
+}
+
+function mixHex(a: string, b: string, amountTowardB: number): string {
+  return lerpHex(a, b, amountTowardB);
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function readStoredThemeDepth(): number {
+  try {
+    const raw = localStorage.getItem(THEME_DEPTH_STORAGE_KEY);
+    if (raw == null) return THEME_DEPTH_DEFAULT;
+    const value = Number(raw);
+    return Number.isFinite(value) ? clamp01(value) : THEME_DEPTH_DEFAULT;
+  } catch {
+    return THEME_DEPTH_DEFAULT;
+  }
+}
+
+function writeStoredThemeDepth(depth: number): void {
+  try {
+    localStorage.setItem(THEME_DEPTH_STORAGE_KEY, String(clamp01(depth)));
+  } catch {
+    // Webview storage can be unavailable in restricted contexts.
+  }
+}
+
+function applyThemeDepthColors(mode: ThemeModeName, depth: number, themeRoot: HTMLElement): void {
+  const axis = THEME_DEPTH_AXIS[mode];
+  const t = clamp01(depth);
+  const bg = axisLerp(axis.bg[0], axis.bg[1], axis.bg[2], t);
+  const fg = axisLerp(axis.fg[0], axis.fg[1], axis.fg[2], t);
+  const widget = mixHex(bg, fg, 0.1);
+  const input = mixHex(bg, fg, 0.06);
+  const border = mixHex(bg, fg, 0.28);
+  const desc = mixHex(fg, bg, 0.38);
+  const icon = mixHex(fg, bg, 0.22);
+  const selection = mixHex(bg, fg, 0.18);
+  const hover = mixHex(bg, fg, 0.12);
+  const body = themeRoot;
+  body.style.setProperty('--vscode-editor-background', bg);
+  body.style.setProperty('--vscode-editor-foreground', fg);
+  body.style.setProperty('--vscode-foreground', fg);
+  body.style.setProperty('--vscode-icon-foreground', icon);
+  body.style.setProperty('--vscode-descriptionForeground', desc);
+  body.style.setProperty('--vscode-input-background', input);
+  body.style.setProperty('--vscode-input-foreground', fg);
+  body.style.setProperty('--vscode-input-border', border);
+  body.style.setProperty('--vscode-input-placeholderForeground', mixHex(desc, bg, 0.15));
+  body.style.setProperty('--vscode-editorWidget-background', widget);
+  body.style.setProperty('--vscode-editorWidget-foreground', fg);
+  body.style.setProperty('--vscode-editorWidget-border', border);
+  body.style.setProperty('--vscode-menu-background', input);
+  body.style.setProperty('--vscode-menu-foreground', fg);
+  body.style.setProperty('--vscode-menu-border', border);
+  body.style.setProperty('--vscode-menu-selectionBackground', selection);
+  body.style.setProperty('--vscode-menu-selectionForeground', fg);
+  body.style.setProperty('--vscode-list-hoverBackground', hover);
+  body.style.setProperty('--vscode-list-activeSelectionBackground', mixHex(bg, '#0969da', 0.35));
+  body.style.setProperty('--vscode-list-activeSelectionForeground', fg);
+  body.style.setProperty('--vscode-textCodeBlock-background', mixHex(bg, fg, 0.1));
+  body.style.setProperty('--vscode-textBlockQuote-border', border);
+  body.style.setProperty('--vscode-textBlockQuote-background', widget);
+  body.style.setProperty('--vscode-dropdown-background', input);
+  body.style.setProperty('--vscode-dropdown-foreground', fg);
+  body.style.setProperty('--vscode-dropdown-border', border);
+  body.style.setProperty('--vscode-toolbar-hoverBackground', mixHex(bg, fg, 0.1));
+  body.style.setProperty('--vscode-scrollbarSlider-background', mixHex(fg, bg, 0.55) + '66');
+  body.style.setProperty('--vscode-scrollbarSlider-hoverBackground', mixHex(fg, bg, 0.45) + '99');
+  body.style.setProperty('--vscode-scrollbarSlider-activeBackground', mixHex(fg, bg, 0.35) + 'b3');
 }
 
 function ensureCommitModalStyles(): void {
@@ -415,12 +607,6 @@ function ensureCommitModalStyles(): void {
     }
     .file-header-commit-body {
       padding: 14px;
-    }
-    .file-header-commit-label {
-      display: block;
-      margin-bottom: 8px;
-      font-size: 12px;
-      opacity: 0.76;
     }
     .file-header-commit-input-wrap {
       position: relative;
@@ -511,7 +697,7 @@ function ensureCommitModalStyles(): void {
     }
     .file-header-commit-actions {
       display: flex;
-      justify-content: flex-end;
+      justify-content: center;
       gap: 8px;
       padding: 0 14px 14px;
     }
@@ -558,6 +744,7 @@ export interface FileHeader {
   setCommitSyncHandler: (handler: (message: string) => void) => void;
   setTerminalHandler: (handler: () => void) => void;
   setHistoryHandler: (handler: () => void) => void;
+  setAiChatHandler: (handler: () => void) => void;
   setStickyNoteHandler: (handler: () => void) => void;
   setExternalFollowHandler: (handler: (enabled: boolean) => void) => void;
   setShortcutChangeHandler: (handler: (config: ToolbarShortcutConfig) => void) => void;
@@ -566,11 +753,18 @@ export interface FileHeader {
   syncFullWidthState: (fullWidth: boolean) => void;
   syncTableWrapState: (enabled: boolean) => void;
   syncStickyNoteState: (open: boolean) => void;
+  syncAiChatState: (open: boolean) => void;
   triggerTocToggle: () => void;
   triggerWidthToggle: () => void;
   triggerTableWrapToggle: () => void;
   triggerExternalFollowToggle: () => void;
   triggerThemeToggle: () => void;
+  getThemeState: () => { mode: ThemeModeName; depth: number };
+  cycleTheme: () => void;
+  setThemeMode: (mode: ThemeModeName) => void;
+  setThemeDepth: (depth: number) => void;
+  getAccentTheme: () => EasyViewAccentTheme;
+  setAccentTheme: (theme: EasyViewAccentTheme) => void;
   openCommitModal: () => void;
   closeCommitModal: () => void;
   setCommitMessageLoading: (loading: boolean) => void;
@@ -580,15 +774,19 @@ export interface FileHeader {
   syncTerminalState: (open: boolean) => void;
   getSourceBtn: () => HTMLElement;
   getHistoryBtn: () => HTMLElement;
+  destroy: () => void;
 }
 
 export function createFileHeader(deps: FileHeaderDeps): FileHeader {
-  const { postMessage, getState, setState, onSettingsChange } = deps;
+  const { postMessage, getState, setState, onSettingsChange, capabilities } = deps;
+  const dom = deps.dom ?? createEditorDomContext();
+  const document = dom.document;
+  const window = dom.window;
   ensureFileHeaderCompactStyles();
   ensureCommitModalStyles();
-  type ThemeMode = 'light' | 'dark';
-  type AccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple' | 'cherryRed';
-  const accentThemes: Array<{ value: AccentTheme; label: string }> = [
+  type ThemeMode = 'light' | 'gray' | 'dark';
+  const THEME_CYCLE: ThemeMode[] = ['light', 'gray', 'dark'];
+  const accentThemes: Array<{ value: EasyViewAccentTheme; label: string }> = [
     { value: 'default', label: 'Default text' },
     { value: 'blue', label: 'Blue' },
     { value: 'orangeRed', label: 'Orange red' },
@@ -599,24 +797,31 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   function readStoredThemeMode(): ThemeMode | null {
     try {
+      const primary = localStorage.getItem('easyview.themeMode');
+      if (primary === 'light' || primary === 'gray' || primary === 'dark') return primary;
       const stored = localStorage.getItem('mdpre-zalman-theme');
-      return stored === 'light' || stored === 'dark' ? stored : null;
+      return stored === 'light' || stored === 'gray' || stored === 'dark' ? stored : null;
     } catch {
       return null;
     }
   }
 
+  function nextThemeMode(current: ThemeMode): ThemeMode {
+    const index = THEME_CYCLE.indexOf(current);
+    return THEME_CYCLE[(index + 1) % THEME_CYCLE.length];
+  }
+
   function detectThemeMode(): ThemeMode {
     const stored = readStoredThemeMode();
     if (stored) return stored;
-    if (document.body.classList.contains('vscode-light')) return 'light';
-    if (document.body.classList.contains('vscode-dark')) return 'dark';
+    if (dom.themeRoot.classList.contains('vscode-light')) return 'light';
+    if (dom.themeRoot.classList.contains('vscode-dark')) return 'dark';
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
-  function readStoredAccentTheme(): AccentTheme {
+  function readStoredAccentTheme(): EasyViewAccentTheme {
     try {
-      const stored = localStorage.getItem('mdpre-zalman-accent-theme') as AccentTheme | null;
+      const stored = localStorage.getItem('mdpre-zalman-accent-theme') as EasyViewAccentTheme | null;
       if (accentThemes.some((theme) => theme.value === stored)) return stored!;
     } catch {
       // Webview storage can be unavailable in restricted contexts.
@@ -634,16 +839,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   let commitConfirmHandler: ((message: string) => void) | null = null;
   let commitSyncHandler: ((message: string) => void) | null = null;
   let commitModalBusy = false;
-
-  const setLinkedShortcut = (action: ToolbarShortcutAction, shortcut: string): void => {
-    if (LINKED_SHORTCUT_ACTIONS.includes(action)) {
-      for (const linkedAction of LINKED_SHORTCUT_ACTIONS) {
-        shortcutConfig[linkedAction] = shortcut;
-      }
-      return;
-    }
-    shortcutConfig[action] = shortcut;
-  };
 
   const postCurrentEdit = () => {
     const s = getState();
@@ -735,9 +930,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     const state = getState();
     const newFullWidth = !state.isFullWidth;
     setState({ isFullWidth: newFullWidth });
-    document.getElementById('editor')?.classList.toggle('full-width', newFullWidth);
+    dom.getById('editor')?.classList.toggle('full-width', newFullWidth);
     syncWidthButton(newFullWidth);
-    window.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
+    dom.eventTarget.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
     postCurrentEdit();
     onSettingsChange();
   });
@@ -750,8 +945,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     const state = getState();
     const newTableWrap = !state.isTableWrap;
     setState({ isTableWrap: newTableWrap });
-    document.getElementById('editor')?.classList.toggle('table-wrap', newTableWrap);
-    window.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
+    dom.getById('editor')?.classList.toggle('table-wrap', newTableWrap);
+    dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
     syncTableWrapButton(newTableWrap);
     postCurrentEdit();
     onSettingsChange();
@@ -778,9 +973,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   function applyZoom(level: number) {
     zoomLevel = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level));
     zoomLabel.textContent = `${zoomLevel}%`;
-    const scrollArea = document.getElementById('editor-scroll-area');
+    const scrollArea = dom.getById('editor-scroll-area');
     if (scrollArea) scrollArea.style.fontSize = `${zoomLevel}%`;
-    window.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
+    dom.eventTarget.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
     zoomOutBtn.classList.toggle('disabled', zoomLevel <= ZOOM_MIN);
     zoomInBtn.classList.toggle('disabled', zoomLevel >= ZOOM_MAX);
   }
@@ -791,12 +986,13 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   zoomGroup.appendChild(zoomLabel);
   zoomGroup.appendChild(zoomInBtn);
   leftGroup.appendChild(zoomGroup);
-  document.addEventListener('wheel', (e) => {
+  const onDocumentWheel = (e: WheelEvent): void => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       applyZoom(zoomLevel + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
     }
-  }, { passive: false });
+  };
+  dom.root.addEventListener('wheel', onDocumentWheel as EventListener, { passive: false });
 
   // Right group
   const rightGroup = document.createElement('div');
@@ -814,25 +1010,34 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const stageBtn = document.createElement('button');
   stageBtn.className = 'file-header-btn';
+  stageBtn.dataset.action = 'stageFile';
   stageBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5c-1.1-1.1-2.6-1.7-4.5-1.7-2.8 0-4.8 1.3-4.8 3.5 0 1.9 1.5 2.9 4.4 3.5l1.2.3c2.6.6 3.8 1.4 3.8 3.2 0 2.4-2.1 3.8-5 3.8-2 0-3.7-.6-5-1.8"/></svg>';
-  rightGroup.appendChild(stageBtn);
+  if (capabilities.git) rightGroup.appendChild(stageBtn);
 
   const commitBtn = document.createElement('button');
   commitBtn.className = 'file-header-btn';
+  commitBtn.dataset.action = 'commitFile';
   commitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/><path d="M12 3v6"/><path d="M12 15v6"/></svg>';
-  rightGroup.appendChild(commitBtn);
+  if (capabilities.git) rightGroup.appendChild(commitBtn);
 
   const terminalBtn = document.createElement('button');
   terminalBtn.className = 'file-header-btn';
+  terminalBtn.dataset.action = 'toggleTerminal';
   terminalBtn.title = 'Open embedded terminal';
   terminalBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="m7 9 3 3-3 3"/><path d="M12 15h5"/></svg>';
-  rightGroup.appendChild(terminalBtn);
+  if (capabilities.terminal) rightGroup.appendChild(terminalBtn);
 
   const historyBtn = document.createElement('button');
   historyBtn.className = 'file-header-btn';
   historyBtn.title = 'Toggle history panel';
   historyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
   rightGroup.appendChild(historyBtn);
+
+  const aiChatBtn = document.createElement('button');
+  aiChatBtn.className = 'file-header-btn';
+  aiChatBtn.title = 'Toggle AI chat';
+  aiChatBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  if (capabilities.aiChat) rightGroup.appendChild(aiChatBtn);
 
   const stickyNoteBtn = document.createElement('button');
   stickyNoteBtn.className = 'file-header-btn';
@@ -875,44 +1080,191 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const exportDocxItem = document.createElement('button');
   exportDocxItem.className = 'file-header-dropdown-item';
+  exportDocxItem.dataset.action = 'exportDocx';
   exportDocxItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Export DOCX';
 
   exportDropdown.appendChild(exportHtmlLightItem);
   exportDropdown.appendChild(exportHtmlDarkItem);
   exportDropdown.appendChild(exportPdfLightItem);
   exportDropdown.appendChild(exportPdfDarkItem);
-  exportDropdown.appendChild(exportDocxItem);
+  if (capabilities.documentConversion) exportDropdown.appendChild(exportDocxItem);
   exportWrapper.appendChild(exportDropdown);
   rightGroup.appendChild(exportWrapper);
 
+  const themeWrap = document.createElement('div');
+  themeWrap.className = 'file-header-theme-wrap';
   const themeToggleBtn = document.createElement('button');
   themeToggleBtn.className = 'file-header-btn';
+  themeToggleBtn.type = 'button';
   let themeMode: ThemeMode = detectThemeMode();
+  let themeDepth = readStoredThemeDepth();
   let accentThemeUiSync: (() => void) | null = null;
-  function applyThemeMode(mode: ThemeMode) {
+  let depthDragging = false;
+  let suppressThemeClick = false;
+  let depthCloseTimer: number | null = null;
+  let suppressThemeClickTimer: number | null = null;
+  let destroyed = false;
+  const DEPTH_CLOSE_DELAY_MS = 280;
+  const THEME_ICONS: Record<ThemeMode, string> = {
+    // Icon represents the current mode.
+    light: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>',
+    gray: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></svg>',
+    dark: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/></svg>',
+  };
+  const THEME_TITLES: Record<ThemeMode, string> = {
+    light: 'Light mode (click to switch)',
+    gray: 'Gray mode (click to switch)',
+    dark: 'Dark mode (click to switch)',
+  };
+
+  const depthPanel = document.createElement('div');
+  depthPanel.className = 'file-header-theme-depth';
+  depthPanel.title = 'Drag to adjust background depth';
+  const depthTrack = document.createElement('div');
+  depthTrack.className = 'file-header-theme-depth-track';
+  const depthThumb = document.createElement('div');
+  depthThumb.className = 'file-header-theme-depth-thumb';
+  depthTrack.appendChild(depthThumb);
+  depthPanel.appendChild(depthTrack);
+
+  function syncDepthThumb(): void {
+    depthThumb.style.top = `${themeDepth * 100}%`;
+  }
+
+  function applyThemeDepth(depth: number, persist = true): void {
+    themeDepth = clamp01(depth);
+    applyThemeDepthColors(themeMode, themeDepth, dom.themeRoot);
+    syncDepthThumb();
+    if (persist) writeStoredThemeDepth(themeDepth);
+  }
+
+  function applyThemeMode(mode: ThemeMode, options?: { notifyHost?: boolean }) {
     themeMode = mode;
-    document.body.classList.toggle('mdpre-light', mode === 'light');
-    document.body.classList.toggle('mdpre-dark', mode === 'dark');
+    dom.themeRoot.classList.toggle('mdpre-light', mode === 'light');
+    dom.themeRoot.classList.toggle('mdpre-gray', mode === 'gray');
+    dom.themeRoot.classList.toggle('mdpre-dark', mode === 'dark');
+    const stampRoots: Array<HTMLElement | null> = [
+      document.documentElement,
+      dom.themeRoot,
+      document.getElementById('desktop-root'),
+    ];
+    for (const root of stampRoots) {
+      if (root) root.dataset.easyviewTheme = mode;
+    }
     try {
+      localStorage.setItem('easyview.themeMode', mode);
       localStorage.setItem('mdpre-zalman-theme', mode);
     } catch {
       // Webview storage can be unavailable in restricted contexts.
     }
-    themeToggleBtn.classList.toggle('active', mode === 'dark');
-    setTitleWithShortcut(themeToggleBtn, mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', 'toggleTheme');
-    themeToggleBtn.innerHTML = mode === 'dark'
-      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>'
-      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/></svg>';
-    window.dispatchEvent(new CustomEvent('inlinemd:themeChanged', {
-      detail: { mode, isDark: mode === 'dark' },
-    }));
+    themeToggleBtn.classList.toggle('active', mode !== 'light');
+    setTitleWithShortcut(themeToggleBtn, THEME_TITLES[mode], 'toggleTheme');
+    themeToggleBtn.innerHTML = THEME_ICONS[mode];
+    applyThemeDepth(themeDepth, false);
+    const detail = { mode, isDark: mode === 'dark', depth: themeDepth };
+    dom.eventTarget.dispatchEvent(new CustomEvent('inlinemd:themeChanged', { detail }));
+    window.dispatchEvent(new CustomEvent('easyview:productThemeChanged', { detail }));
+    if (options?.notifyHost !== false) {
+      postMessage({ type: 'productThemeChanged', mode });
+    }
     accentThemeUiSync?.();
   }
-  themeToggleBtn.addEventListener('click', () => {
-    applyThemeMode(themeMode === 'dark' ? 'light' : 'dark');
+
+  function depthFromClientY(clientY: number): number {
+    const rect = depthTrack.getBoundingClientRect();
+    if (rect.height <= 0) return themeDepth;
+    return clamp01((clientY - rect.top) / rect.height);
+  }
+
+  function clearDepthCloseTimer(): void {
+    if (depthCloseTimer == null) return;
+    window.clearTimeout(depthCloseTimer);
+    depthCloseTimer = null;
+  }
+
+  function openDepthPanel(): void {
+    clearDepthCloseTimer();
+    themeWrap.classList.add('depth-open');
+  }
+
+  function scheduleCloseDepthPanel(): void {
+    if (depthDragging) return;
+    clearDepthCloseTimer();
+    depthCloseTimer = window.setTimeout(() => {
+      depthCloseTimer = null;
+      if (depthDragging) return;
+      themeWrap.classList.remove('depth-open');
+    }, DEPTH_CLOSE_DELAY_MS);
+  }
+
+  function onDepthPointerMove(event: PointerEvent): void {
+    if (!depthDragging) return;
+    applyThemeDepth(depthFromClientY(event.clientY));
+  }
+
+  function onDepthPointerUp(event: PointerEvent): void {
+    if (!depthDragging) return;
+    depthDragging = false;
+    themeWrap.classList.remove('depth-dragging');
+    depthThumb.releasePointerCapture?.(event.pointerId);
+    window.removeEventListener('pointermove', onDepthPointerMove);
+    window.removeEventListener('pointerup', onDepthPointerUp);
+    window.removeEventListener('pointercancel', onDepthPointerUp);
+    // Prevent the trailing click from cycling theme after a drag.
+    suppressThemeClick = true;
+    if (suppressThemeClickTimer != null) window.clearTimeout(suppressThemeClickTimer);
+    suppressThemeClickTimer = window.setTimeout(() => {
+      suppressThemeClick = false;
+      suppressThemeClickTimer = null;
+    }, 0);
+    if (!themeWrap.matches(':hover')) {
+      scheduleCloseDepthPanel();
+    }
+  }
+
+  depthThumb.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openDepthPanel();
+    depthDragging = true;
+    themeWrap.classList.add('depth-dragging');
+    depthThumb.setPointerCapture?.(event.pointerId);
+    applyThemeDepth(depthFromClientY(event.clientY));
+    window.addEventListener('pointermove', onDepthPointerMove);
+    window.addEventListener('pointerup', onDepthPointerUp);
+    window.addEventListener('pointercancel', onDepthPointerUp);
   });
-  applyThemeMode(themeMode);
-  rightGroup.appendChild(themeToggleBtn);
+
+  depthTrack.addEventListener('pointerdown', (event) => {
+    if (event.target === depthThumb) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openDepthPanel();
+    depthDragging = true;
+    themeWrap.classList.add('depth-dragging');
+    applyThemeDepth(depthFromClientY(event.clientY));
+    depthThumb.setPointerCapture?.(event.pointerId);
+    window.addEventListener('pointermove', onDepthPointerMove);
+    window.addEventListener('pointerup', onDepthPointerUp);
+    window.addEventListener('pointercancel', onDepthPointerUp);
+  });
+
+  themeWrap.addEventListener('pointerenter', openDepthPanel);
+  themeWrap.addEventListener('pointerleave', scheduleCloseDepthPanel);
+
+  themeToggleBtn.addEventListener('click', (event) => {
+    if (suppressThemeClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    applyThemeMode(nextThemeMode(themeMode), { notifyHost: true });
+  });
+  applyThemeMode(themeMode, { notifyHost: false });
+  syncDepthThumb();
+  themeWrap.appendChild(themeToggleBtn);
+  themeWrap.appendChild(depthPanel);
+  rightGroup.appendChild(themeWrap);
 
   const externalFollowBtn = document.createElement('button');
   externalFollowBtn.className = 'file-header-btn';
@@ -944,20 +1296,20 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   );
   const accentMenu = document.createElement('div');
   accentMenu.className = 'file-header-dropdown file-header-accent-menu';
-  const accentOptionEls = new Map<AccentTheme, HTMLButtonElement>();
-  const accentThemeColors: Record<Exclude<AccentTheme, 'default'>, { light: string; dark: string }> = {
-    blue: { light: '#2563eb', dark: '#60a5fa' },
-    orangeRed: { light: '#ea580c', dark: '#fb923c' },
-    green: { light: '#15803d', dark: '#4ade80' },
-    purple: { light: '#7c3aed', dark: '#a78bfa' },
-    cherryRed: { light: '#a6113a', dark: '#ff1f4f' },
+  const accentOptionEls = new Map<EasyViewAccentTheme, HTMLButtonElement>();
+  const accentThemeColors: Record<Exclude<EasyViewAccentTheme, 'default'>, { light: string; gray: string; dark: string }> = {
+    blue: { light: '#2563eb', gray: '#2563eb', dark: '#60a5fa' },
+    orangeRed: { light: '#ea580c', gray: '#ea580c', dark: '#fb923c' },
+    green: { light: '#15803d', gray: '#15803d', dark: '#4ade80' },
+    purple: { light: '#7c3aed', gray: '#7c3aed', dark: '#a78bfa' },
+    cherryRed: { light: '#a6113a', gray: '#a6113a', dark: '#ff1f4f' },
   };
-  function accentOptionColor(theme: AccentTheme): string {
+  function accentOptionColor(theme: EasyViewAccentTheme): string {
     if (theme === 'default') return '';
     return accentThemeColors[theme][themeMode];
   }
-  function applyAccentTheme(theme: AccentTheme) {
-    document.body.dataset.mdpreAccent = theme;
+  function applyAccentTheme(theme: EasyViewAccentTheme) {
+    dom.themeRoot.dataset.mdpreAccent = theme;
     const selected = accentThemes.find((item) => item.value === theme) ?? accentThemes[0];
     accentLabel.textContent = selected.label;
     accentSelect.style.color = accentOptionColor(theme);
@@ -993,7 +1345,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     accentMenu.classList.toggle('open');
   });
   accentThemeUiSync = () => {
-    applyAccentTheme((document.body.dataset.mdpreAccent as AccentTheme) || readStoredAccentTheme());
+    applyAccentTheme((dom.themeRoot.dataset.mdpreAccent as EasyViewAccentTheme) || readStoredAccentTheme());
   };
   applyAccentTheme(readStoredAccentTheme());
   accentWrap.appendChild(accentSelect);
@@ -1018,7 +1370,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       </div>
     </div>
   `;
-  document.body.appendChild(shortcutsBackdrop);
+  dom.overlayRoot.appendChild(shortcutsBackdrop);
 
   const shortcutRows = new Map<ToolbarShortcutAction, HTMLInputElement>();
   const shortcutsList = shortcutsBackdrop.querySelector('.file-header-shortcuts-list') as HTMLElement;
@@ -1049,7 +1401,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       }
 
       if (event.key === 'Backspace' || event.key === 'Delete') {
-        setLinkedShortcut(action, '');
+        shortcutConfig[action] = '';
         input.value = '';
         persistShortcuts();
         return;
@@ -1058,7 +1410,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       const shortcut = formatEventToShortcut(event);
       if (!shortcut) return;
 
-      setLinkedShortcut(action, shortcut);
+      shortcutConfig[action] = shortcut;
       input.value = toDisplayShortcut(shortcut);
       persistShortcuts();
     });
@@ -1068,7 +1420,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     clearBtn.type = 'button';
     clearBtn.textContent = 'Clear';
     clearBtn.addEventListener('click', () => {
-      setLinkedShortcut(action, '');
+      shortcutConfig[action] = '';
       input.value = '';
       persistShortcuts();
     });
@@ -1080,7 +1432,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     shortcutRows.set(action, input);
   };
 
-  (Object.keys(DEFAULT_SHORTCUTS) as ToolbarShortcutAction[]).forEach(createShortcutRow);
+  (Object.keys(DEFAULT_SHORTCUTS) as ToolbarShortcutAction[])
+    .filter((action) => capabilities.shortcutPersistence || action !== 'openWithEasyView')
+    .forEach(createShortcutRow);
 
   const persistShortcuts = (): void => {
     try {
@@ -1120,10 +1474,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
         <button class="file-header-commit-close" type="button" aria-label="Close">x</button>
       </div>
       <div class="file-header-commit-body">
-        <label class="file-header-commit-label">Commit message for current file</label>
         <div class="file-header-commit-input-wrap">
           <span class="file-header-commit-source"></span>
-          <textarea class="file-header-commit-textarea" spellcheck="false" placeholder="Generating commit message..."></textarea>
+          <textarea class="file-header-commit-textarea" spellcheck="false" placeholder="Commit message"></textarea>
           <div class="file-header-commit-loading" aria-live="polite">
             <span class="file-header-commit-spinner"></span>
             <span>Generating message<span class="file-header-commit-loading-dots"></span></span>
@@ -1138,7 +1491,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       </div>
     </div>
   `;
-  document.body.appendChild(commitBackdrop);
+  dom.overlayRoot.appendChild(commitBackdrop);
 
   const commitTextarea = commitBackdrop.querySelector('.file-header-commit-textarea') as HTMLTextAreaElement;
   const commitSource = commitBackdrop.querySelector('.file-header-commit-source') as HTMLElement;
@@ -1162,6 +1515,27 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     commitStatus.textContent = message;
     commitStatus.classList.toggle('error', isError);
   };
+
+  const openCommitModal = (): void => {
+    if (!capabilities.aiCommitMessage) {
+      commitModalBusy = false;
+      commitTextarea.disabled = false;
+      commitTextarea.value = '';
+      commitTextarea.placeholder = 'Commit message';
+      commitLoading.classList.remove('open');
+      commitSource.textContent = '';
+      commitSource.classList.remove('visible');
+      setCommitStatus('');
+      updateCommitSubmitState();
+    }
+    commitBackdrop.classList.add('open');
+    commitTextarea.focus();
+    commitTextarea.select();
+  };
+
+  if (!capabilities.aiCommitMessage) {
+    commitBtn.addEventListener('click', openCommitModal);
+  }
 
   commitTextarea.addEventListener('input', updateCommitSubmitState);
   commitTextarea.addEventListener('keydown', (event) => {
@@ -1211,14 +1585,15 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   modalCloseBtn.addEventListener('click', () => closeShortcutModal());
 
-  document.addEventListener('keydown', (e) => {
+  const onDocumentKeydown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') {
       exportDropdown.classList.remove('open');
       accentMenu.classList.remove('open');
       closeShortcutModal();
       if (!commitModalBusy) commitBackdrop.classList.remove('open');
     }
-  });
+  };
+  dom.root.addEventListener('keydown', onDocumentKeydown as EventListener);
 
   // Toggle dropdown on button click
   exportBtn.addEventListener('click', (e) => {
@@ -1228,10 +1603,11 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   });
 
   // Close dropdown on outside click
-  document.addEventListener('click', () => {
+  const onDocumentClick = (): void => {
     exportDropdown.classList.remove('open');
     accentMenu.classList.remove('open');
-  });
+  };
+  dom.root.addEventListener('click', onDocumentClick);
 
   const refreshShortcutAwareTitles = (): void => {
     const state = getState();
@@ -1244,9 +1620,14 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setTitleWithShortcut(commitBtn, 'Commit current file', 'commitFile');
     setTitleWithShortcut(terminalBtn, 'Open embedded terminal', 'toggleTerminal');
     setTitleWithShortcut(stickyNoteBtn, 'Toggle sticky note editor', 'toggleStickyNote');
-    setTitleWithShortcut(sourceBtn, 'Open native source mode', 'openSourceMode');
+    setTitleWithShortcut(aiChatBtn, 'Toggle AI chat', 'toggleAiChat');
+    setTitleWithShortcut(
+      sourceBtn,
+      capabilities.sourceMode === 'native' ? 'Open native source mode' : 'Toggle source mode',
+      'openSourceMode',
+    );
     syncExternalFollowButton(externalFollowEnabled);
-    setTitleWithShortcut(themeToggleBtn, themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', 'toggleTheme');
+    setTitleWithShortcut(themeToggleBtn, THEME_TITLES[themeMode], 'toggleTheme');
   };
 
   refreshShortcutAwareTitles();
@@ -1314,11 +1695,18 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setScrollTopHandler(handler: () => void) { scrollTopBtn.addEventListener('click', handler); },
     setScrollBottomHandler(handler: () => void) { scrollBottomBtn.addEventListener('click', handler); },
     setStageHandler(handler: () => void) { stageBtn.addEventListener('click', handler); },
-    setCommitHandler(handler: () => void) { commitBtn.addEventListener('click', handler); },
+    setCommitHandler(handler: () => void) {
+      if (capabilities.aiCommitMessage) {
+        commitBtn.addEventListener('click', handler);
+      }
+    },
     setCommitConfirmHandler(handler: (message: string) => void) { commitConfirmHandler = handler; },
     setCommitSyncHandler(handler: (message: string) => void) { commitSyncHandler = handler; },
     setTerminalHandler(handler: () => void) { terminalBtn.addEventListener('click', handler); },
     setHistoryHandler(handler: () => void) { historyBtn.addEventListener('click', handler); },
+    setAiChatHandler(handler: () => void) {
+      if (capabilities.aiChat) aiChatBtn.addEventListener('click', handler);
+    },
     setStickyNoteHandler(handler: () => void) { stickyNoteBtn.addEventListener('click', handler); },
     setExternalFollowHandler(handler: (enabled: boolean) => void) {
       externalFollowHandler = handler;
@@ -1326,7 +1714,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     },
     setShortcutChangeHandler(handler: (config: ToolbarShortcutConfig) => void) {
       shortcutChangeHandler = handler;
-      shortcutChangeHandler?.({ ...shortcutConfig });
+      shortcutChangeHandler({ ...shortcutConfig });
     },
     getShortcutConfig() {
       return { ...shortcutConfig };
@@ -1343,6 +1731,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     syncStickyNoteState(open: boolean) {
       stickyNoteBtn.classList.toggle('active', open);
     },
+    syncAiChatState(open: boolean) {
+      aiChatBtn.classList.toggle('active', open);
+    },
     triggerTocToggle() {
       tocBtn.click();
     },
@@ -1358,11 +1749,26 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     triggerThemeToggle() {
       themeToggleBtn.click();
     },
-    openCommitModal() {
-      commitBackdrop.classList.add('open');
-      commitTextarea.focus();
-      commitTextarea.select();
+    getThemeState() {
+      return { mode: themeMode, depth: themeDepth };
     },
+    cycleTheme() {
+      applyThemeMode(nextThemeMode(themeMode), { notifyHost: true });
+    },
+    setThemeMode(mode: ThemeMode) {
+      applyThemeMode(mode, { notifyHost: false });
+    },
+    setThemeDepth(depth: number) {
+      applyThemeDepth(depth);
+    },
+    getAccentTheme() {
+      return (dom.themeRoot.dataset.mdpreAccent as EasyViewAccentTheme) || readStoredAccentTheme();
+    },
+    setAccentTheme(theme: EasyViewAccentTheme) {
+      applyAccentTheme(theme);
+    },
+    openCommitModal,
+
     closeCommitModal() {
       commitBackdrop.classList.remove('open');
     },
@@ -1423,5 +1829,34 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     },
     getSourceBtn() { return sourceBtn; },
     getHistoryBtn() { return historyBtn; },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      if (depthCloseTimer != null) {
+        window.clearTimeout(depthCloseTimer);
+        depthCloseTimer = null;
+      }
+      if (suppressThemeClickTimer != null) {
+        window.clearTimeout(suppressThemeClickTimer);
+        suppressThemeClickTimer = null;
+      }
+      depthDragging = false;
+      suppressThemeClick = false;
+      window.removeEventListener('pointermove', onDepthPointerMove);
+      window.removeEventListener('pointerup', onDepthPointerUp);
+      window.removeEventListener('pointercancel', onDepthPointerUp);
+      dom.root.removeEventListener('wheel', onDocumentWheel as EventListener);
+      dom.root.removeEventListener('keydown', onDocumentKeydown as EventListener);
+      dom.root.removeEventListener('click', onDocumentClick);
+      shortcutsBackdrop.classList.remove('open');
+      commitBackdrop.classList.remove('open');
+      shortcutsBackdrop.remove();
+      commitBackdrop.remove();
+      bar.remove();
+      shortcutChangeHandler = null;
+      externalFollowHandler = null;
+      commitConfirmHandler = null;
+      commitSyncHandler = null;
+    },
   };
 }

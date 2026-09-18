@@ -1,5 +1,5 @@
 /**
- * Mark specs for the InLineMd ProseMirror schema.
+ * Mark specs for the EasyView_Md ProseMirror schema.
  */
 
 import type { MarkSpec } from 'prosemirror-model';

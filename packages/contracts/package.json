@@ -1,0 +1,32 @@
+{
+  "name": "@easyview/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Platform-neutral EasyView interfaces, messages, capabilities, results, and validation",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./protocol": "./src/messages/editor-messages.ts",
+    "./messages": "./src/messages/editor-messages.ts",
+    "./editor-host": "./src/editor-host/transport.ts",
+    "./capabilities": "./src/capabilities/editor-host-capabilities.ts",
+    "./operation-result": "./src/results/operation-result.ts",
+    "./runtime-validation": "./src/validation/runtime-validation.ts",
+    "./xlsx-export": "./src/export/xlsx-export.ts",
+    "./workspace": "./src/workspace/workspace.ts",
+    "./workspace-icons": "./src/workspace/workspace-tree-icons.ts",
+    "./preview": "./src/preview/preview.ts",
+    "./theme": "./src/theme/product-theme.ts"
+  },
+
+  "files": [
+    "src",
+    "tsconfig.json",
+    "tests"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run tests"
+  }
+}

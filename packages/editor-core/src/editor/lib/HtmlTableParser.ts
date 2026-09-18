@@ -302,6 +302,14 @@ function getDirectRows(table: HTMLTableElement): HTMLTableRowElement[] {
   return rows;
 }
 
+/** Direct td/th only — `row.cells` can include nested-table cells in some DOM impls. */
+function getDirectCells(row: HTMLTableRowElement): HTMLTableCellElement[] {
+  return Array.from(row.children).filter(
+    (child): child is HTMLTableCellElement =>
+      child.tagName === 'TD' || child.tagName === 'TH',
+  );
+}
+
 function parseHtmlTableElement(
   table: HTMLTableElement,
   parser: MarkdownParser,
@@ -313,7 +321,7 @@ function parseHtmlTableElement(
   const pmRows: ProsemirrorNode[] = [];
   for (const row of rows) {
     const cells: ProsemirrorNode[] = [];
-    for (const cell of Array.from(row.cells)) {
+    for (const cell of getDirectCells(row)) {
       const isHeader = cell.tagName === 'TH';
       const nodeType = isHeader ? schema.nodes.table_header : schema.nodes.table_cell;
       const content = parseCellContent(cell, parser, pmDomParser);

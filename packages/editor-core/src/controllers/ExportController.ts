@@ -1,73 +1,152 @@
 import type { EditorView } from 'prosemirror-view';
 import type { EditorCore } from '../editor/EditorCore';
 import { generateStandaloneHtml } from '../extensions/export/html/ExportHtml';
-import { stripSettingsComment } from '../editor/lib/EditorSettings';
-import type { VscodeWebviewApi } from '../../shared/protocol';
+import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
+import type { EditorHostSubscription, EditorHostTransport } from '@easyview/contracts';
 import type { createFileHeader } from '../ui/FileHeader';
 
 type FileHeader = ReturnType<typeof createFileHeader>;
 type SourceEditor = { getContent: () => string };
+type ImageDataUrlResolver = (originalSrc: string) => Promise<string | null>;
+type ImageResolutionWindow = Window & {
+  __easyviewGetImageDataUrl?: ImageDataUrlResolver;
+};
+
+interface PendingImageRequest {
+  settled: boolean;
+  cleanup: () => void;
+  resolve: (value: string | null) => void;
+}
 
 export interface ExportControllerDeps {
   editor: EditorCore;
   view: EditorView;
   fileHeader: FileHeader;
-  vscode: VscodeWebviewApi;
+  host: EditorHostTransport;
   isSourceMode: () => boolean;
   getSourceEditor: () => SourceEditor | null;
 }
 
 export class ExportController {
   private readonly imageCache = new Map<string, Promise<string | null>>();
+  private readonly pendingImageRequests = new Set<PendingImageRequest>();
+  private disposed = false;
+  private imageResolutionBridgeInstalled = false;
+  private previousImageDataUrlResolver: ImageDataUrlResolver | undefined;
+  private installedImageDataUrlResolver: ImageDataUrlResolver | undefined;
+  private imageResolutionFallbackHandler: EventListener | undefined;
 
   constructor(private readonly deps: ExportControllerDeps) {}
 
   requestImageBase64FromHost(originalSrc: string, timeoutMs = 10000): Promise<string | null> {
+    if (this.disposed) return Promise.resolve(null);
+
     return new Promise((resolve) => {
+      if (this.disposed) {
+        resolve(null);
+        return;
+      }
+
       const requestId = Math.random().toString(36).slice(2, 11);
-      let settled = false;
-      const cleanup = () => window.removeEventListener('message', handler);
-      const handler = (event: MessageEvent) => {
-        const message = event.data;
-        if (message?.type !== 'imageBase64Response' || message.requestId !== requestId || settled) return;
-        settled = true;
-        cleanup();
-        resolve(message.base64 || null);
+      let subscription: EditorHostSubscription | undefined;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const pending: PendingImageRequest = {
+        settled: false,
+        cleanup: () => {
+          subscription?.unsubscribe();
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        },
+        resolve,
+      };
+      const settle = (value: string | null): void => {
+        if (pending.settled) return;
+        pending.settled = true;
+        pending.cleanup();
+        this.pendingImageRequests.delete(pending);
+        resolve(value);
       };
 
-      window.addEventListener('message', handler);
-      this.deps.vscode.postMessage({ type: 'getImageBase64', requestId, originalSrc });
-      setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        console.warn('[InLineMd] Image request TIMED OUT:', originalSrc, requestId);
-        resolve(null);
-      }, timeoutMs);
+      this.pendingImageRequests.add(pending);
+      try {
+        subscription = this.deps.host.subscribe((message) => {
+          if (this.disposed || message.type !== 'imageBase64Response' || message.requestId !== requestId) return;
+          settle(message.base64 || null);
+        });
+        timeoutId = setTimeout(() => {
+          if (pending.settled || this.disposed) return;
+          console.warn('[EasyView_Md] Image request TIMED OUT:', originalSrc, requestId);
+          settle(null);
+        }, timeoutMs);
+        this.deps.host.postMessage({ type: 'getImageBase64', requestId, originalSrc });
+      } catch {
+        settle(null);
+      }
     });
   }
 
   installImageResolutionBridge(): void {
-    (window as Window & {
-      __easyviewGetImageDataUrl?: (originalSrc: string) => Promise<string | null>;
-    }).__easyviewGetImageDataUrl = (originalSrc) => {
+    if (this.disposed || this.imageResolutionBridgeInstalled) return;
+
+    const target = window as ImageResolutionWindow;
+    this.previousImageDataUrlResolver = target.__easyviewGetImageDataUrl;
+    const resolver: ImageDataUrlResolver = (originalSrc) => {
+      if (this.disposed) return Promise.resolve(null);
       const cached = this.imageCache.get(originalSrc);
       if (cached) return cached;
       const request = this.requestImageBase64FromHost(originalSrc, 15000).catch(() => null);
       this.imageCache.set(originalSrc, request);
       return request;
     };
+    this.installedImageDataUrlResolver = resolver;
+    target.__easyviewGetImageDataUrl = resolver;
 
-    window.addEventListener('inlinemd:resolveImageFallback', ((event: CustomEvent<{
+    this.imageResolutionFallbackHandler = ((event: CustomEvent<{
       originalSrc?: string;
       apply?: (resolvedSrc: string | null) => void;
     }>) => {
+      if (this.disposed) return;
       const detail = event.detail;
       if (!detail?.originalSrc || typeof detail.apply !== 'function') return;
       void this.requestImageBase64FromHost(detail.originalSrc, 12000)
-        .then((base64) => detail.apply?.(base64))
-        .catch(() => detail.apply?.(null));
-    }) as EventListener);
+        .then((base64) => {
+          if (!this.disposed) detail.apply?.(base64);
+        })
+        .catch(() => {
+          if (!this.disposed) detail.apply?.(null);
+        });
+    }) as EventListener;
+    window.addEventListener('inlinemd:resolveImageFallback', this.imageResolutionFallbackHandler);
+    this.imageResolutionBridgeInstalled = true;
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    if (this.imageResolutionFallbackHandler) {
+      window.removeEventListener('inlinemd:resolveImageFallback', this.imageResolutionFallbackHandler);
+      this.imageResolutionFallbackHandler = undefined;
+    }
+
+    const target = window as ImageResolutionWindow;
+    if (target.__easyviewGetImageDataUrl === this.installedImageDataUrlResolver) {
+      if (this.previousImageDataUrlResolver) {
+        target.__easyviewGetImageDataUrl = this.previousImageDataUrlResolver;
+      } else {
+        delete target.__easyviewGetImageDataUrl;
+      }
+    }
+    this.previousImageDataUrlResolver = undefined;
+    this.installedImageDataUrlResolver = undefined;
+    this.imageResolutionBridgeInstalled = false;
+
+    for (const pending of [...this.pendingImageRequests]) {
+      pending.settled = true;
+      pending.cleanup();
+      pending.resolve(null);
+    }
+    this.pendingImageRequests.clear();
+    this.imageCache.clear();
   }
 
   registerFileHeaderHandlers(): void {
@@ -84,10 +163,10 @@ export class ExportController {
         title: this.title(),
         isDark: theme === 'dark',
       });
-      this.deps.vscode.postMessage({ type: 'exportHtml', html: result.html, images: result.images });
+      this.deps.host.postMessage({ type: 'exportHtml', html: result.html, images: result.images });
     } catch (error) {
-      console.error('[InLineMd] Export failed:', error);
-      this.deps.vscode.postMessage({ type: 'showInfo', text: `Export failed: ${error}` });
+      console.error('[EasyView_Md] Export failed:', error);
+      this.deps.host.postMessage({ type: 'showInfo', text: `Export failed: ${error}` });
     }
   }
 
@@ -99,10 +178,10 @@ export class ExportController {
         { title: this.title(), theme },
         (src) => this.requestImageBase64FromHost(src),
       );
-      this.deps.vscode.postMessage({ type: 'exportPdfBase64', data: base64 });
+      this.deps.host.postMessage({ type: 'exportPdfBase64', data: base64 });
     } catch (error) {
-      console.error('[InLineMd] PDF export failed:', error);
-      this.deps.vscode.postMessage({ type: 'showInfo', text: `PDF export failed: ${error}` });
+      console.error('[EasyView_Md] PDF export failed:', error);
+      this.deps.host.postMessage({ type: 'showInfo', text: `PDF export failed: ${error}` });
     }
   }
 
@@ -130,19 +209,19 @@ export class ExportController {
           mermaidImages.push({ source: png.source, pngBase64: png.base64, width: png.width, height: png.height });
         }
       } catch (error) {
-        console.warn('[InLineMd] Mermaid render for DOCX failed; exporting diagrams as code:', error);
+        console.warn('[EasyView_Md] Mermaid render for DOCX failed; exporting diagrams as code:', error);
       }
       try {
         const { collectAsciiPngs } = await import('../extensions/export/ascii/AsciiDiagramRenderer');
         const rendered = await collectAsciiPngs(markdown);
         asciiImages.push(...rendered);
       } catch (error) {
-        console.warn('[InLineMd] ASCII diagram render for DOCX failed; exporting as code:', error);
+        console.warn('[EasyView_Md] ASCII diagram render for DOCX failed; exporting as code:', error);
       }
-      this.deps.vscode.postMessage({ type: 'exportDocx', title: this.title(), markdown, mermaidImages, asciiImages });
+      this.deps.host.postMessage({ type: 'exportDocx', title: this.title(), markdown, mermaidImages, asciiImages });
     } catch (error) {
-      console.error('[InLineMd] DOCX export failed:', error);
-      this.deps.vscode.postMessage({ type: 'showInfo', text: `DOCX export failed: ${error}` });
+      console.error('[EasyView_Md] DOCX export failed:', error);
+      this.deps.host.postMessage({ type: 'showInfo', text: `DOCX export failed: ${error}` });
     }
   }
 

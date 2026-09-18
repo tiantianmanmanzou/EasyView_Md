@@ -1,5 +1,5 @@
 /**
- * Table-related markdown-it rules for InLineMd.
+ * Table-related markdown-it rules for EasyView_Md.
  *
  * Normalises native GFM table tokens for ProseMirror consumption:
  *   - strip thead/tbody wrappers

@@ -2,7 +2,7 @@
  * PdfMakeExport — converts a ProseMirror document to a pdfmake Document Definition
  * and generates a PDF as base64.
  *
- * Handles ALL InLineMd node types and marks:
+ * Handles ALL EasyView_Md node types and marks:
  * - Block: paragraph, heading, blockquote, code_block, lists, tables, notice, details,
  *   horizontal_rule, image, frontmatter, footnotes, html_block, description_list, math, TOC,
  *   mermaid (extension node), drawio (extension node)
@@ -106,7 +106,7 @@ async function ensurePdfMakeReady(): Promise<void> {
           };
           pdfDefaultFont = 'SourceHanSansCN';
         } catch (error) {
-          console.warn('[InLineMd] CJK PDF font unavailable; using Roboto fallback:', error);
+          console.warn('[EasyView_Md] CJK PDF font unavailable; using Roboto fallback:', error);
         }
       }
 
@@ -125,7 +125,7 @@ async function ensurePdfMakeReady(): Promise<void> {
             bolditalics: 'NotoSansSymbols2-Regular.ttf',
           };
         } catch (error) {
-          console.warn('[InLineMd] PDF symbol font unavailable:', error);
+          console.warn('[EasyView_Md] PDF symbol font unavailable:', error);
         }
       }
     }
@@ -134,7 +134,7 @@ async function ensurePdfMakeReady(): Promise<void> {
   try {
     await pdfMakeReady;
   } catch (err) {
-    console.error('[InLineMd] pdfmake init failed:', err);
+    console.error('[EasyView_Md] pdfmake init failed:', err);
     pdfMakeReady = null;
     throw err;
   }
@@ -170,19 +170,19 @@ export async function generatePdfBase64(
     collectMathImages(doc, palette.text),
   ]);
 
-  console.log(`[InLineMd PDF] parallel pre-processing: ${(performance.now() - t0).toFixed(0)}ms`);
+  console.log(`[EasyView_Md PDF] parallel pre-processing: ${(performance.now() - t0).toFixed(0)}ms`);
 
   // Build the pdfmake document definition
   const t2 = performance.now();
   const dd = await buildDocDefinition(doc, imageMap, new Map(), mermaidPngMap, mathImageMap, options, palette);
-  console.log(`[InLineMd PDF] build doc definition: ${(performance.now() - t2).toFixed(0)}ms`);
+  console.log(`[EasyView_Md PDF] build doc definition: ${(performance.now() - t2).toFixed(0)}ms`);
 
   // Generate PDF and return as base64 (pdfmake v0.3.x: async API)
   const t3 = performance.now();
   const pdfDoc = (pdfMake as any).createPdf(dd);
   const base64: string = await pdfDoc.getBase64();
-  console.log(`[InLineMd PDF] pdfmake generate: ${(performance.now() - t3).toFixed(0)}ms`);
-  console.log(`[InLineMd PDF] TOTAL: ${(performance.now() - t0).toFixed(0)}ms`);
+  console.log(`[EasyView_Md PDF] pdfmake generate: ${(performance.now() - t3).toFixed(0)}ms`);
+  console.log(`[EasyView_Md PDF] TOTAL: ${(performance.now() - t0).toFixed(0)}ms`);
   return base64;
 }
 
@@ -243,7 +243,7 @@ async function buildDocDefinition(
     content: finalContent,
     info: {
       title: options.title || 'Document',
-      creator: 'InLineMd',
+      creator: 'EasyView_Md',
     },
     footer(currentPage: number, pageCount: number) {
       return {

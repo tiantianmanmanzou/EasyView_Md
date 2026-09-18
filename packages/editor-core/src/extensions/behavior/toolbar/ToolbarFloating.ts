@@ -6,12 +6,14 @@ import { EditorView } from 'prosemirror-view';
 import { EditorState, NodeSelection } from 'prosemirror-state';
 import { gripSelectionKey } from '../../blocks/table/GripSelectionPlugin';
 import { htmlTagDropdown } from './ToolbarHtmlDropdown';
-import { buttons } from './ToolbarButtons';
+import type { ToolbarButton } from '../../../editor/EditorCommands';
 import { isMarkActive } from '../../../editor/EditorCommands';
+import { createEditorDomContext, type EditorDomContext } from '../../../runtime/editorDomContext';
+
 
 // ─── FloatingToolbar ─────────────────────────────────────────────────────────
 
-function ensureFloatingToolbarColorStyles(): void {
+function ensureFloatingToolbarColorStyles(document: Document): void {
   const styleId = 'easyview-floating-toolbar-color-styles';
   if (document.getElementById(styleId)) return;
 
@@ -119,47 +121,67 @@ export class FloatingToolbar {
   private mouseDown = false;
   private pendingShow = false;
   private colorPopover: HTMLDivElement | null = null;
+  private destroyed = false;
+  private readonly buttons: ToolbarButton[];
 
-  constructor() {
-    ensureFloatingToolbarColorStyles();
-    this.el = document.createElement('div');
+  private readonly documentMouseDownHandler = (event: MouseEvent): void => {
+    // Ignore clicks on the toolbar itself
+    if (this.el.contains(event.target as Node) || this.colorPopover?.contains(event.target as Node)) return;
+    this.closeTextColorPopover();
+    this.mouseDown = true;
+    this.pendingShow = false;
+  };
+
+  private readonly pointerReleasedHandler = (): void => {
+    this.flushPendingShow();
+  };
+
+  private readonly documentMouseMoveHandler = (event: MouseEvent): void => {
+    if (this.mouseDown && event.buttons === 0) this.flushPendingShow();
+  };
+
+  constructor(buttons: ToolbarButton[], private readonly dom: EditorDomContext = createEditorDomContext()) {
+    this.buttons = buttons;
+    ensureFloatingToolbarColorStyles(dom.document);
+    this.el = this.dom.document.createElement('div');
     this.el.className = 'floating-toolbar';
     this.el.setAttribute('role', 'toolbar');
     this.el.setAttribute('aria-label', 'Formatting toolbar');
     this.render();
-    document.body.appendChild(this.el);
+    this.dom.overlayRoot.appendChild(this.el);
 
-    document.addEventListener('mousedown', (e) => {
-      // Ignore clicks on the toolbar itself
-      if (this.el.contains(e.target as Node) || this.colorPopover?.contains(e.target as Node)) return;
-      this.closeTextColorPopover();
-      this.mouseDown = true;
-      this.pendingShow = false;
-    });
-    document.addEventListener('mouseup', () => {
-      this.mouseDown = false;
-      if (this.pendingShow && this.view) {
-        this.pendingShow = false;
-        const hasImage = this.selectionContainsImage(this.view.state);
-        this.setImageMode(hasImage);
-        this.show();
-        this.updatePosition(this.view);
-        this.updateActiveStates();
-      }
-    });
+    this.dom.root.addEventListener('mousedown', this.documentMouseDownHandler as EventListener);
+    this.dom.root.addEventListener('mouseup', this.pointerReleasedHandler);
+    // Webview can lose mouseup when the pointer leaves the host; recover on these.
+    this.dom.window.addEventListener('pointerup', this.pointerReleasedHandler);
+    this.dom.window.addEventListener('pointercancel', this.pointerReleasedHandler);
+    this.dom.window.addEventListener('blur', this.pointerReleasedHandler);
+    this.dom.root.addEventListener('mousemove', this.documentMouseMoveHandler as EventListener);
+  }
+
+  private flushPendingShow() {
+    if (this.destroyed) return;
+    this.mouseDown = false;
+    if (!this.pendingShow || !this.view) return;
+    this.pendingShow = false;
+    const hasImage = this.selectionContainsImage(this.view.state);
+    this.setImageMode(hasImage);
+    this.show();
+    this.updatePosition(this.view);
+    this.updateActiveStates();
   }
 
   private render() {
     this.el.innerHTML = '';
-    for (const btn of buttons) {
+    for (const btn of this.buttons) {
       if (btn.id.startsWith('separator')) {
-        const sep = document.createElement('div');
+        const sep = this.dom.document.createElement('div');
         sep.className = 'toolbar-separator';
         this.el.appendChild(sep);
         continue;
       }
 
-      const button = document.createElement('button');
+      const button = this.dom.document.createElement('button');
       button.className = 'toolbar-button';
       button.innerHTML = btn.icon;
       button.title = btn.title;
@@ -182,6 +204,7 @@ export class FloatingToolbar {
   }
 
   private toggleTextColor(anchor: HTMLButtonElement): void {
+    if (this.destroyed) return;
     const view = this.view;
     if (!view || view.state.selection.empty) return;
     const mark = view.state.schema.marks.text_color;
@@ -196,13 +219,14 @@ export class FloatingToolbar {
   }
 
   private openTextColorPopover(anchor: HTMLButtonElement): void {
+    if (this.destroyed) return;
     const view = this.view;
     if (!view || view.state.selection.empty) return;
     this.closeTextColorPopover();
 
     const rect = anchor.getBoundingClientRect();
     const selection = { from: view.state.selection.from, to: view.state.selection.to };
-    const popover = document.createElement('div');
+    const popover = this.dom.document.createElement('div');
     popover.className = 'easyview-text-color-popover';
     popover.setAttribute('aria-label', 'Text color picker');
     const colors = ['#111827', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#c026d3', '#d946ef', '#64748b', '#ffffff'];
@@ -217,7 +241,7 @@ export class FloatingToolbar {
     };
 
     for (const color of colors) {
-      const swatch = document.createElement('button');
+      const swatch = this.dom.document.createElement('button');
       swatch.type = 'button';
       swatch.className = 'easyview-text-color-swatch';
       swatch.style.background = color;
@@ -231,11 +255,11 @@ export class FloatingToolbar {
       popover.appendChild(swatch);
     }
 
-    document.body.appendChild(popover);
+    this.dom.overlayRoot.appendChild(popover);
     const popoverRect = popover.getBoundingClientRect();
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - popoverRect.width - 8));
+    const left = Math.max(8, Math.min(rect.left, this.dom.window.innerWidth - popoverRect.width - 8));
     const below = rect.bottom + 8;
-    const top = below + popoverRect.height <= window.innerHeight - 8
+    const top = below + popoverRect.height <= this.dom.window.innerHeight - 8
       ? below
       : Math.max(8, rect.top - popoverRect.height - 8);
     popover.style.left = `${left}px`;
@@ -249,10 +273,12 @@ export class FloatingToolbar {
   }
 
   attach(view: EditorView) {
+    if (this.destroyed) return;
     this.view = view;
   }
 
   update(view: EditorView) {
+    if (this.destroyed) return;
     this.view = view;
     const { state } = view;
     const { selection } = state;
@@ -311,6 +337,7 @@ export class FloatingToolbar {
 
   /** Hide toolbar from outside (e.g. when switching to source mode) */
   forceHide() {
+    if (this.destroyed) return;
     this.hide();
   }
 
@@ -327,7 +354,7 @@ export class FloatingToolbar {
     const top = start.top - toolbarRect.height - 8;
 
     // Keep within viewport
-    left = Math.max(8, Math.min(left, window.innerWidth - toolbarRect.width - 8));
+    left = Math.max(8, Math.min(left, this.dom.window.innerWidth - toolbarRect.width - 8));
 
     this.el.style.left = `${left}px`;
     this.el.style.top = `${Math.max(8, top)}px`;
@@ -362,7 +389,7 @@ export class FloatingToolbar {
     let idx = 0;
     let sepIdx = 0;
 
-    for (const btn of buttons) {
+    for (const btn of this.buttons) {
       if (btn.id.startsWith('separator')) {
         const sep = separatorEls[sepIdx++] as HTMLElement;
         if (sep) sep.style.display = isImage ? 'none' : '';
@@ -398,13 +425,13 @@ export class FloatingToolbar {
     let idx = 0;
     let sepIdx = 0;
 
-    for (const btn of buttons) {
+    for (const btn of this.buttons) {
       if (btn.id.startsWith('separator')) {
         // Track separator for conditional visibility
         const sep = separatorEls[sepIdx++] as HTMLElement;
         if (sep && btn.id === 'separator-7') {
           // The separator before interpret-markdown: shown only when the button is visible
-          const nextBtn = buttons[buttons.indexOf(btn) + 1];
+          const nextBtn = this.buttons[this.buttons.indexOf(btn) + 1];
           if (nextBtn?.visible) {
             sep.style.display = nextBtn.visible(state) ? '' : 'none';
           }
@@ -427,8 +454,25 @@ export class FloatingToolbar {
     }
   }
 
-  destroy() {
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+
+    this.dom.root.removeEventListener('mousedown', this.documentMouseDownHandler as EventListener);
+    this.dom.root.removeEventListener('mouseup', this.pointerReleasedHandler);
+    this.dom.window.removeEventListener('pointerup', this.pointerReleasedHandler);
+    this.dom.window.removeEventListener('pointercancel', this.pointerReleasedHandler);
+    this.dom.window.removeEventListener('blur', this.pointerReleasedHandler);
+    this.dom.root.removeEventListener('mousemove', this.documentMouseMoveHandler as EventListener);
+
     this.closeTextColorPopover();
+    htmlTagDropdown.hide();
+    this.view = null;
+    this.mouseDown = false;
+    this.pendingShow = false;
+    this.isVisible = false;
+    this.el.classList.remove('visible');
+    this.el.innerHTML = '';
     this.el.remove();
   }
 }

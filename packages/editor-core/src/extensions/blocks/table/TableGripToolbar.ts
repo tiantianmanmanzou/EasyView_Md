@@ -6,7 +6,7 @@
  */
 
 import * as tableCommands from './TableCommands';
-import { getEditorView } from '../../../index';
+import type { EditorRuntimeContext } from '../../../runtime/editorRuntimeContext';
 import { isHeaderEnabled, isRowSelection } from './TableQueries';
 import { selectedRect } from 'prosemirror-tables';
 import { rememberFirstRowStickyDefault } from './TablePreferences';
@@ -23,8 +23,10 @@ export class TableGripToolbar {
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
   private readonly positionController = new TableToolbarPositionController();
   private readonly columnWidthController = new ColumnWidthController();
+  private readonly runtime: EditorRuntimeContext;
 
-  constructor() {
+  constructor(runtime: EditorRuntimeContext) {
+    this.runtime = runtime;
     this.el = document.createElement('div');
     this.el.className = 'table-grip-toolbar';
     this.el.setAttribute('contenteditable', 'false');
@@ -142,7 +144,7 @@ export class TableGripToolbar {
     // Toggle header button (only for first row)
     if (this.currentIndex === 0) {
       let isHeader = false;
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (view) {
         try {
           const rect = selectedRect(view.state);
@@ -376,28 +378,21 @@ export class TableGripToolbar {
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-orientation', 'horizontal');
 
-    // Auto-merge consecutive equal values in every column. The active state
-    // means this table contains merges created by this toggle.
+    // Auto-merge consecutive equal values in every column. Nested-table cells
+    // are skipped during the merge; they no longer disable the button.
     let duplicateMergesActive = false;
-    let duplicateMergesSupported = false;
     try {
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (view) {
         duplicateMergesActive = tableCommands.hasTableCellMerges(view.state);
-        duplicateMergesSupported = tableCommands.supportsDuplicateCellMerges(view.state);
       }
     } catch {}
-    const duplicateMergeButton = this.createToggleButton(
+    toolbar.appendChild(this.createToggleButton(
       'Merge duplicate cells',
       this.mergeDuplicateCellsIcon(),
       duplicateMergesActive,
       () => { this.toggleDuplicateCellMerges(); },
-    ) as HTMLButtonElement;
-    duplicateMergeButton.disabled = !duplicateMergesSupported;
-    if (!duplicateMergesSupported) {
-      duplicateMergeButton.title = '自动合并仅支持无嵌套表格的普通表';
-    }
-    toolbar.appendChild(duplicateMergeButton);
+    ));
 
     toolbar.appendChild(this.createSeparator());
 
@@ -539,7 +534,7 @@ export class TableGripToolbar {
   /** Find the .table-wrapper DOM element for the table that currently has selection */
   private findActiveTableWrapper(): Element | null {
     try {
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (!view) return null;
       const rect = selectedRect(view.state);
       // nodeDOM returns the DOM node for the table (tableStart - 1 is the table node pos)
@@ -552,66 +547,66 @@ export class TableGripToolbar {
 
   // Command implementations
   private toggleHeaderRow() {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.toggleHeader("row")(view.state, view.dispatch);
   }
 
   private toggleFirstRowSticky() {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     try {
       const isSticky = view.state.doc.nodeAt(selectedRect(view.state).tableStart)?.attrs.sticky === true;
       const nextSticky = !isSticky;
       tableCommands.setFirstRowSticky(nextSticky)(view.state, view.dispatch);
       // Keep the user's last explicit choice as the default for newly created tables.
-      rememberFirstRowStickyDefault(nextSticky);
+      rememberFirstRowStickyDefault(nextSticky, this.runtime);
       this.render();
       if (this.currentGrip) requestAnimationFrame(() => this.updatePosition(this.currentGrip!));
     } catch {}
   }
 
   private addRowBefore(rowIndex: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.addRowBefore({ index: rowIndex })(view.state, view.dispatch);
     this.hide();
   }
 
   private addColumnBefore(colIndex: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.addColumnBefore({ index: colIndex })(view.state, view.dispatch);
     this.hide();
   }
 
   private setColumnAlignment(colIndex: number, alignment: 'left' | 'center' | 'right') {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.setColumnAttr({ index: colIndex, alignment })(view.state, view.dispatch);
   }
 
   private setColumnVerticalAlignment(colIndex: number, verticalAlignment: 'top' | 'middle' | 'bottom') {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.setColumnAttr({ index: colIndex, verticalAlignment })(view.state, view.dispatch);
   }
 
   private setRowAlignment(rowIndex: number, alignment: 'left' | 'center' | 'right') {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.setRowAttr({ index: rowIndex, alignment })(view.state, view.dispatch);
   }
 
   private setRowVerticalAlignment(rowIndex: number, verticalAlignment: 'top' | 'middle' | 'bottom') {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.setRowAttr({ index: rowIndex, verticalAlignment })(view.state, view.dispatch);
   }
 
   private getCurrentColumnWidth(colIndex: number): number {
     try {
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (!view) return 120;
       const rect = selectedRect(view.state);
       if (colIndex < 0 || colIndex >= rect.map.width) return 120;
@@ -635,7 +630,7 @@ export class TableGripToolbar {
 
   private getRepresentativeColumnWidth(): number {
     try {
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (!view) return 120;
       const rect = selectedRect(view.state);
       if (rect.map.width <= 0) return 120;
@@ -654,14 +649,14 @@ export class TableGripToolbar {
 
   private getRepresentativeRowHeight(): number {
     try {
-      const view = getEditorView();
+      const view = this.runtime.getEditorView();
       if (view) return tableCommands.getRepresentativeRowHeight(view.state, 48);
     } catch {}
     return 48;
   }
 
   private adjustAllRowHeights(delta: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fallbackHeight = this.getRepresentativeRowHeight();
     tableCommands.adjustAllRowHeights({ delta, fallbackHeight })(view.state, view.dispatch);
@@ -669,7 +664,7 @@ export class TableGripToolbar {
   }
 
   private setAllRowHeights(height: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fallbackHeight = this.getRepresentativeRowHeight();
     tableCommands.setAllRowHeights({ height, fallbackHeight })(view.state, view.dispatch);
@@ -677,7 +672,7 @@ export class TableGripToolbar {
   }
 
   private adjustColumnWidth(colIndex: number, delta: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fallbackWidth = this.getCurrentColumnWidth(colIndex);
     this.columnWidthController.adjust(view, colIndex, delta, fallbackWidth);
@@ -685,7 +680,7 @@ export class TableGripToolbar {
   }
 
   private setColumnWidth(colIndex: number, width: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fallbackWidth = this.getCurrentColumnWidth(colIndex);
     this.columnWidthController.set(view, colIndex, width, fallbackWidth);
@@ -693,7 +688,7 @@ export class TableGripToolbar {
   }
 
   private adjustAllColumnWidths(delta: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fallbackWidth = this.getRepresentativeColumnWidth();
     tableCommands.adjustAllColumnWidths({ delta, fallbackWidth })(view.state, view.dispatch);
@@ -701,7 +696,7 @@ export class TableGripToolbar {
   }
 
   private setAllColumnWidths(width: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fallbackWidth = this.getRepresentativeColumnWidth();
     tableCommands.setAllColumnWidths({ width, fallbackWidth })(view.state, view.dispatch);
@@ -723,13 +718,13 @@ export class TableGripToolbar {
   }
 
   private sortColumn(colIndex: number, direction: 'asc' | 'desc') {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.sortTable({ index: colIndex, direction })(view.state, view.dispatch);
   }
 
   private moveRow(rowIndex: number, direction: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const targetIndex = rowIndex + direction;
     if (targetIndex < 0) return; // Can't move before first row
@@ -743,7 +738,7 @@ export class TableGripToolbar {
     // Wait for TableView.updateControls to recreate grips, then select and show toolbar
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const updatedView = getEditorView();
+        const updatedView = this.runtime.getEditorView();
         if (updatedView) {
           // Select row at new position with gripSelection meta
           tableCommands.selectRow(targetIndex)(updatedView.state, (tr) => {
@@ -767,7 +762,7 @@ export class TableGripToolbar {
   }
 
   private moveColumn(colIndex: number, direction: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const targetIndex = colIndex + direction;
     if (targetIndex < 0) return; // Can't move before first column
@@ -781,7 +776,7 @@ export class TableGripToolbar {
     // Wait for TableView.updateControls to recreate grips, then select and show toolbar
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const updatedView = getEditorView();
+        const updatedView = this.runtime.getEditorView();
         if (updatedView) {
           // Select column at new position with gripSelection meta
           tableCommands.selectColumn(targetIndex)(updatedView.state, (tr) => {
@@ -805,7 +800,7 @@ export class TableGripToolbar {
   }
 
   private deleteRow(rowIndex: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     this.hide();
 
@@ -816,7 +811,7 @@ export class TableGripToolbar {
 
     tableCommands.selectRow(rowIndex)(view.state, view.dispatch);
     setTimeout(() => {
-      const updatedView = getEditorView();
+      const updatedView = this.runtime.getEditorView();
       if (updatedView) {
         tableCommands.deleteRowSelection()(updatedView.state, updatedView.dispatch);
       }
@@ -824,12 +819,12 @@ export class TableGripToolbar {
   }
 
   private deleteColumn(colIndex: number) {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     this.hide();
     tableCommands.selectColumn(colIndex)(view.state, view.dispatch);
     setTimeout(() => {
-      const updatedView = getEditorView();
+      const updatedView = this.runtime.getEditorView();
       if (updatedView) {
         tableCommands.deleteColSelection()(updatedView.state, updatedView.dispatch);
       }
@@ -837,7 +832,7 @@ export class TableGripToolbar {
   }
 
   private copyTable() {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
 
     tableCommands.selectTable()(view.state, view.dispatch);
@@ -847,7 +842,7 @@ export class TableGripToolbar {
   }
 
   private deleteTable() {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
 
     // Hide toolbar first
@@ -858,7 +853,7 @@ export class TableGripToolbar {
   }
 
   private toggleDuplicateCellMerges() {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     tableCommands.toggleDuplicateCellMerges()(view.state, view.dispatch);
     this.render();
@@ -866,10 +861,10 @@ export class TableGripToolbar {
   }
 
   private exportTableExcel() {
-    const view = getEditorView();
+    const view = this.runtime.getEditorView();
     if (!view) return;
     const fileName = `table-${Date.now()}.xlsx`;
-    exportTableToXlsx({ fileName })(view.state, view.dispatch);
+    exportTableToXlsx({ fileName, runtime: this.runtime })(view.state, view.dispatch);
   }
 
   // SVG Icons from Outline

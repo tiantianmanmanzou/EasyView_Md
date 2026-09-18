@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: easyview-preview: http: https:; font-src 'self' easyview-preview: data: blob:; connect-src 'self' easyview-preview: http: https: blob:; worker-src 'self' blob:; frame-src 'self' easyview-preview: blob:; media-src 'self' data: blob: easyview-preview:; object-src 'none'; base-uri 'none';"
+    />
+    <link href="./webview.css" rel="stylesheet" />
+    <link href="./xterm.css" rel="stylesheet" />
+    <link href="./preview.css" rel="stylesheet" />
+    <link href="./desktop.css" rel="stylesheet" />
+    <title>EasyView_Md</title>
+  </head>
+  <body class="inlinemd-booting easyview-desktop">
+    <div id="desktop-root">
+      <header id="desktop-title-bar">
+        <button id="workspace-toggle" class="desktop-title-button" type="button" title="左侧目录树" aria-label="左侧目录树">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.2"></rect>
+            <path d="M9 4.5v15"></path>
+            <path class="panel-fill" d="M5.7 4.5h3.3v15H5.7c-1.2 0-2.2-1-2.2-2.2V6.7c0-1.2 1-2.2 2.2-2.2Z"></path>
+          </svg>
+        </button>
+        <div id="desktop-title-center">
+          <span id="desktop-document-name">Untitled.md</span>
+          <div id="desktop-title-center-actions">
+            <div id="desktop-theme-control">
+              <button id="theme-toggle" class="desktop-title-button" type="button" title="亮色主题" aria-label="亮色主题"></button>
+              <div id="desktop-theme-depth-panel">
+                <input id="theme-depth" type="range" min="0" max="100" value="50" aria-label="背景层次" />
+              </div>
+            </div>
+            <div id="desktop-accent-control">
+              <button id="accent-toggle" class="desktop-title-button" type="button" title="主题色" aria-label="主题色"></button>
+              <div id="desktop-accent-panel" role="menu" aria-label="主题色">
+                <button type="button" data-accent="default" title="默认主题色"></button>
+                <button type="button" data-accent="blue" title="蓝色"></button>
+                <button type="button" data-accent="orangeRed" title="橙红色"></button>
+                <button type="button" data-accent="green" title="绿色"></button>
+                <button type="button" data-accent="purple" title="紫色"></button>
+                <button type="button" data-accent="cherryRed" title="樱桃红"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="desktop-title-actions">
+          <button id="outline-toggle" class="desktop-title-button" type="button" title="右侧文档目录" aria-label="右侧文档目录">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2.2"></rect>
+              <path d="M15 4.5v15"></path>
+              <path class="panel-fill" d="M15 4.5h3.3c1.2 0 2.2 1 2.2 2.2v10.6c0 1.2-1 2.2-2.2 2.2H15V4.5Z"></path>
+            </svg>
+          </button>
+          <button id="ai-chat-toggle" class="desktop-title-button" type="button" title="AI 对话 (Alt+I)" aria-label="AI 对话">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          </button>
+        </div>
+      </header>
+      <div id="desktop-workbench">
+        <aside id="workspace-explorer" aria-label="工作区目录树"></aside>
+        <main id="desktop-center-pane">
+          <div id="desktop-tab-bar" role="tablist" aria-label="打开的文件" hidden></div>
+          <div id="desktop-main-row">
+            <div id="desktop-active-content">
+              <div id="editor-body" hidden>
+                <div id="editor-scroll-area">
+                  <div id="editor"></div>
+                </div>
+              </div>
+              <div id="file-preview-root" hidden></div>
+            </div>
+          </div>
+        </main>
+        <aside id="desktop-ai-chat-host" aria-label="AI 对话"></aside>
+      </div>
+    </div>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>

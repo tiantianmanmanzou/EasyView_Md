@@ -6,6 +6,7 @@ import { EditorView } from 'prosemirror-view';
 import { TextSelection } from 'prosemirror-state';
 import { getMarkRange } from '../../../editor/lib/MarkRange';
 import { addLink, updateLink, removeLink } from './ToolbarLinkCommands';
+import { createEditorDomContext, type EditorDomContext } from '../../../runtime/editorDomContext';
 
 export class LinkEditPopup {
   private el: HTMLDivElement;
@@ -17,12 +18,13 @@ export class LinkEditPopup {
   private isVisible = false;
   private isNew = false; // true = creating new link, false = editing existing
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
+  private destroyed = false;
 
-  constructor() {
-    this.el = document.createElement('div');
+  constructor(private readonly dom: EditorDomContext = createEditorDomContext()) {
+    this.el = this.dom.document.createElement('div');
     this.el.className = 'link-edit-popup';
 
-    this.input = document.createElement('input');
+    this.input = this.dom.document.createElement('input');
     this.input.className = 'link-edit-input';
     this.input.type = 'text';
     this.input.inputMode = 'url';
@@ -63,7 +65,7 @@ export class LinkEditPopup {
     });
 
     // Apply button (checkmark)
-    this.applyBtn = document.createElement('button');
+    this.applyBtn = this.dom.document.createElement('button');
     this.applyBtn.className = 'link-edit-btn';
     this.applyBtn.title = 'Apply';
     this.applyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -73,7 +75,7 @@ export class LinkEditPopup {
     });
 
     // Remove link button (unlink)
-    this.removeBtn = document.createElement('button');
+    this.removeBtn = this.dom.document.createElement('button');
     this.removeBtn.className = 'link-edit-btn';
     this.removeBtn.title = 'Remove link';
     this.removeBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.84 12.25l1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="M5.17 11.75l-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="8" x2="5" y2="8"/><line x1="16" y1="19" x2="16" y2="22"/><line x1="19" y1="16" x2="22" y2="16"/></svg>';
@@ -83,7 +85,7 @@ export class LinkEditPopup {
     });
 
     // Open link button (external)
-    this.openBtn = document.createElement('button');
+    this.openBtn = this.dom.document.createElement('button');
     this.openBtn.className = 'link-edit-btn';
     this.openBtn.title = 'Open link';
     this.openBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
@@ -96,11 +98,12 @@ export class LinkEditPopup {
     this.el.appendChild(this.applyBtn);
     this.el.appendChild(this.removeBtn);
     this.el.appendChild(this.openBtn);
-    document.body.appendChild(this.el);
+    this.dom.overlayRoot.appendChild(this.el);
   }
 
   /** Show the popup for creating a new link or editing an existing one */
   show(view: EditorView, existingHref?: string) {
+    if (this.destroyed) return;
     this.view = view;
     this.isNew = !existingHref;
     // Decode URI for display (Cyrillic characters get URL-encoded by markdown-it)
@@ -128,13 +131,14 @@ export class LinkEditPopup {
         }
       };
       setTimeout(() => {
-        document.addEventListener('mousedown', this.outsideClickHandler!);
+        this.dom.root.addEventListener('mousedown', this.outsideClickHandler! as EventListener);
       }, 0);
     }
   }
 
   /** Toggle popup: if visible, hide; otherwise open for current selection/link */
   toggle(view: EditorView) {
+    if (this.destroyed) return;
     if (this.isVisible) {
       this.hide();
       return;
@@ -162,11 +166,12 @@ export class LinkEditPopup {
   }
 
   hide() {
+    if (this.destroyed) return;
     this.el.classList.remove('visible');
     this.isVisible = false;
 
     if (this.outsideClickHandler) {
-      document.removeEventListener('mousedown', this.outsideClickHandler);
+      this.dom.root.removeEventListener('mousedown', this.outsideClickHandler as EventListener);
       this.outsideClickHandler = null;
     }
 
@@ -204,7 +209,7 @@ export class LinkEditPopup {
     const href = this.input.value.trim();
     if (!href) return;
     // Dispatch custom event — index.ts listens and forwards to extension host
-    window.dispatchEvent(new CustomEvent('inlinemd:openLink', { detail: { url: href } }));
+    this.dom.eventTarget.dispatchEvent(new CustomEvent('inlinemd:openLink', { detail: { url: href } }));
   }
 
   private insertTextIntoInput(text: string): void {
@@ -240,18 +245,22 @@ export class LinkEditPopup {
     const top = end.bottom + 8;
 
     // Keep within viewport
-    left = Math.max(8, Math.min(left, window.innerWidth - popupRect.width - 8));
+    left = Math.max(8, Math.min(left, this.dom.window.innerWidth - popupRect.width - 8));
 
     this.el.style.left = `${left}px`;
-    this.el.style.top = `${Math.min(top, window.innerHeight - popupRect.height - 8)}px`;
+    this.el.style.top = `${Math.min(top, this.dom.window.innerHeight - popupRect.height - 8)}px`;
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     if (this.outsideClickHandler) {
-      document.removeEventListener('mousedown', this.outsideClickHandler);
+      this.dom.root.removeEventListener('mousedown', this.outsideClickHandler as EventListener);
+      this.outsideClickHandler = null;
     }
+    this.el.classList.remove('visible');
+    this.isVisible = false;
+    this.view = null;
     this.el.remove();
   }
 }
-
-export const linkEditPopup = new LinkEditPopup();

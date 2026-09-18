@@ -37,7 +37,7 @@ export async function collectMathImages(doc: ProsemirrorNode, textColor: string)
   // Resolve katex — static import (dynamic import fails in esbuild IIFE)
   const katexLib = (katex as any).default || katex;
   if (!katexLib || !katexLib.renderToString) {
-    console.warn('[InLineMd] KaTeX not available for math rendering');
+    console.warn('[EasyView_Md] KaTeX not available for math rendering');
     return map;
   }
 
@@ -55,7 +55,7 @@ export async function collectMathImages(doc: ProsemirrorNode, textColor: string)
       // skip failed math expressions
     }
   }
-  console.log(`[InLineMd PDF] math render (${texItems.length} items): ${(performance.now() - t0).toFixed(0)}ms`);
+  console.log(`[EasyView_Md PDF] math render (${texItems.length} items): ${(performance.now() - t0).toFixed(0)}ms`);
 
   return map;
 }

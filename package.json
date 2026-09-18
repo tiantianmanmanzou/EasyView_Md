@@ -1,248 +1,46 @@
 {
-  "name": "easyview-md",
-  "displayName": "EasyView_Md",
-  "description": "A visual Markdown editor for VS Code with rich editing, document conversion, and export tools.",
-  "version": "2.0.7",
-  "publisher": "zhangxy",
-  "license": "MIT",
-  "icon": "assets/logo.png",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/tiantianmanmanzou/EasyView_Md.git"
-  },
-  "homepage": "https://github.com/tiantianmanmanzou/EasyView_Md#readme",
-  "bugs": {
-    "url": "https://github.com/tiantianmanmanzou/EasyView_Md/issues"
-  },
-  "engines": {
-    "vscode": "^1.85.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "keywords": [
-    "markdown",
-    "wysiwyg",
-    "editor",
-    "visual-editor",
-    "markdown-editor",
-    "document-converter",
-    "export"
-  ],
-  "main": "./dist/extension.js",
-  "activationEvents": [
-    "onLanguage:markdown",
-    "onLanguage:mdx",
-    "onCommand:inlineMd.openEditor",
-    "onCommand:inlineMd.openNativeEditor"
-  ],
-  "contributes": {
-    "customEditors": [
-      {
-        "viewType": "inlineMd.markdownEditor",
-        "displayName": "EasyView_Md",
-        "selector": [
-          {
-            "filenamePattern": "*.md"
-          },
-          {
-            "filenamePattern": "*.markdown"
-          },
-          {
-            "filenamePattern": "*.mdx"
-          }
-        ],
-        "priority": "option"
-      }
-    ],
-    "commands": [
-      {
-        "command": "inlineMd.openEditor",
-        "title": "Open with EasyView_Md",
-        "category": "EasyView_Md",
-        "icon": {
-          "light": "assets/easyview-editor-light.svg",
-          "dark": "assets/easyview-editor-dark.svg"
-        }
-      },
-      {
-        "command": "inlineMd.openNativeEditor",
-        "title": "Open in Native Markdown Editor",
-        "category": "EasyView_Md",
-        "icon": "$(code)"
-      },
-      {
-        "command": "inlineMd.convertWordToMarkdown",
-        "title": "Convert to Markdown with Easyview_Md",
-        "category": "EasyView_Md"
-      },
-      {
-        "command": "inlineMd.convertPdfToMarkdown",
-        "title": "Convert to Markdown with Easyview_Md",
-        "category": "EasyView_Md"
-      },
-      {
-        "command": "inlineMd.exportHtmlLight",
-        "title": "Export to HTML (Light)",
-        "category": "EasyView_Md"
-      },
-      {
-        "command": "inlineMd.exportHtmlDark",
-        "title": "Export to HTML (Dark)",
-        "category": "EasyView_Md"
-      },
-      {
-        "command": "inlineMd.exportPdfLight",
-        "title": "Export to PDF (Light)",
-        "category": "EasyView_Md"
-      },
-      {
-        "command": "inlineMd.exportPdfDark",
-        "title": "Export to PDF (Dark)",
-        "category": "EasyView_Md"
-      },
-      {
-        "command": "inlineMd.stageFile",
-        "title": "Stage Current File",
-        "category": "EasyView_Md"
-      }
-    ],
-    "menus": {
-      "editor/title": [
-        {
-          "command": "inlineMd.openEditor",
-          "when": "activeCustomEditorId != 'inlineMd.markdownEditor' && (resourceLangId == markdown || resourceLangId == mdx || resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx)",
-          "group": "navigation@-100"
-        },
-        {
-          "command": "inlineMd.openNativeEditor",
-          "when": "activeCustomEditorId == 'inlineMd.markdownEditor'",
-          "group": "navigation@-100"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "inlineMd.openEditor",
-          "when": "resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
-          "group": "navigation@1"
-        },
-        {
-          "command": "inlineMd.openNativeEditor",
-          "when": "resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx",
-          "group": "navigation@2"
-        },
-        {
-          "command": "inlineMd.convertWordToMarkdown",
-          "when": "resourceExtname == .docx || resourceExtname == .doc",
-          "group": "navigation@3"
-        },
-        {
-          "command": "inlineMd.convertPdfToMarkdown",
-          "when": "resourceExtname == .pdf",
-          "group": "navigation@3"
-        }
-      ]
-    },
-    "keybindings": [
-      {
-        "key": "ctrl+shift+b",
-        "command": "-workbench.action.tasks.build",
-        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
-      },
-      {
-        "key": "ctrl+z",
-        "command": "inlineMd.undo",
-        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
-      },
-      {
-        "key": "ctrl+shift+z",
-        "command": "inlineMd.redo",
-        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
-      },
-      {
-        "key": "ctrl+y",
-        "command": "inlineMd.redo",
-        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
-      },
-      {
-        "key": "alt+s",
-        "mac": "alt+s",
-        "command": "inlineMd.stageFile",
-        "when": "activeCustomEditorId == 'inlineMd.markdownEditor'"
-      },
-      {
-        "key": "alt+e",
-        "mac": "alt+e",
-        "command": "inlineMd.openEditor",
-        "when": "editorTextFocus && (resourceLangId == markdown || resourceLangId == mdx)"
-      }
-    ],
-    "configurationDefaults": {
-      "markdown.editor.filePaste.enabled": "smart",
-      "markdown.editor.filePaste.copyIntoWorkspace": "mediaFiles",
-      "[markdown]": {
-        "editor.fontFamily": "\"Sarasa Mono SC\", \"Sarasa Fixed SC\", \"SF Mono\", Menlo, Monaco, \"Courier New\", monospace"
-      },
-      "[mdx]": {
-        "editor.fontFamily": "\"Sarasa Mono SC\", \"Sarasa Fixed SC\", \"SF Mono\", Menlo, Monaco, \"Courier New\", monospace"
-      }
-    },
-    "configuration": {
-      "title": "EasyView_Md",
-      "properties": {
-        "inlineMd.csvDelimiter": {
-          "type": "string",
-          "enum": [
-            ",",
-            ";",
-            "auto"
-          ],
-          "default": "auto",
-          "enumDescriptions": [
-            "Comma (US, UK, etc.)",
-            "Semicolon (Russia, Germany, France, etc.)",
-            "Auto-detect based on system locale (may not work correctly)"
-          ],
-          "description": "CSV delimiter to use when exporting tables"
-        },
-        "inlineMd.nativeDecorations.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable lightweight inline markdown decorations in the native VS Code editor."
-        },
-        "inlineMd.nativeDecorations.mermaid.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable experimental Mermaid flowchart previews in the native VS Code editor. Disabled by default because VS Code requires a visible contributed view for the webview renderer."
-        },
-        "inlineMd.nativeDecorations.tables.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable conservative Markdown table styling in the native VS Code editor without replacing table source text."
-        },
-        "inlineMd.nativeEditor.forceMonospaceFont": {
-          "type": "boolean",
-          "default": true,
-          "description": "Force Markdown native source editors to use a CJK-aware monospace font family when opened from EasyView_Md."
-        }
-      }
-    }
-  },
+  "name": "easyview-md-workspace",
+  "private": true,
+  "description": "EasyView_Md monorepo workspace orchestration",
   "scripts": {
-    "build": "node esbuild.mjs",
-    "watch": "node esbuild.mjs --watch",
-    "vscode:prepublish": "node esbuild.mjs --production",
-    "package": "vsce package",
-    "install:local": "npm version patch --no-git-tag-version && vsce package && code --install-extension easyview-md-$(node -p \"require('./package.json').version\").vsix --force",
-    "test:unit": "vitest run src",
+    "build": "npm run build --workspace easyview-md",
+    "watch": "npm run watch --workspace easyview-md",
+    "vscode:prepublish": "npm run vscode:prepublish --workspace easyview-md",
+    "package": "npm run package --workspace easyview-md",
+    "package:vscode": "npm run package --workspace easyview-md",
+    "install:local": "node apps/vscode-extension/scripts/reinstall-local.mjs --target=both --bump",
+    "install:cursor": "node apps/vscode-extension/scripts/reinstall-local.mjs --target=cursor",
+    "install:code": "node apps/vscode-extension/scripts/reinstall-local.mjs --target=code --bump",
+    "install:both": "node apps/vscode-extension/scripts/reinstall-local.mjs --target=both",
+    "apply:local": "npm run install:both && npm run install:desktop",
+    "install:desktop": "node apps/desktop/scripts/install-local.mjs",
+    "test:unit": "vitest run apps/vscode-extension/src packages/markdown-core/src packages/editor-core/src packages/contracts/tests packages/preview-ui/tests packages/node-runtime/tests apps/desktop/src/main/**/*.test.ts",
     "test:unit:watch": "vitest",
-    "test:e2e": "vscode-test",
-    "test:e2e:pw": "npx playwright test",
-    "lint": "oxlint src/",
-    "typecheck": "tsc --noEmit",
-    "verify": "npm run lint && npm run build && npm run test:unit",
+    "test:e2e": "vscode-test --config apps/vscode-extension/.vscode-test.mjs",
+    "test:e2e:pw": "playwright test",
+    "lint": "oxlint apps/vscode-extension/src packages/markdown-core/src packages/editor-core/src packages/contracts/src packages/preview-ui/src packages/node-runtime/src apps/desktop/src",
+    "typecheck": "npm run typecheck --workspace @easyview/contracts && npm run typecheck --workspace @easyview/markdown-core && npm run typecheck --workspace @easyview/editor-core && npm run typecheck --workspace @easyview/preview-ui && npm run typecheck --workspace @easyview/node-runtime && npm run typecheck --workspace easyview-md && npm run typecheck --workspace @easyview/desktop",
+    "verify": "npm run verify:quick",
     "verify:types": "npm run typecheck",
-    "clean": "rm -rf dist/extension.js dist/extension.js.map dist/webview.js dist/webview.js.map"
+    "clean": "node tooling/maintenance/clean.mjs",
+    "build:desktop": "npm run build --workspace @easyview/desktop",
+    "package:desktop": "npm run package --workspace @easyview/desktop",
+    "make:desktop": "npm run make --workspace @easyview/desktop",
+    "make:desktop:mac": "npm run make:mac --workspace @easyview/desktop",
+    "test:e2e:desktop": "npm run test:e2e --workspace @easyview/desktop",
+    "start:desktop": "npm run start --workspace @easyview/desktop",
+    "verify:desktop-package": "npm run verify:package --workspace @easyview/desktop",
+    "verify:desktop-runtime": "npm run verify:runtime --workspace @easyview/desktop",
+    "verify:quick": "npm run typecheck && npm run lint && npm run check:architecture && npm run verify:brand && npm run check:editor-cycles && npm run build && npm run test:unit",
+    "verify:editor": "npm run typecheck --workspace @easyview/editor-core && npm test --workspace @easyview/editor-core",
+    "verify:vscode": "npm run build && npm run test:e2e && npm run package:vscode && npm run verify:vscode-package",
+    "verify:desktop": "npm run typecheck --workspace @easyview/desktop && vitest run apps/desktop/src && npm run build:desktop",
+    "verify:all": "npm run verify:quick && npm run test:e2e:pw && npm run test:e2e && npm run test:e2e:desktop && npm run package:vscode && npm run package:desktop",
+    "check:editor-cycles": "node tooling/verify/check-editor-cycles.mjs",
+    "verify:vscode-package": "npm run verify:package --workspace easyview-md",
+    "check:architecture": "node tooling/verify/check-architecture.mjs",
+    "generate:brand-icons": "node tooling/brand/generate-icons.mjs",
+    "verify:brand": "node tooling/brand/verify-assets.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
@@ -251,65 +49,19 @@
     "@types/markdown-it": "^14.1.2",
     "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.85.0",
-    "@vscode/test-cli": "^0.0.10",
-    "@vscode/test-electron": "^2.4.1",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.0.0",
     "buffer": "^6.0.3",
     "esbuild": "^0.24.0",
     "happy-dom": "^20.11.6",
     "oxlint": "^1.80.0",
+    "pngjs": "^7.0.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   },
-  "dependencies": {
-    "@benrbray/prosemirror-math": "^1.0.0",
-    "@codemirror/autocomplete": "^6.20.0",
-    "@codemirror/commands": "^6.10.2",
-    "@codemirror/lang-markdown": "^6.5.0",
-    "@codemirror/language": "^6.12.1",
-    "@codemirror/language-data": "^6.5.2",
-    "@codemirror/state": "^6.5.4",
-    "@codemirror/view": "^6.39.12",
-    "@fontsource/roboto-mono": "^5.2.8",
-    "@types/pako": "^2.0.4",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "bpmn-auto-layout": "^1.3.0",
-    "bpmn-js": "^18.18.0",
-    "codemirror": "^6.0.2",
-    "copy-to-clipboard": "^3.3.3",
-    "docx": "^9.5.1",
-    "exceljs": "^4.4.0",
-    "gemoji": "^8.1.0",
-    "gray-matter": "^4.0.3",
-    "js-yaml": "^4.1.1",
-    "katex": "^0.16.28",
-    "lodash": "^4.17.23",
-    "markdown-it": "^14.1.0",
-    "markdown-it-deflist": "^3.0.0",
-    "markdown-it-footnote": "^4.0.0",
-    "mermaid": "^11.12.1",
-    "node-pty": "^1.1.0",
-    "pako": "^2.1.0",
-    "pdf-lib": "^1.17.1",
-    "pdfmake": "^0.3.4",
-    "plantuml-encoder": "^1.4.0",
-    "pngjs": "^7.0.0",
-    "prosemirror-commands": "^1.7.1",
-    "prosemirror-dropcursor": "^1.8.2",
-    "prosemirror-gapcursor": "^1.4.0",
-    "prosemirror-history": "^1.5.0",
-    "prosemirror-inputrules": "^1.5.1",
-    "prosemirror-keymap": "^1.2.3",
-    "prosemirror-markdown": "^1.13.2",
-    "prosemirror-model": "^1.25.4",
-    "prosemirror-schema-list": "^1.5.1",
-    "prosemirror-state": "^1.4.4",
-    "prosemirror-tables": "^1.8.1",
-    "prosemirror-view": "^1.41.4",
-    "refractor": "^3.6.0",
-    "scroll-into-view-if-needed": "^3.1.0",
-    "uuid": "^11.1.0"
-  },
-  "private": true
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }

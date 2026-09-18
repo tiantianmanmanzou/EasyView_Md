@@ -1,5 +1,5 @@
 /**
- * List node specs for the InLineMd ProseMirror schema.
+ * List node specs for the EasyView_Md ProseMirror schema.
  */
 
 import type { NodeSpec } from 'prosemirror-model';

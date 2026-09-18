@@ -18,22 +18,18 @@ export function gripSelectionPlugin() {
     state: {
       init: () => ({ isGripSelection: false }),
       apply: (tr, state) => {
-        // If this transaction is marked as grip selection
-        if (tr.getMeta('gripSelection')) {
+        // Grip-initiated selections set this meta together with the new selection.
+        if (tr.getMeta('gripSelection') === true) {
           return { isGripSelection: true };
         }
 
-        // If explicitly clearing grip selection
-        if (tr.getMeta('gripSelection') === false) {
+        // Explicit clear, or any later selection change (pointer, keyboard, etc.).
+        // Previously only `pointer` meta cleared the flag, so after a grip click
+        // keyboard / delayed selection updates kept hiding the floating toolbar.
+        if (tr.getMeta('gripSelection') === false || tr.selectionSet) {
           return { isGripSelection: false };
         }
 
-        // Clear grip selection only on user pointer/click actions
-        if (tr.getMeta('pointer')) {
-          return { isGripSelection: false };
-        }
-
-        // Keep grip selection flag otherwise (even if selection changes programmatically)
         return state;
       }
     }

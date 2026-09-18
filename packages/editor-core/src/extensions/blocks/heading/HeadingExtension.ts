@@ -8,7 +8,6 @@
 import {
   Plugin,
   PluginKey,
-  type EditorState,
 } from 'prosemirror-state';
 import {
   Decoration,
@@ -26,71 +25,22 @@ import {
   type SerializerNodeHandler,
 } from '../../../editor/EditorExtension';
 
-// ─── Toast helper (imported lazily to avoid circular deps) ──────────────────
-
-let showToastFn: ((msg: string) => void) | null = null;
-let copyHeadingOutlinePathFn: ((headingPos: number) => void) | null = null;
-let headingPointerDown: { x: number; y: number } | null = null;
-
-/** Register a toast function from the UI layer */
-export function setToastFunction(fn: (msg: string) => void) {
-  showToastFn = fn;
+export interface HeadingExtensionOptions {
+  document?: Document;
+  onToast?: (message: string) => void;
+  onCopyOutlinePath?: (headingPos: number) => void;
 }
 
-/** Register outline-path copy for heading title clicks (same payload as toolbar >>). */
-export function setHeadingOutlinePathCopyHandler(fn: (headingPos: number) => void) {
-  copyHeadingOutlinePathFn = fn;
-}
-
-function showToast(msg: string) {
-  if (showToastFn) showToastFn(msg);
-}
-
-function ensureHeadingCopyStyles(): void {
-  const styleId = 'easyview-heading-copy-styles';
-  if (document.getElementById(styleId)) return;
-
-  const style = document.createElement('style');
-  style.id = styleId;
-  style.textContent = `
-    .ProseMirror h1,
-    .ProseMirror h2,
-    .ProseMirror h3,
-    .ProseMirror h4,
-    .ProseMirror h5,
-    .ProseMirror h6 {
-      cursor: pointer;
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-function headingPosFromEvent(view: EditorView, event: MouseEvent): number | null {
-  const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
-  if (!coords) return null;
-  const $pos = view.state.doc.resolve(Math.min(coords.pos, view.state.doc.content.size));
-  for (let depth = $pos.depth; depth > 0; depth--) {
-    if ($pos.node(depth).type.name === 'heading') {
-      return $pos.before(depth);
-    }
-  }
-  return null;
-}
-
-function shouldCopyHeadingOutlinePath(event: MouseEvent): boolean {
-  if (event.button !== 0 || event.detail !== 1) return false;
-  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false;
-  const target = event.target;
-  if (!(target instanceof Element)) return false;
-  if (target.closest('.heading-actions, .heading-anchor, .heading-fold, .block-drag-handle')) {
-    return false;
-  }
-  return Boolean(target.closest('h1, h2, h3, h4, h5, h6'));
-}
+const OUTLINE_PATH_COPY_ICON =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h5"/><path d="M8 12h5"/><path d="M12 18h8"/><path d="M14 6l3 3-3 3"/><path d="M18 12l3 3-3 3"/></svg>';
 
 // ─── Heading Extension ──────────────────────────────────────────────────────
 
 export class HeadingExtension extends Extension {
+  constructor(private readonly options: HeadingExtensionOptions = {}) {
+    super();
+  }
+
   get name() {
     return 'heading';
   }
@@ -116,7 +66,7 @@ export class HeadingExtension extends Extension {
         toDOM(node) {
           return [
             `h${node.attrs.level}`,
-            { class: 'heading-content', dir: 'auto', title: 'Copy outline path' },
+            { class: 'heading-content', dir: 'auto' },
             0,
           ];
         },
@@ -174,17 +124,16 @@ export class HeadingExtension extends Extension {
   // ── Private: Heading Plugin ──
 
   private headingPlugin(): Plugin[] {
-    ensureHeadingCopyStyles();
-
+    const options = this.options;
     const widgetsPlugin = new Plugin({
       key: new PluginKey('headingWidgets'),
       state: {
         init(_, { doc }) {
-          return DecorationSet.create(doc, createHeadingWidgets(doc));
+          return DecorationSet.create(doc, createHeadingWidgets(doc, options));
         },
         apply(tr, oldDecoSet) {
           if (tr.docChanged) {
-            return DecorationSet.create(tr.doc, createHeadingWidgets(tr.doc));
+            return DecorationSet.create(tr.doc, createHeadingWidgets(tr.doc, options));
           }
           return oldDecoSet.map(tr.mapping, tr.doc);
         },
@@ -192,29 +141,6 @@ export class HeadingExtension extends Extension {
       props: {
         decorations(state) {
           return this.getState(state);
-        },
-        handleDOMEvents: {
-          mousedown(_view, event) {
-            if (!(event instanceof MouseEvent)) return false;
-            headingPointerDown =
-              event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
-            return false;
-          },
-          click(view, event) {
-            const start = headingPointerDown;
-            headingPointerDown = null;
-            if (!(event instanceof MouseEvent)) return false;
-            if (!copyHeadingOutlinePathFn || !start || !shouldCopyHeadingOutlinePath(event)) {
-              return false;
-            }
-            const dx = event.clientX - start.x;
-            const dy = event.clientY - start.y;
-            if (dx * dx + dy * dy > 16) return false;
-            const headingPos = headingPosFromEvent(view, event);
-            if (headingPos === null) return false;
-            copyHeadingOutlinePathFn(headingPos);
-            return false;
-          },
         },
       },
     });
@@ -331,7 +257,8 @@ export function toggleAllHeadings(
 
 // ─── Widget creation ────────────────────────────────────────────────────────
 
-function createHeadingWidgets(doc: ProsemirrorNode): Decoration[] {
+function createHeadingWidgets(doc: ProsemirrorNode, options: HeadingExtensionOptions): Decoration[] {
+  const ownerDocument = options.document ?? document;
   const decorations: Decoration[] = [];
 
   doc.descendants((node, pos) => {
@@ -347,7 +274,7 @@ function createHeadingWidgets(doc: ProsemirrorNode): Decoration[] {
         Decoration.widget(
           pos + 1,
           (view) => {
-            const anchor = document.createElement('button');
+            const anchor = ownerDocument.createElement('button');
             anchor.innerText = '#';
             anchor.type = 'button';
             anchor.className = 'heading-anchor';
@@ -359,14 +286,14 @@ function createHeadingWidgets(doc: ProsemirrorNode): Decoration[] {
               const found = anchors.find((a) => a.pos === headingPos);
               if (found) {
                 const md = `[${node.textContent}](#${found.id})`;
-                navigator.clipboard.writeText(md).then(
-                  () => showToast('Link copied'),
+                ownerDocument.defaultView?.navigator.clipboard.writeText(md).then(
+                  () => options.onToast?.('Link copied'),
                   () => {}
                 );
               }
             });
 
-            const fold = document.createElement('button');
+            const fold = ownerDocument.createElement('button');
             fold.innerHTML =
               '<svg fill="currentColor" width="16" height="28" viewBox="4 0 16 24" xmlns="http://www.w3.org/2000/svg"><path d="M8.23823905,10.6097108 L11.207376,14.4695888 L11.207376,14.4695888 C11.54411,14.907343 12.1719566,14.989236 12.6097108,14.652502 C12.6783439,14.5997073 12.7398293,14.538222 12.792624,14.4695888 L15.761761,10.6097108 L15.761761,10.6097108 C16.0984949,10.1719566 16.0166019,9.54410997 15.5788477,9.20737601 C15.4040391,9.07290785 15.1896811,9 14.969137,9 L9.03086304,9 L9.03086304,9 C8.47857829,9 8.03086304,9.44771525 8.03086304,10 C8.03086304,10.2205442 8.10377089,10.4349022 8.23823905,10.6097108 Z" /></svg>';
             fold.type = 'button';
@@ -378,7 +305,7 @@ function createHeadingWidgets(doc: ProsemirrorNode): Decoration[] {
               toggleHeadingFold(view, headingPos);
             });
 
-            const container = document.createElement('span');
+            const container = ownerDocument.createElement('span');
             container.contentEditable = 'false';
             container.className = `heading-actions${collapsed ? ' collapsed' : ''}`;
             container.appendChild(anchor);
@@ -390,6 +317,37 @@ function createHeadingWidgets(doc: ProsemirrorNode): Decoration[] {
             side: -1,
             ignoreSelection: true,
             key: `heading-${pos}-${collapsed ? 'collapsed' : 'expanded'}`,
+          }
+        )
+      );
+
+      decorations.push(
+        Decoration.widget(
+          pos + node.nodeSize - 1,
+          () => {
+            const trailing = ownerDocument.createElement('span');
+            trailing.className = 'heading-trailing';
+            trailing.contentEditable = 'false';
+
+            const copyBtn = ownerDocument.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'heading-copy-outline';
+            copyBtn.title = 'Copy outline path';
+            copyBtn.tabIndex = -1;
+            copyBtn.innerHTML = OUTLINE_PATH_COPY_ICON;
+            copyBtn.addEventListener('mousedown', (event) => {
+              event.preventDefault();
+              if (event.button !== 0) return;
+              options.onCopyOutlinePath?.(headingPos);
+            });
+
+            trailing.appendChild(copyBtn);
+            return trailing;
+          },
+          {
+            side: 1,
+            ignoreSelection: true,
+            key: `heading-trailing-${pos}`,
           }
         )
       );

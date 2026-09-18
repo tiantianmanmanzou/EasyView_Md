@@ -1,4 +1,4 @@
-# EasyView_Md — Visual Markdown Editor for VS Code
+# EasyView_Md — Visual Markdown Editor for VS Code and Desktop
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -6,22 +6,69 @@
 
 ### Demo Part 1
 
-![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/assets/demo_part1.gif)
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/resources/demo/demo_part1.gif)
 
 ### Demo Part 2
 
-![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/assets/demo_part2.gif)
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/resources/demo/demo_part2.gif)
 
 ### Demo Part 3
 
-![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/assets/demo_part3.gif)
+![](https://raw.githubusercontent.com/tiantianmanmanzou/EasyView_Md/main/resources/demo/demo_part3.gif)
 
-EasyView_Md is a feature-rich Markdown editor for VS Code. Markdown files can remain in the native VS Code editor, or be opened manually in the visual editor when richer editing tools are needed.
+EasyView_Md is a visual Markdown editor available as a VS Code/Cursor extension and an Electron desktop application. Both products share one editor core, Markdown serializer, table implementation, and export pipeline.
+
+## Monorepo Architecture
+
+```text
+apps/vscode-extension   VS Code/Cursor extension product and VSIX manifest
+apps/desktop            Electron desktop product for macOS and Windows
+packages/editor-core    Browser-only editor, extensions, controllers and UI
+packages/markdown-core  Platform-neutral Markdown parsing, models and transforms
+packages/contracts      Cross-platform messages, capabilities and result contracts
+packages/node-runtime   Node runtime for Git, terminal, export, conversion and files
+tests/e2e               Editor, extension-host and desktop runtime tests
+tests/fixtures          Shared test documents and samples
+resources               Shared brand, demo, font and runtime-style sources
+tooling                  Architecture, maintenance and brand tooling
+```
+
+The repository root is orchestration-only. Product manifests, versions, build outputs and packaging rules live in their own `apps/*` workspace. The extension and desktop app must reuse the packages above instead of copying editor or host logic.
+
+```bash
+npm run build                 # VS Code extension
+npm run build:desktop         # Electron desktop app
+npm run package:vscode        # VSIX under apps/vscode-extension
+npm run package:desktop       # Electron application bundle
+npm run verify:quick          # types, boundaries, build and unit tests
+npm run verify:vscode         # extension host and VSIX verification
+npm run verify:desktop        # desktop checks
+```
+
+## Desktop Application
+
+The desktop application runs independently of VS Code on macOS and Windows. It supports Markdown editing, built-in source mode, file open/save/rename, local image assets, HTML/PDF/DOCX/XLSX export, Git file operations, and an embedded terminal.
+
+```bash
+npm install
+npm run start:desktop
+npm run test:e2e:desktop
+npm run package:desktop
+```
+
+Build platform installers with:
+
+```bash
+npm run make:desktop        # macOS ZIP or Windows ZIP/Squirrel
+npm run make:desktop:mac    # macOS ZIP and DMG
+```
+
+Desktop source and platform-specific instructions are in `apps/desktop`. Current local desktop builds are development artifacts and are not code-signed or notarized.
 
 ## What's New in 2.0.3
 
-- **PDF to Markdown conversion** — right-click a `.pdf` file and select `Convert to Markdown with Easyview_Md`. The extension creates an editable `.md` file beside the PDF, extracts images into a matching `.assets` folder, and falls back to page images when the PDF has no extractable text.
-- **Word to Markdown conversion** — right-click a `.docx` or `.doc` file and select `Convert to Markdown with Easyview_Md`. The converted Markdown is created beside the source file, with extracted images stored in a matching `.assets` folder.
+- **PDF to Markdown conversion** — right-click a `.pdf` file and select `Convert to Markdown with EasyView_Md`. The extension creates an editable `.md` file beside the PDF, extracts images into a matching `.assets` folder, and falls back to page images when the PDF has no extractable text.
+- **Word to Markdown conversion** — right-click a `.docx` or `.doc` file and select `Convert to Markdown with EasyView_Md`. The converted Markdown is created beside the source file, with extracted images stored in a matching `.assets` folder.
 - **Reliable document images** — Word and PDF image assets are written as relative references where possible, and transparent PNGs are flattened onto a white background for consistent rendering.
 - **More reliable visual tables** — nested tables, cell editing, table scrolling, column resizing, and Markdown/HTML table serialization have been strengthened for complex documents.
 - **Improved native-editor workflow** — Markdown stays compatible with the native VS Code editor, including outline navigation and a one-click return from visual editing to source editing.
@@ -173,7 +220,7 @@ Render Mermaid diagrams directly in the editor:
 Convert Word files directly from VS Code Explorer:
 
 1. Right-click a `.docx` or `.doc` file.
-2. Select **Convert to Markdown with Easyview_Md**.
+2. Select **Convert to Markdown with EasyView_Md**.
 3. EasyView_Md writes a Markdown file beside the source document and puts extracted images in `<document>.assets`.
 4. Select **Open Markdown** in the completion notification to open the converted file in EasyView_Md.
 
@@ -184,7 +231,7 @@ The conversion keeps document headings, tables, image alt text and dimensions. P
 Convert PDF files directly from VS Code Explorer:
 
 1. Right-click a `.pdf` file.
-2. Select **Convert to Markdown with Easyview_Md**.
+2. Select **Convert to Markdown with EasyView_Md**.
 3. EasyView_Md writes an editable `.md` file beside the PDF and puts extracted images in `<document>.assets`.
 4. If the PDF has no extractable text, EasyView_Md creates page-image references instead.
 
@@ -260,7 +307,7 @@ PDF conversion requires the Poppler command-line utilities: `pdftotext`, `pdfima
 
 - Export any table to CSV from the table grip toolbar
 - Smart delimiter: auto-detects comma or semicolon based on system locale
-- Configurable via `inlineMd.csvDelimiter` setting
+- Configurable via `easyviewMd.csvDelimiter` setting
 - UTF-8 BOM for proper encoding in Excel
 
 ---
@@ -284,8 +331,8 @@ PDF conversion requires the Poppler command-line utilities: `pdftotext`, `pdfima
 | Command                | Description                                              |
 | ---------------------- | -------------------------------------------------------- |
 | `Open with EasyView_Md` | Open current markdown file in the optional custom editor |
-| `Convert to Markdown with Easyview_Md` | Convert a `.docx` or `.doc` file from Explorer into Markdown |
-| `Convert to Markdown with Easyview_Md` | Convert a `.pdf` file from Explorer into Markdown |
+| `Convert to Markdown with EasyView_Md` | Convert a `.docx` or `.doc` file from Explorer into Markdown |
+| `Convert to Markdown with EasyView_Md` | Convert a `.pdf` file from Explorer into Markdown |
 | `Export to HTML (Light)` | Export as HTML with light theme                          |
 | `Export to HTML (Dark)` | Export as HTML with dark theme                           |
 | `Export to PDF (Light)` | Export as PDF with light theme                           |
@@ -301,11 +348,11 @@ PDF conversion requires the Poppler command-line utilities: `pdftotext`, `pdfima
 
 | Setting                                    | Description                                                                     | Default |
 | ------------------------------------------ | ------------------------------------------------------------------------------- | ------- |
-| `inlineMd.csvDelimiter`                    | CSV delimiter: `,`, `;`, or `auto`                                              | `auto`  |
-| `inlineMd.nativeDecorations.enabled`       | Enable lightweight inline markdown decorations in the native VS Code editor     | `true`  |
-| `inlineMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `false` |
-| `inlineMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor         | `true`  |
-| `inlineMd.nativeEditor.forceMonospaceFont` | Keep CJK-aware language defaults while preserving explicit user/workspace font settings | `true`  |
+| `easyviewMd.csvDelimiter`                    | CSV delimiter: `,`, `;`, or `auto`                                              | `auto`  |
+| `easyviewMd.nativeDecorations.enabled`       | Enable lightweight inline markdown decorations in the native VS Code editor     | `true`  |
+| `easyviewMd.nativeDecorations.mermaid.enabled` | Enable safe lightweight Mermaid flowchart previews in the native VS Code editor | `false` |
+| `easyviewMd.nativeDecorations.tables.enabled` | Enable conservative Markdown table styling in the native VS Code editor         | `true`  |
+| `easyviewMd.nativeEditor.forceMonospaceFont` | Keep CJK-aware language defaults while preserving explicit user/workspace font settings | `true`  |
 
 ### Per-File Settings
 

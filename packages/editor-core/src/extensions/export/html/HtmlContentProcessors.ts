@@ -155,7 +155,7 @@ export function renderMathBlocks(container: HTMLElement): boolean {
       });
       hasMath = true;
     } catch (err) {
-      console.warn('[InLineMd] KaTeX inline render error:', err);
+      console.warn('[EasyView_Md] KaTeX inline render error:', err);
     }
   });
 
@@ -170,7 +170,7 @@ export function renderMathBlocks(container: HTMLElement): boolean {
       });
       hasMath = true;
     } catch (err) {
-      console.warn('[InLineMd] KaTeX block render error:', err);
+      console.warn('[EasyView_Md] KaTeX block render error:', err);
     }
   });
 

@@ -85,12 +85,38 @@ describe('toggleDuplicateCellMerges', () => {
     expect(tableRows(view)[1]).toHaveLength(1);
   });
 
-  it('does not run on tables containing nested tables', () => {
-    const view = viewFor(`<table><tr><td>外层</td><td>
-<table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>
-</td></tr></table>`);
-    expect(supportsDuplicateCellMerges(view.state)).toBe(false);
-    expect(toggleDuplicateCellMerges()(view.state, view.dispatch)).toBe(false);
+  it('merges plain columns even when the table also has nested tables', () => {
+    const view = viewFor(`<table>
+<tr><th>一级</th><th>描述</th></tr>
+<tr><td>A</td><td>
+<p>leading</p>
+<table border="1">
+<tr><th>状态大类</th><th>状态小类</th></tr>
+<tr><td>库状态</td><td>库</td></tr>
+</table>
+<p>trailing</p>
+</td></tr>
+<tr><td>A</td><td>普通</td></tr>
+</table>`);
+    expect(supportsDuplicateCellMerges(view.state)).toBe(true);
+    expect(toggleDuplicateCellMerges()(view.state, view.dispatch)).toBe(true);
+    expect(hasTableCellMerges(view.state)).toBe(true);
+    expect(tableRows(view)[1][0]).toMatchObject({ text: 'A', rowspan: 2, duplicateMerged: true });
+  });
+
+  it('skips cells that contain nested tables when computing duplicate merges', () => {
+    const view = viewFor(`<table>
+<tr><td>
+<table>
+<tr><td>X</td></tr>
+<tr><td>X</td></tr>
+</table>
+</td><td>一</td></tr>
+<tr><td>Y</td><td>二</td></tr>
+</table>`);
+    expect(toggleDuplicateCellMerges()(view.state, view.dispatch)).toBe(true);
+    // Nested-table cell is not auto-merged; second column stays unmerged.
+    expect(hasTableCellMerges(view.state)).toBe(false);
   });
 
   it('keeps reversible merge groups through save and reopen', () => {

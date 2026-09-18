@@ -53,7 +53,7 @@ function collectLiveMermaidSvgs(): Array<{ source: string; svg: string }> {
       if (svg) result.push({ source, svg });
     }
   } catch (error) {
-    console.warn('[InLineMd PDF] Unable to read editor Mermaid SVG:', error);
+    console.warn('[EasyView_Md PDF] Unable to read editor Mermaid SVG:', error);
   }
   return result;
 }
@@ -169,13 +169,13 @@ export async function renderMermaidSvgs(sources: string[], palette: PdfPalette):
         const { svg } = await mermaid.render(tempId, source);
         map.set(source, svg);
       } catch (error) {
-        console.warn('[InLineMd PDF] Mermaid re-render failed; using editor SVG if available:', error);
+        console.warn('[EasyView_Md PDF] Mermaid re-render failed; using editor SVG if available:', error);
       } finally {
         tempEl.remove();
       }
     }
   } catch (error) {
-    console.warn('[InLineMd PDF] Mermaid import failed; using editor SVG if available:', error);
+    console.warn('[EasyView_Md PDF] Mermaid import failed; using editor SVG if available:', error);
   }
 
   for (const item of live) {

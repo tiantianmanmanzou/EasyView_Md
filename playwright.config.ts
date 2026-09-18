@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: './tests/e2e/editor',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
@@ -12,7 +12,7 @@ export default defineConfig({
     viewport: { width: 1280, height: 800 },
   },
   webServer: {
-    command: 'node e2e/serve.mjs',
+    command: 'node tests/e2e/editor/serve.mjs',
     url: 'http://127.0.0.1:9876',
     reuseExistingServer: true,
     timeout: 30_000,

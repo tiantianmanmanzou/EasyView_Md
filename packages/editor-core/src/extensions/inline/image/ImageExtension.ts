@@ -9,6 +9,7 @@ import type { NodeViewConstructor, EditorView } from 'prosemirror-view';
 import type { NodeSpec, Schema } from 'prosemirror-model';
 import { Plugin, PluginKey } from 'prosemirror-state';
 import { ImageView } from './ImageView';
+import type { ImageToolbar } from './ImageToolbar';
 import {
   Extension,
   type SerializerNodeHandler,
@@ -83,6 +84,10 @@ function formatUrl(url: string): string {
 }
 
 export class ImageExtension extends Extension {
+  constructor(private readonly imageToolbar: ImageToolbar) {
+    super();
+  }
+
   get name() {
     return 'image';
   }
@@ -137,7 +142,7 @@ export class ImageExtension extends Extension {
 
   get nodeViews(): Record<string, NodeViewConstructor> {
     return {
-      image: (node, view, getPos) => new ImageView(node, view, getPos),
+      image: (node, view, getPos) => new ImageView(node, view, getPos, this.imageToolbar),
     };
   }
 

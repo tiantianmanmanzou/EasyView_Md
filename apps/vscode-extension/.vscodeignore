@@ -1,0 +1,13 @@
+.git/**
+.github/**
+/node_modules/**
+src/**
+scripts/**
+assets/**
+dist/**/*.map
+*.map
+tsconfig.json
+esbuild.mjs
+coverage/**
+.DS_Store
+.vscode-test.mjs

@@ -823,24 +823,12 @@ export function hasRestorableMergeGroups(state: EditorState): boolean {
 }
 
 /**
- * New automatic merging is limited to flat tables. Existing merges are always
- * supported because clicking an active toggle must be able to cancel them.
+ * Auto-merge is available for any table under the caret. Cells that contain
+ * nested tables are skipped when computing merges, but they no longer disable
+ * the whole toolbar action.
  */
 export function supportsDuplicateCellMerges(state: EditorState): boolean {
-  if (!isInTable(state)) return false;
-  if (hasTableCellMerges(state) || hasRestorableMergeGroups(state)) return true;
-  const rect = selectedRect(state);
-  const seen = new Set<number>();
-  for (let row = 0; row < rect.map.height; row += 1) {
-    for (let col = 0; col < rect.map.width; col += 1) {
-      const mapPos = rect.map.map[row * rect.map.width + col];
-      if (seen.has(mapPos)) continue;
-      seen.add(mapPos);
-      const cell = state.doc.nodeAt(rect.tableStart + mapPos);
-      if (cell && containsNestedTable(cell)) return false;
-    }
-  }
-  return true;
+  return isInTable(state);
 }
 
 /** Backwards-compatible predicate for merges made by the duplicate toggle. */
@@ -936,16 +924,19 @@ function replaceCurrentTable(state: EditorState, table: Node, replacement: Node)
   let tr = state.tr.replaceRangeWith(from, from + table.nodeSize, replacement);
   // Keep focus in the rebuilt table, avoiding a stale cell selection.
   const map = TableMap.get(replacement);
-  const $firstCell = tr.doc.resolve(from + 1 + map.map[0]);
+  const firstCellOffset = map.map[0];
+  if (firstCellOffset == null) {
+    return tr.scrollIntoView();
+  }
+  const $firstCell = tr.doc.resolve(from + 1 + firstCellOffset);
   return tr.setSelection(new CellSelection($firstCell)).scrollIntoView();
 }
 
 /**
  * Toggle automatic vertical merging of equal values in the current table.
  * Only consecutive, non-empty plain cells in the same column are merged.
- * A selected state means the table has actual merged cells; clicking it splits
- * all of those cells. An unselected state automatically merges consecutive
- * equal values only when the table has no nested table content.
+ * Cells that contain nested tables are skipped. A selected state means the
+ * table has actual merged cells; clicking it splits all of those cells.
  */
 export function toggleDuplicateCellMerges(): Command {
   return (state, dispatch) => {

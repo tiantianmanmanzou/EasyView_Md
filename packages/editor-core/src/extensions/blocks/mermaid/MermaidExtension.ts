@@ -11,16 +11,21 @@ import {
   Extension,
   type SerializerNodeHandler,
 } from '../../../editor/EditorExtension';
-import Mermaid from './MermaidPlugin';
+import Mermaid, { type MermaidOpenExternalLink } from './MermaidPlugin';
 
 // ─── Mermaid Extension ───────────────────────────────────────────────────────
 
 export class MermaidExtension extends Extension {
   private isDark: boolean;
+  private openExternalLink: MermaidOpenExternalLink;
 
-  constructor(isDark = false) {
+  constructor(
+    isDark = false,
+    openExternalLink: MermaidOpenExternalLink = () => undefined,
+  ) {
     super();
     this.isDark = isDark;
+    this.openExternalLink = openExternalLink;
   }
 
   get name() {
@@ -74,7 +79,10 @@ export class MermaidExtension extends Extension {
 
   plugins(_schema: Schema): Plugin[] {
     return [
-      Mermaid({ isDark: this.isDark }),
+      Mermaid({
+        isDark: this.isDark,
+        openExternalLink: this.openExternalLink,
+      }),
     ];
   }
 }

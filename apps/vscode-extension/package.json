@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "A visual Markdown editor for VS Code with rich editing, document conversion, and export tools.",
-  "version": "2.0.30",
+  "version": "2.0.76",
   "publisher": "zhangxy",
   "license": "MIT",
   "private": true,
@@ -42,6 +42,9 @@
   },
   "activationEvents": [
     "onStartupFinished",
+    "onFileSystem:easyviewMd",
+    "onCustomEditor:easyviewMd.markdownEditor",
+    "onCustomEditor:easyviewMd.filePreview",
     "onLanguage:markdown",
     "onLanguage:mdx",
     "onCommand:easyviewMd.openEditor",
@@ -49,6 +52,7 @@
     "onCommand:easyviewMd.cycleProductTheme",
     "onView:easyviewMd.workspaceFiles",
     "onCommand:easyviewMd.workspace.refresh",
+    "onCommand:easyviewMd.workspace.configureSort",
     "onCommand:easyviewMd.workspace.newFile",
     "onCommand:easyviewMd.workspace.newFolder",
     "onCommand:easyviewMd.workspace.revealCurrentFile",
@@ -59,7 +63,8 @@
     "onCommand:easyviewMd.workspace.copyRelativePath",
     "onCommand:easyviewMd.workspace.paste",
     "onCommand:easyviewMd.workspace.rename",
-    "onCommand:easyviewMd.workspace.delete"
+    "onCommand:easyviewMd.workspace.delete",
+    "onCommand:easyviewMd.showEditorDiagnostics"
   ],
   "contributes": {
     "customEditors": [
@@ -305,6 +310,11 @@
         "category": "EasyView_Md"
       },
       {
+        "command": "easyviewMd.showEditorDiagnostics",
+        "title": "Show Editor Diagnostics",
+        "category": "EasyView_Md"
+      },
+      {
         "command": "easyviewMd.stageFile",
         "title": "Stage Current File",
         "category": "EasyView_Md"
@@ -319,6 +329,12 @@
         "title": "Refresh",
         "category": "EasyView_Md",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "easyviewMd.workspace.configureSort",
+        "title": "Configure Sort",
+        "category": "EasyView_Md",
+        "icon": "$(sort-precedence)"
       },
       {
         "command": "easyviewMd.workspace.newFile",
@@ -392,6 +408,12 @@
         "command": "easyviewMd.workspace.delete",
         "title": "Delete",
         "category": "EasyView_Md"
+      },
+      {
+        "command": "easyviewMd.workspace.collapseAll",
+        "title": "Collapse All",
+        "category": "EasyView_Md",
+        "icon": "$(collapse-all)"
       }
     ],
     "menus": {
@@ -431,76 +453,29 @@
       ],
       "view/title": [
         {
-          "command": "easyviewMd.workspace.newFile",
+          "command": "easyviewMd.workspace.configureSort",
           "when": "view == easyviewMd.workspaceFiles",
           "group": "navigation@1"
         },
         {
-          "command": "easyviewMd.workspace.newFolder",
+          "command": "easyviewMd.workspace.newFile",
           "when": "view == easyviewMd.workspaceFiles",
           "group": "navigation@2"
         },
         {
-          "command": "easyviewMd.workspace.refresh",
+          "command": "easyviewMd.workspace.newFolder",
           "when": "view == easyviewMd.workspaceFiles",
           "group": "navigation@3"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "easyviewMd.workspace.openPreview",
-          "when": "view == easyviewMd.workspaceFiles && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.open@1"
         },
         {
-          "command": "easyviewMd.workspace.openExternal",
-          "when": "view == easyviewMd.workspaceFiles && resourceScheme == file && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.system@1"
+          "command": "easyviewMd.workspace.refresh",
+          "when": "view == easyviewMd.workspaceFiles",
+          "group": "navigation@4"
         },
         {
-          "command": "easyviewMd.workspace.revealMac",
-          "when": "view == easyviewMd.workspaceFiles && isMac && resourceScheme == file && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.system@2"
-        },
-        {
-          "command": "easyviewMd.workspace.revealWindows",
-          "when": "view == easyviewMd.workspaceFiles && isWindows && resourceScheme == file && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.system@2"
-        },
-        {
-          "command": "easyviewMd.workspace.revealLinux",
-          "when": "view == easyviewMd.workspaceFiles && isLinux && resourceScheme == file && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.system@2"
-        },
-        {
-          "command": "easyviewMd.workspace.copyResourceUri",
-          "when": "view == easyviewMd.workspaceFiles && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.copy@1"
-        },
-        {
-          "command": "easyviewMd.workspace.paste",
-          "when": "view == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.hasClipboard && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.copy@2"
-        },
-        {
-          "command": "easyviewMd.workspace.copyPath",
-          "when": "view == easyviewMd.workspaceFiles && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.copy@3"
-        },
-        {
-          "command": "easyviewMd.workspace.copyRelativePath",
-          "when": "view == easyviewMd.workspaceFiles && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceFileReadonly || viewItem == easyviewMd.workspaceDirectory || viewItem == easyviewMd.workspaceDirectoryReadonly || viewItem == easyviewMd.workspaceSymlink)",
-          "group": "easyviewMd.copy@4"
-        },
-        {
-          "command": "easyviewMd.workspace.rename",
-          "when": "view == easyviewMd.workspaceFiles && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceDirectory)",
-          "group": "easyviewMd.modify@1"
-        },
-        {
-          "command": "easyviewMd.workspace.delete",
-          "when": "view == easyviewMd.workspaceFiles && (viewItem == easyviewMd.workspaceFile || viewItem == easyviewMd.workspaceDirectory)",
-          "group": "easyviewMd.modify@2"
+          "command": "easyviewMd.workspace.collapseAll",
+          "when": "view == easyviewMd.workspaceFiles",
+          "group": "navigation@5"
         }
       ]
     },
@@ -540,27 +515,27 @@
       {
         "key": "enter",
         "command": "easyviewMd.workspace.rename",
-        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && !inputFocus"
+        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && !inputFocus && !easyviewMd.workspaceFiles.inputFocus"
       },
       {
         "key": "f2",
         "command": "easyviewMd.workspace.rename",
-        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && !inputFocus"
+        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && !inputFocus && !easyviewMd.workspaceFiles.inputFocus"
       },
       {
         "key": "delete",
         "command": "easyviewMd.workspace.delete",
-        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && !isMac"
+        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && !isMac && !easyviewMd.workspaceFiles.inputFocus"
       },
       {
         "key": "cmd+backspace",
         "command": "easyviewMd.workspace.delete",
-        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && isMac"
+        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && isMac && !easyviewMd.workspaceFiles.inputFocus"
       },
       {
         "key": "delete",
         "command": "easyviewMd.workspace.delete",
-        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && isMac"
+        "when": "focusedView == easyviewMd.workspaceFiles && easyviewMd.workspaceFiles.entrySelected && isMac && !easyviewMd.workspaceFiles.inputFocus"
       }
     ],
     "configurationDefaults": {
@@ -630,6 +605,7 @@
     "views": {
       "easyviewMd-workspacePanel": [
         {
+          "type": "webview",
           "id": "easyviewMd.workspaceFiles",
           "name": "Files",
           "contextualTitle": "EasyView_Md"
@@ -658,5 +634,8 @@
     "pdf-lib": "^1.17.1",
     "node-pty": "^1.1.0",
     "jszip": "^3.10.1"
+  },
+  "dependencies": {
+    "@easyview/editor-sync": "*"
   }
 }

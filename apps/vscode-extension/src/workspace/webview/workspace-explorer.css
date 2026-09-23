@@ -1,0 +1,500 @@
+/* Extension sidebar workspace explorer — adapted from Desktop `.workspace-*`. */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background));
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+.workspace-explorer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: inherit;
+  background: inherit;
+  outline: none;
+  --easyview-list-selection-background: var(
+    --vscode-list-inactiveSelectionBackground,
+    var(--vscode-list-activeSelectionBackground, #37373d)
+  );
+}
+
+/* VS Code–like menus (sort popup + context menu). Not native API — visual parity only.
+   Both mount on document.body with position:fixed so .workspace-explorer / .workspace-tree
+   overflow:hidden cannot clip them. Still limited to the webview viewport (cannot paint
+   over the editor); JS clamps left/top so the full panel stays visible inside the sidebar. */
+.workspace-sort-menu,
+.workspace-file-context-menu {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  top: auto;
+  left: auto;
+  right: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: max-content;
+  max-width: calc(100vw - 16px);
+  width: max-content;
+  padding: 4px 0;
+  margin: 0;
+  overflow: visible;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, #454545));
+  border-radius: 5px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground, #cccccc));
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+  box-shadow:
+    0 2px 8px color-mix(in srgb, #000 36%, transparent),
+    0 0 1px color-mix(in srgb, #000 50%, transparent);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 22px;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.workspace-file-context-menu {
+  max-width: min(360px, calc(100vw - 16px));
+}
+
+.workspace-sort-menu-item,
+.workspace-file-context-menu > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  box-sizing: border-box;
+  width: 100%;
+  flex: none;
+  min-height: 26px;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+  appearance: none;
+}
+
+.workspace-sort-menu-item:hover,
+.workspace-sort-menu-item:focus-visible,
+.workspace-file-context-menu > button:hover:not(:disabled),
+.workspace-file-context-menu > button:focus-visible:not(:disabled) {
+  outline: none;
+  color: var(--vscode-menu-selectionForeground, #ffffff);
+  background: var(
+    --vscode-menu-selectionBackground,
+    var(--vscode-list-activeSelectionBackground, #094771)
+  );
+}
+
+.workspace-file-context-menu > button:disabled {
+  color: var(--vscode-disabledForeground, color-mix(in srgb, currentColor 40%, transparent));
+  opacity: 1;
+  cursor: default;
+}
+
+.workspace-file-context-menu > button:disabled:hover {
+  color: var(--vscode-disabledForeground, color-mix(in srgb, currentColor 40%, transparent));
+  background: transparent;
+}
+
+.workspace-menu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-sort-menu-item .workspace-menu-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.workspace-menu-item-check {
+  flex: none;
+  width: 1em;
+  margin-left: auto;
+  color: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: right;
+}
+
+.workspace-menu-item-shortcut {
+  flex: none;
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--vscode-input-placeholderForeground, #808080);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.workspace-sort-menu-item:hover .workspace-menu-item-shortcut,
+.workspace-file-context-menu > button:hover:not(:disabled) .workspace-menu-item-shortcut {
+  color: var(--vscode-menu-selectionForeground, #ffffff);
+  opacity: 0.78;
+}
+
+.workspace-sort-menu-separator,
+.workspace-file-context-menu .workspace-context-separator {
+  display: block;
+  height: 1px;
+  margin: 4px 0;
+  padding: 0;
+  border: 0;
+  background: var(--vscode-menu-separatorBackground, var(--vscode-menu-border, #454545));
+  opacity: 0.85;
+}
+
+.workspace-entry.is-dragging {
+  opacity: 0.55;
+}
+
+.workspace-entry.is-drop-target {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.workspace-entry.is-drop-into {
+  background: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent);
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.workspace-drop-indicator {
+  position: absolute;
+  z-index: 20;
+  height: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+  background: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent);
+  opacity: 0;
+}
+
+.workspace-drop-indicator.is-visible {
+  opacity: 1;
+}
+
+.workspace-drop-indicator::before,
+.workspace-drop-indicator::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-focusBorder);
+  transform: translateY(-50%);
+}
+
+.workspace-drop-indicator::before {
+  left: -1px;
+}
+
+.workspace-drop-indicator::after {
+  right: -1px;
+}
+
+.workspace-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  height: 100%;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--vscode-scrollbarSlider-background, #797979) 85%, transparent) transparent;
+}
+
+.workspace-tree::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.workspace-tree::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--vscode-scrollbarSlider-background, #797979) 85%, transparent);
+  border-radius: 3px;
+}
+
+.workspace-tree::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, #646464);
+}
+
+.workspace-tree::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.workspace-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 100%;
+  height: 26px;
+}
+
+.workspace-entry.has-timestamps {
+  grid-template-columns: minmax(0, 1fr) max-content 24px;
+}
+
+.workspace-entry:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.workspace-action,
+.workspace-entry-toggle,
+.workspace-entry-create {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.workspace-entry-create:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.workspace-entry-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+  height: 26px;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0 2px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.workspace-entry-timestamps {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 8px;
+  margin-inline-start: 10px;
+  max-width: 42vw;
+  overflow: hidden;
+  white-space: nowrap;
+  padding-inline: 0 6px;
+  font-size: 9px;
+  line-height: 1.2;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-descriptionForeground, inherit);
+}
+
+.workspace-entry-timestamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.workspace-entry-timestamp-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-entry-timestamp-icon {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  color: inherit;
+  -webkit-mask: no-repeat center / contain;
+  mask: no-repeat center / contain;
+}
+
+.workspace-entry-timestamp-icon.is-created {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='3.6' width='12' height='10.2' rx='1.6' fill='none' stroke='black' stroke-width='1.5'/%3E%3Cpath d='M2 7.1h12' fill='none' stroke='black' stroke-width='1.5'/%3E%3Cpath d='M5.2 2v3.2M10.8 2v3.2' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='3.6' width='12' height='10.2' rx='1.6' fill='none' stroke='black' stroke-width='1.5'/%3E%3Cpath d='M2 7.1h12' fill='none' stroke='black' stroke-width='1.5'/%3E%3Cpath d='M5.2 2v3.2M10.8 2v3.2' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+.workspace-entry-timestamp-icon.is-updated {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.1 8A5.1 5.1 0 1 1 11.6 4.3' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3Cpath d='M13.1 2.5v3.1h-3.1' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.1 8A5.1 5.1 0 1 1 11.6 4.3' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3Cpath d='M13.1 2.5v3.1h-3.1' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.workspace-timestamp-tooltip {
+  position: fixed;
+  z-index: 10001;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground, #cccccc));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
+  box-shadow:
+    0 2px 8px color-mix(in srgb, #000 36%, transparent),
+    0 0 1px color-mix(in srgb, #000 50%, transparent);
+  font-family: var(--vscode-font-family);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: pre-line;
+  pointer-events: none;
+  user-select: none;
+}
+
+.workspace-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  line-height: 0;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.workspace-chevron.is-directory::before {
+  box-sizing: border-box;
+  width: 6px;
+  height: 6px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  content: '';
+  transform: translateX(-1px) rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.workspace-chevron.is-directory.is-expanded::before {
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.workspace-entry-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  line-height: 0;
+  flex: none;
+  color: inherit;
+}
+
+.workspace-entry-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.workspace-entry-name > span:not(.workspace-chevron):not(.workspace-entry-icon) {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 22px;
+}
+
+.workspace-entry-create {
+  display: none;
+  width: 24px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+}
+
+.workspace-entry:hover .workspace-entry-create {
+  display: block;
+}
+
+.workspace-entry-create-spacer {
+  width: 24px;
+  height: 26px;
+}
+
+.workspace-create-row {
+  height: 26px;
+  display: flex;
+  align-items: center;
+}
+
+.workspace-create-row input {
+  width: calc(100% - 12px);
+  box-sizing: border-box;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 3px;
+  font: inherit;
+}
+
+.workspace-empty {
+  margin: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  color: var(--vscode-descriptionForeground, inherit);
+  background: transparent;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.workspace-entry.active {
+  background: color-mix(in srgb, var(--easyview-list-selection-background) 55%, transparent);
+}
+
+.workspace-entry.selected {
+  background: var(--easyview-list-selection-background);
+}
+
+.workspace-entry.selected.active {
+  background: var(--easyview-list-selection-background);
+}
+
+.workspace-entry:focus-within {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.workspace-rename-input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--vscode-focusBorder);
+  padding: 1px 3px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  font: inherit;
+}
+
+.workspace-entry-name > .workspace-rename-input {
+  flex: 1;
+}

@@ -30,12 +30,15 @@
     "test": "vitest run tests"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.53",
     "@easyview/contracts": "*",
     "@easyview/markdown-core": "*",
-    "exceljs": "^4.4.0",
+    "ai": "^7.0.107",
     "docx": "^9.5.1",
+    "exceljs": "^4.4.0",
+    "node-pty": "^1.1.0",
     "pngjs": "^7.0.0",
-    "node-pty": "^1.1.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "jszip": "^3.10.1"

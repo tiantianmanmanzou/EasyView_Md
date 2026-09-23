@@ -42,33 +42,3 @@ export function decorateRenderedMarkdown(container: HTMLElement, onCopyCode: (co
     pre.appendChild(button);
   }
 }
-
-export interface ExtractedMarkdownBlock {
-  content: string;
-}
-
-/**
- * Extracts the document block from an agent-mode reply: the LAST fenced code
- * block whose info string starts with `markdown` (3+ backticks; tolerates an
- * unterminated final fence and four-backtick outer fences).
- */
-export function extractMarkdownBlock(text: string): ExtractedMarkdownBlock | null {
-  const fenceRegex = /(^|\n)(`{3,})([^\n`]*)\n?([\s\S]*?)(?=\n\2\n?|$)/g;
-  let match: RegExpExecArray | null;
-  let last: { content: string } | null = null;
-  while ((match = fenceRegex.exec(text)) !== null) {
-    const info = (match[3] ?? '').trim().toLowerCase();
-    const content = match[4] ?? '';
-    if (info === 'markdown' || info === 'md') {
-      last = { content: content.replace(/\n$/, '') };
-    }
-  }
-  if (last) return last;
-
-  // Fallback: a single unterminated ```markdown fence opened at the end.
-  const openFence = text.match(/(^|\n)(`{3,})(markdown|md)[^\n]*\n([\s\S]+)$/i);
-  if (openFence) {
-    return { content: openFence[4].replace(/\n$/, '') };
-  }
-  return null;
-}

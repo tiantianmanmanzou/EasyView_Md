@@ -36,6 +36,8 @@ describe('AiChatHost', () => {
       secretStore: {
         getApiKey: async () => null,
         setApiKey: async () => undefined,
+        getWebSearchApiKey: async () => null,
+        setWebSearchApiKey: async () => undefined,
       },
       postMessage: (message) => {
         posted.push(message);
@@ -49,6 +51,7 @@ describe('AiChatHost', () => {
         requestId: 'req-1',
         settings: DEFAULT_AI_CHAT_SETTINGS,
         hasApiKey: false,
+        hasWebSearchApiKey: false,
       },
     ]);
   });
@@ -65,6 +68,8 @@ describe('AiChatHost', () => {
         setApiKey: async (value) => {
           apiKey = value;
         },
+        getWebSearchApiKey: async () => null,
+        setWebSearchApiKey: async () => undefined,
       },
       postMessage: (message) => {
         posted.push(message);
@@ -110,6 +115,8 @@ describe('AiChatHost', () => {
       secretStore: {
         getApiKey: async () => 'sk-test',
         setApiKey: async () => undefined,
+        getWebSearchApiKey: async () => null,
+        setWebSearchApiKey: async () => undefined,
       },
       postMessage: (message) => {
         posted.push(message);

@@ -3,7 +3,9 @@ import type {
   WorkspaceDeleteRequest as SharedWorkspaceDeleteRequest,
   WorkspaceEntry as SharedWorkspaceEntry,
   WorkspaceEntryKind as SharedWorkspaceEntryKind,
+  WorkspaceMoveRequest as SharedWorkspaceMoveRequest,
   WorkspaceRenameRequest as SharedWorkspaceRenameRequest,
+  WorkspaceTreeSortMode as SharedWorkspaceTreeSortMode,
 } from '@easyview/contracts';
 import type { PreviewRoute } from './preview';
 
@@ -12,9 +14,18 @@ export type WorkspaceEntryKind = SharedWorkspaceEntryKind;
 export type WorkspaceEntry = SharedWorkspaceEntry;
 export type WorkspaceCreateRequest = SharedWorkspaceCreateRequest;
 export type WorkspaceRenameRequest = SharedWorkspaceRenameRequest;
+export type WorkspaceMoveRequest = SharedWorkspaceMoveRequest;
+export type WorkspaceTreeSortMode = SharedWorkspaceTreeSortMode;
 export type WorkspaceDeleteRequest = Pick<SharedWorkspaceDeleteRequest, 'relativePath'> & {
   options?: SharedWorkspaceDeleteRequest['options'];
 };
+
+export interface WorkspaceReorderRequest {
+  parentRelativePath: string;
+  movedName: string;
+  siblingNames: string[];
+  beforeName?: string;
+}
 
 export interface WorkspaceSnapshot {
   rootPath: string | null;

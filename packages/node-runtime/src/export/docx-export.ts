@@ -183,8 +183,21 @@ function fitImageIntoBounds(
 
 const DOCX_PAGE_MM = { width: 210, height: 297, margin: 20 };
 const DOCX_PX_PER_MM = 96 / 25.4;
+const DOCX_PORTRAIT_CONTENT_TWIP = convertMillimetersToTwip(DOCX_PAGE_MM.width - DOCX_PAGE_MM.margin * 2);
+const DOCX_LANDSCAPE_CONTENT_TWIP = convertMillimetersToTwip(DOCX_PAGE_MM.height - DOCX_PAGE_MM.margin * 2);
+/** Prefer a slightly tighter table than full content width so borders stay inside margins. */
+const DOCX_PORTRAIT_TABLE_WIDTH = Math.min(9360, DOCX_PORTRAIT_CONTENT_TWIP);
+const DOCX_LANDSCAPE_TABLE_WIDTH = Math.min(14570, DOCX_LANDSCAPE_CONTENT_TWIP);
+/** Approx. 11pt glyph widths in twips (CJK full-width vs. Latin). */
+const DOCX_CHAR_TWIP_CJK = 168;
+const DOCX_CHAR_TWIP_LATIN = 90;
+const DOCX_TABLE_CELL_PAD_TWIP = 160;
+const DOCX_TABLE_BORDER_TWIP = 20;
 
 type DocxPageOrientation = 'portrait' | 'landscape';
+
+/** Tables that need more than portrait content width get their own landscape section. */
+const docxWideTables = new WeakSet<Table>();
 
 function createDocxSection(children: FileChild[], orientation: DocxPageOrientation): ISectionOptions {
   const isLandscape = orientation === 'landscape';
@@ -210,7 +223,10 @@ function createDocxSection(children: FileChild[], orientation: DocxPageOrientati
   };
 }
 
-/** Place every exported table in its own landscape section; surrounding content stays portrait. */
+/**
+ * Place only over-wide tables in their own landscape section.
+ * Narrow tables stay in the surrounding portrait flow (no forced page break).
+ */
 function createDocxSections(children: FileChild[]): ISectionOptions[] {
   const sections: ISectionOptions[] = [];
   let portraitChildren: FileChild[] = [];
@@ -222,7 +238,7 @@ function createDocxSections(children: FileChild[]): ISectionOptions[] {
   };
 
   for (const child of children) {
-    if (child instanceof Table) {
+    if (child instanceof Table && docxWideTables.has(child)) {
       flushPortrait();
       sections.push(createDocxSection([child], 'landscape'));
     } else {
@@ -234,6 +250,44 @@ function createDocxSections(children: FileChild[]): ISectionOptions[] {
   return sections.length > 0
     ? sections
     : [createDocxSection([new Paragraph({ children: [] })], 'portrait')];
+}
+
+function estimateDocxTextWidthTwip(text: string): number {
+  let maxLine = 0;
+  let line = 0;
+  for (const char of text) {
+    if (char === '\n' || char === '\r') {
+      maxLine = Math.max(maxLine, line);
+      line = 0;
+      continue;
+    }
+    // CJK / full-width glyphs are roughly square at body size.
+    if (/[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7AF\uF900-\uFAFF\uFE10-\uFE6F\uFF00-\uFFEF]/.test(char)) {
+      line += DOCX_CHAR_TWIP_CJK;
+    } else {
+      line += DOCX_CHAR_TWIP_LATIN;
+    }
+  }
+  return Math.max(maxLine, line);
+}
+
+function estimateDocxTableWidthTwip(header: string[], body: string[][]): number {
+  const columnCount = Math.max(header.length, ...body.map((row) => row.length), 1);
+  const colWidths = Array.from({ length: columnCount }, () => 800);
+  const rows = [header, ...body];
+  for (const row of rows) {
+    for (let i = 0; i < columnCount; i++) {
+      colWidths[i] = Math.max(colWidths[i], estimateDocxTextWidthTwip(row[i] ?? '') + DOCX_TABLE_CELL_PAD_TWIP);
+    }
+  }
+  return colWidths.reduce((sum, width) => sum + width, 0) + (columnCount + 1) * DOCX_TABLE_BORDER_TWIP;
+}
+
+function docxTableNeedsLandscape(header: string[], body: string[][]): boolean {
+  const columnCount = Math.max(header.length, ...body.map((row) => row.length), 1);
+  // Narrow tables (under 5 columns) stay portrait even when cells are text-heavy.
+  if (columnCount < 5) return false;
+  return estimateDocxTableWidthTwip(header, body) > DOCX_PORTRAIT_CONTENT_TWIP;
 }
 
 function docxContentSizePx(): { width: number; height: number } {
@@ -359,7 +413,6 @@ function isMarkdownTableStart(current: string, next: string): boolean {
   return current.trim().startsWith('|') && next.trim().startsWith('|');
 }
 
-const DOCX_TABLE_WIDTH = 9360;
 const DOCX_TABLE_BORDER = { style: BorderStyle.SINGLE, size: 4, color: 'C8CDD4' } as const;
 const DOCX_NOTICE_STYLES: Record<string, { border: string; fill: string; title: string }> = {
   note: { border: '0969DA', fill: 'DDF4FF', title: 'Note' },
@@ -437,7 +490,9 @@ async function createDocxTable(
 ): Promise<Table> {
   const columnCount = Math.max(header.length, ...body.map((row) => row.length), 1);
   const alignmentMap = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
-  const colWidth = Math.max(800, Math.floor(DOCX_TABLE_WIDTH / columnCount));
+  const needsLandscape = docxTableNeedsLandscape(header, body);
+  const tableWidth = needsLandscape ? DOCX_LANDSCAPE_TABLE_WIDTH : DOCX_PORTRAIT_TABLE_WIDTH;
+  const colWidth = Math.max(800, Math.floor(tableWidth / columnCount));
   const buildRow = async (cells: string[], isHeader: boolean, rowIndex: number) => new TableRow({
     cantSplit: true,
     children: await Promise.all(Array.from({ length: columnCount }, async (_, index) => new TableCell({
@@ -463,9 +518,9 @@ async function createDocxTable(
     ...(await Promise.all(body.map((row, index) => buildRow(row, false, index)))),
   ];
 
-  return new Table({
+  const table = new Table({
     rows,
-    width: { size: DOCX_TABLE_WIDTH, type: WidthType.DXA },
+    width: { size: tableWidth, type: WidthType.DXA },
     columnWidths: Array.from({ length: columnCount }, () => colWidth),
     borders: {
       top: DOCX_TABLE_BORDER,
@@ -478,6 +533,8 @@ async function createDocxTable(
     layout: TableLayoutType.FIXED,
     margins: { top: 0, bottom: 0, left: 0, right: 0 },
   });
+  if (needsLandscape) docxWideTables.add(table);
+  return table;
 }
 
 function createDocxBlockquoteParagraph(content: string, isFirst: boolean, isLast: boolean, style?: { border: string; fill: string }): Paragraph {

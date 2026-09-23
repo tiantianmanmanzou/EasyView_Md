@@ -32,15 +32,24 @@ type ArchiveExportFn = (sessionId: string, path: string) => Promise<void>;
 
 type TreeRow =
   | { kind: 'up'; path: string; label: string }
-  | { kind: 'directory'; path: string; name: string }
+  | { kind: 'directory'; path: string; name: string; entry?: ArchiveEntry }
   | { kind: 'file'; entry: ArchiveEntry; name: string };
 
+type SortKey = 'name' | 'modified' | 'size' | 'origin';
+type SortDir = 'asc' | 'desc';
+
+type TreeNode = {
+  path: string;
+  name: string;
+  children: TreeNode[];
+};
+
 /**
- * Archive preview (vscode-office style):
- * - Left pane shows only the current folder level (not a fully expanded tree).
- * - ZIP family uses host APIs when present, otherwise client-side JSZip.
- * - RAR / 7z keep @file-viewer libarchive (already has shared toolbar).
- * - ZIP path uses the same EasyView top chrome (theme + collapse).
+ * Archive preview (explorer layout):
+ * - Shared EasyView top chrome (theme + collapse).
+ * - Left folder tree (root expanded; nested folders collapsed until opened).
+ * - Right detail table for the selected folder (Name / Modified / Size / Origin).
+ * - File preview opens under the table when an entry is selected.
  */
 export function ArchiveViewer({ descriptor, host }: ArchiveViewerProps): React.ReactElement {
   const suffix = extension(descriptor.fileName);
@@ -135,16 +144,21 @@ function FolderArchiveViewer(props: {
 
   return h(ArchiveSplitLayout, {
     archiveName: descriptor.fileName,
+    entries,
     currentDir,
     rows: listCurrentFolder(entries, currentDir),
     selected,
-    onOpenDirectory: setCurrentDir,
+    onOpenDirectory: (path) => {
+      setCurrentDir(path);
+      setSelected(null);
+    },
     onOpenFile: (path) => {
       void openEntry(descriptor.sessionId, path).then(setSelected).catch(setError);
     },
     onExportFile: (path) => {
       void exportEntry(descriptor.sessionId, path).catch(setError);
     },
+    onClearPreview: () => setSelected(null),
   });
 }
 
@@ -190,7 +204,7 @@ function ClientZipArchiveViewer({ descriptor }: ViewerProps): React.ReactElement
       throw new Error('压缩包条目超过 4 MiB 安全预览上限');
     }
     const mimeType = mimeTypeForEntry(path);
-    const blob = new Blob([bytes], { type: mimeType });
+    const blob = new Blob([Uint8Array.from(bytes)], { type: mimeType });
     const contentUrl = URL.createObjectURL(blob);
     objectUrls.current.push(contentUrl);
     const entry = entries?.find((item) => item.path === path);
@@ -199,6 +213,7 @@ function ClientZipArchiveViewer({ descriptor }: ViewerProps): React.ReactElement
       directory: false,
       compressedSize: entry?.compressedSize ?? bytes.byteLength,
       uncompressedSize: entry?.uncompressedSize ?? bytes.byteLength,
+      lastModified: entry?.lastModified,
       mimeType,
       contentUrl,
     });
@@ -209,7 +224,7 @@ function ClientZipArchiveViewer({ descriptor }: ViewerProps): React.ReactElement
     const file = zip.file(path);
     if (!file || file.dir) throw new Error('压缩包条目不存在');
     const bytes = await file.async('uint8array');
-    const blob = new Blob([bytes], { type: mimeTypeForEntry(path) });
+    const blob = new Blob([Uint8Array.from(bytes)], { type: mimeTypeForEntry(path) });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -223,77 +238,386 @@ function ClientZipArchiveViewer({ descriptor }: ViewerProps): React.ReactElement
 
   return h(ArchiveSplitLayout, {
     archiveName: descriptor.fileName,
+    entries,
     currentDir,
     rows: listCurrentFolder(entries, currentDir),
     selected,
-    onOpenDirectory: setCurrentDir,
+    onOpenDirectory: (path) => {
+      setCurrentDir(path);
+      setSelected(null);
+    },
     onOpenFile: (path) => { void openEntry(path).catch(setError); },
     onExportFile: (path) => { void exportEntry(path).catch(setError); },
+    onClearPreview: () => setSelected(null),
   });
 }
 
 function ArchiveSplitLayout(props: {
   archiveName: string;
+  entries: ArchiveEntry[];
   currentDir: string;
   rows: TreeRow[];
   selected: ArchiveEntryPreview | null;
   onOpenDirectory: (path: string) => void;
   onOpenFile: (path: string) => void;
   onExportFile: (path: string) => void;
+  onClearPreview: () => void;
 }): React.ReactElement {
-  const crumb = props.currentDir ? props.currentDir : '/';
-  return h('section', { className: 'preview-archive-viewer' },
-    h('div', { className: 'preview-archive-list', role: 'tree', 'aria-label': '压缩包条目' },
-      h('div', { className: 'preview-archive-list-head' },
-        h('strong', { className: 'preview-archive-list-title' }, props.archiveName),
-        h('div', { className: 'preview-archive-crumb', title: crumb }, crumb),
+  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set(['']));
+  const [sortKey, setSortKey] = React.useState<SortKey>('name');
+  const [sortDir, setSortDir] = React.useState<SortDir>('asc');
+  const tree = React.useMemo(() => buildArchiveTree(props.entries), [props.entries]);
+
+  React.useEffect(() => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.add('');
+      let cursor = normalizeDir(props.currentDir);
+      while (cursor) {
+        next.add(cursor);
+        cursor = parentDir(cursor);
+      }
+      return next;
+    });
+  }, [props.currentDir]);
+
+  const toggleExpand = (path: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setSortDir('asc');
+  };
+
+  const tableRows = sortTableRows(
+    props.rows.filter((row) => row.kind !== 'up'),
+    sortKey,
+    sortDir,
+  );
+
+  return h('section', { className: `preview-archive-viewer${props.selected ? ' has-preview' : ''}` },
+    h('aside', { className: 'preview-archive-tree', 'aria-label': '压缩包目录树' },
+      h('div', {
+        className: `preview-archive-tree-row is-root${props.currentDir === '' ? ' is-active' : ''}`,
+        role: 'treeitem',
+        'aria-expanded': expanded.has(''),
+        onClick: () => props.onOpenDirectory(''),
+      },
+        h('button', {
+          type: 'button',
+          className: 'preview-archive-tree-twistie',
+          'aria-label': expanded.has('') ? '折叠' : '展开',
+          onClick: (event: React.MouseEvent) => toggleExpand('', event),
+        }, h(ArchiveChevronIcon, { expanded: expanded.has('') })),
+        h(ArchiveZipIcon),
+        h('span', { className: 'preview-archive-tree-label', title: props.archiveName }, props.archiveName),
       ),
-      props.rows.map((row) => {
-        if (row.kind === 'up') {
-          return h('div', { key: `up:${row.path}`, className: 'preview-archive-entry is-directory' },
-            h('button', {
-              type: 'button',
-              onClick: () => props.onOpenDirectory(row.path),
-            }, row.label),
-            h('span', null, '上级'),
-          );
-        }
-        if (row.kind === 'directory') {
-          return h('div', { key: `dir:${row.path}`, className: 'preview-archive-entry is-directory' },
-            h('button', {
-              type: 'button',
-              onClick: () => props.onOpenDirectory(row.path),
-            }, `${row.name}/`),
-            h('span', null, '目录'),
-          );
-        }
-        return h('div', { key: `file:${row.entry.path}`, className: 'preview-archive-entry' },
-          h('button', {
-            type: 'button',
-            onClick: () => props.onOpenFile(row.entry.path),
-          }, row.name),
-          h('span', null, formatBytes(row.entry.uncompressedSize)),
-          h('button', {
-            type: 'button',
-            title: '导出条目',
-            onClick: () => props.onExportFile(row.entry.path),
-          }, '导出'),
-        );
-      }),
-      props.rows.length === 0
-        ? h('div', { className: 'preview-viewer-message' }, '当前目录为空')
+      expanded.has('')
+        ? tree.map((node) => renderTreeNode(node, 1, props.currentDir, expanded, toggleExpand, props.onOpenDirectory))
         : null,
     ),
-    props.selected
-      ? h('iframe', {
-          className: 'preview-archive-content',
-          title: props.selected.path,
-          src: props.selected.contentUrl,
-          sandbox: 'allow-downloads',
-          referrerPolicy: 'no-referrer',
-        })
-      : h('div', { className: 'preview-viewer-message' }, '选择一个文件以预览。'),
+    h('div', { className: 'preview-archive-main' },
+      h('div', { className: 'preview-archive-table-wrap' },
+        h('table', { className: 'preview-archive-table' },
+          h('thead', null,
+            h('tr', null,
+              sortHeader('名称', 'name', sortKey, sortDir, toggleSort),
+              sortHeader('修改时间', 'modified', sortKey, sortDir, toggleSort),
+              sortHeader('大小', 'size', sortKey, sortDir, toggleSort),
+              sortHeader('原始大小', 'origin', sortKey, sortDir, toggleSort),
+            ),
+          ),
+          h('tbody', null,
+            tableRows.length === 0
+              ? h('tr', null,
+                  h('td', { className: 'preview-archive-empty', colSpan: 4 }, '当前目录为空'),
+                )
+              : tableRows.map((row) => {
+                  if (row.kind === 'directory') {
+                    return h('tr', {
+                      key: `dir:${row.path}`,
+                      className: 'preview-archive-table-row is-directory',
+                      onDoubleClick: () => props.onOpenDirectory(row.path),
+                      onClick: () => props.onOpenDirectory(row.path),
+                    },
+                      h('td', { className: 'preview-archive-col-name' },
+                        h('div', { className: 'preview-archive-name-cell' },
+                          h(ArchiveFolderIcon),
+                          h('span', { title: row.name }, row.name),
+                        ),
+                      ),
+                      h('td', { className: 'preview-archive-col-modified' }, formatModified(row.entry?.lastModified)),
+                      h('td', { className: 'preview-archive-col-size' }, formatBytes(row.entry?.compressedSize ?? 0)),
+                      h('td', { className: 'preview-archive-col-origin' }, formatBytes(row.entry?.uncompressedSize ?? 0)),
+                    );
+                  }
+                  if (row.kind !== 'file') return null;
+                  return h('tr', {
+                    key: `file:${row.entry.path}`,
+                    className: `preview-archive-table-row${props.selected?.path === row.entry.path ? ' is-active' : ''}`,
+                    onClick: () => props.onOpenFile(row.entry.path),
+                    onDoubleClick: () => props.onOpenFile(row.entry.path),
+                  },
+                    h('td', { className: 'preview-archive-col-name' },
+                      h('div', { className: 'preview-archive-name-cell' },
+                        h(ArchiveFileIcon),
+                        h('span', { title: row.name }, row.name),
+                        h('button', {
+                          type: 'button',
+                          className: 'preview-archive-export',
+                          title: '导出条目',
+                          onClick: (event: React.MouseEvent) => {
+                            event.stopPropagation();
+                            props.onExportFile(row.entry.path);
+                          },
+                        }, '导出'),
+                      ),
+                    ),
+                    h('td', { className: 'preview-archive-col-modified' }, formatModified(row.entry.lastModified)),
+                    h('td', { className: 'preview-archive-col-size' }, formatBytes(row.entry.compressedSize)),
+                    h('td', { className: 'preview-archive-col-origin' }, formatBytes(row.entry.uncompressedSize)),
+                  );
+                }),
+          ),
+        ),
+      ),
+      props.selected
+        ? h('div', { className: 'preview-archive-preview' },
+            h('div', { className: 'preview-archive-preview-head' },
+              h('span', { className: 'preview-archive-preview-path', title: props.selected.path }, props.selected.path),
+              h('button', {
+                type: 'button',
+                className: 'preview-archive-preview-action',
+                onClick: () => props.onExportFile(props.selected!.path),
+              }, '导出'),
+              h('button', {
+                type: 'button',
+                className: 'preview-archive-preview-action',
+                onClick: props.onClearPreview,
+              }, '关闭'),
+            ),
+            h('iframe', {
+              className: 'preview-archive-content',
+              title: props.selected.path,
+              src: props.selected.contentUrl,
+              sandbox: 'allow-downloads',
+              referrerPolicy: 'no-referrer',
+            }),
+          )
+        : null,
+    ),
   );
+}
+
+function renderTreeNode(
+  node: TreeNode,
+  depth: number,
+  currentDir: string,
+  expanded: Set<string>,
+  toggleExpand: (path: string, event: React.MouseEvent) => void,
+  onOpenDirectory: (path: string) => void,
+): React.ReactNode {
+  const isOpen = expanded.has(node.path);
+  const isActive = normalizeDir(currentDir) === node.path;
+  const hasChildren = node.children.length > 0;
+  return h(React.Fragment, { key: node.path },
+    h('div', {
+      className: `preview-archive-tree-row${isActive ? ' is-active' : ''}`,
+      style: { paddingLeft: `${8 + depth * 14}px` },
+      role: 'treeitem',
+      'aria-expanded': hasChildren ? isOpen : undefined,
+      onClick: () => onOpenDirectory(node.path),
+    },
+      h('button', {
+        type: 'button',
+        className: `preview-archive-tree-twistie${hasChildren ? '' : ' is-leaf'}`,
+        'aria-hidden': !hasChildren,
+        tabIndex: hasChildren ? 0 : -1,
+        onClick: hasChildren
+          ? (event: React.MouseEvent) => toggleExpand(node.path, event)
+          : undefined,
+      }, hasChildren ? h(ArchiveChevronIcon, { expanded: isOpen }) : null),
+      h(ArchiveFolderIcon),
+      h('span', { className: 'preview-archive-tree-label', title: node.name }, node.name),
+    ),
+    isOpen
+      ? node.children.map((child) =>
+          renderTreeNode(child, depth + 1, currentDir, expanded, toggleExpand, onOpenDirectory))
+      : null,
+  );
+}
+
+function sortHeader(
+  label: string,
+  key: SortKey,
+  sortKey: SortKey,
+  sortDir: SortDir,
+  onSort: (key: SortKey) => void,
+): React.ReactElement {
+  const active = sortKey === key;
+  return h('th', {
+    className: `preview-archive-th${active ? ' is-active' : ''}`,
+    scope: 'col',
+    onClick: () => onSort(key),
+  },
+    h('span', null, label),
+    h('span', { className: 'preview-archive-sort', 'aria-hidden': true }, active ? (sortDir === 'asc' ? '↑' : '↓') : '↕'),
+  );
+}
+
+function sortTableRows(rows: TreeRow[], sortKey: SortKey, sortDir: SortDir): TreeRow[] {
+  const factor = sortDir === 'asc' ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    if (left.kind === 'directory' && right.kind !== 'directory') return -1;
+    if (left.kind !== 'directory' && right.kind === 'directory') return 1;
+    const leftValue = sortValue(left, sortKey);
+    const rightValue = sortValue(right, sortKey);
+    if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+      return (leftValue - rightValue) * factor;
+    }
+    return String(leftValue).localeCompare(String(rightValue), 'zh-CN') * factor;
+  });
+}
+
+function sortValue(row: TreeRow, key: SortKey): string | number {
+  if (row.kind === 'up') return '';
+  if (row.kind === 'directory') {
+    if (key === 'name') return row.name;
+    if (key === 'modified') return row.entry?.lastModified || '';
+    if (key === 'size') return row.entry?.compressedSize ?? 0;
+    return row.entry?.uncompressedSize ?? 0;
+  }
+  if (key === 'name') return row.name;
+  if (key === 'modified') return row.entry.lastModified || '';
+  if (key === 'size') return row.entry.compressedSize;
+  return row.entry.uncompressedSize;
+}
+
+function formatModified(value?: string): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function buildArchiveTree(entries: ArchiveEntry[]): TreeNode[] {
+  const root: TreeNode[] = [];
+  const byPath = new Map<string, TreeNode>();
+
+  const ensureDir = (dirPath: string, name: string): TreeNode => {
+    const existing = byPath.get(dirPath);
+    if (existing) return existing;
+    const node: TreeNode = { path: dirPath, name, children: [] };
+    byPath.set(dirPath, node);
+    const parent = parentDir(dirPath);
+    if (!parent) root.push(node);
+    else ensureDir(parent, parent.replace(/\/+$/u, '').split('/').pop() || parent).children.push(node);
+    return node;
+  };
+
+  for (const entry of entries) {
+    const path = normalizeEntryPath(entry.path);
+    if (!path) continue;
+    const parts = path.replace(/\/+$/u, '').split('/').filter(Boolean);
+    for (let index = 1; index <= parts.length; index += 1) {
+      const isLast = index === parts.length;
+      if (isLast && !entry.directory && !path.endsWith('/')) continue;
+      const dirPath = `${parts.slice(0, index).join('/')}/`;
+      ensureDir(dirPath, parts[index - 1]);
+    }
+  }
+
+  const sortNodes = (nodes: TreeNode[]) => {
+    nodes.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    for (const node of nodes) sortNodes(node.children);
+  };
+  sortNodes(root);
+  return root;
+}
+
+function ArchiveChevronIcon({ expanded }: { expanded: boolean }): React.ReactElement {
+  return h('svg', {
+    className: `preview-archive-icon preview-archive-chevron${expanded ? ' is-expanded' : ''}`,
+    viewBox: '0 0 16 16',
+    width: 12,
+    height: 12,
+    'aria-hidden': true,
+  }, h('path', {
+    d: 'M6 3.5 10.5 8 6 12.5',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.5,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  }));
+}
+
+function ArchiveFolderIcon(): React.ReactElement {
+  return h('svg', {
+    className: 'preview-archive-icon preview-archive-folder',
+    viewBox: '0 0 16 16',
+    width: 14,
+    height: 14,
+    'aria-hidden': true,
+  }, h('path', {
+    d: 'M1.5 3.5h4l1.2 1.5H14.5v7.5H1.5z',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.2,
+    strokeLinejoin: 'round',
+  }));
+}
+
+function ArchiveFileIcon(): React.ReactElement {
+  return h('svg', {
+    className: 'preview-archive-icon preview-archive-file',
+    viewBox: '0 0 16 16',
+    width: 14,
+    height: 14,
+    'aria-hidden': true,
+  }, h('path', {
+    d: 'M4 1.5h5.5L12.5 5v9.5H4z',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.2,
+    strokeLinejoin: 'round',
+  }), h('path', {
+    d: 'M9.5 1.5V5H12.5',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.2,
+    strokeLinejoin: 'round',
+  }));
+}
+
+function ArchiveZipIcon(): React.ReactElement {
+  return h('svg', {
+    className: 'preview-archive-icon preview-archive-zip',
+    viewBox: '0 0 16 16',
+    width: 14,
+    height: 14,
+    'aria-hidden': true,
+  }, h('path', {
+    d: 'M3.5 2.5h9v11h-9z',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.2,
+  }), h('path', {
+    d: 'M7.5 3.5h1v1.2h-1zm0 2.2h1v1.2h-1zm0 2.2h1V10h1v1.5H7.5z',
+    fill: 'currentColor',
+  }));
 }
 
 export function normalizeArchiveEntries(entries: ArchiveEntry[]): ArchiveEntry[] {
@@ -333,7 +657,7 @@ export function listCurrentFolder(entries: ArchiveEntry[], currentDir: string): 
     });
   }
 
-  const directories = new Map<string, string>();
+  const directories = new Map<string, { name: string; entry?: ArchiveEntry }>();
   const files: Array<{ entry: ArchiveEntry; name: string }> = [];
 
   for (const entry of entries) {
@@ -348,7 +672,15 @@ export function listCurrentFolder(entries: ArchiveEntry[], currentDir: string): 
     if (segments.length > 1 || entry.directory || path.endsWith('/')) {
       const name = segments[0];
       const dirPath = `${prefix}${name}/`;
-      if (!directories.has(dirPath)) directories.set(dirPath, name);
+      const existing = directories.get(dirPath);
+      if (!existing) {
+        directories.set(dirPath, {
+          name,
+          entry: (entry.directory || path.endsWith('/')) && segments.length === 1 ? entry : undefined,
+        });
+      } else if (!existing.entry && (entry.directory || path.endsWith('/')) && segments.length === 1) {
+        existing.entry = entry;
+      }
       continue;
     }
 
@@ -356,8 +688,8 @@ export function listCurrentFolder(entries: ArchiveEntry[], currentDir: string): 
   }
 
   const directoryRows = [...directories.entries()]
-    .sort((left, right) => left[1].localeCompare(right[1], 'zh-CN'))
-    .map(([path, name]) => ({ kind: 'directory' as const, path, name }));
+    .sort((left, right) => left[1].name.localeCompare(right[1].name, 'zh-CN'))
+    .map(([path, item]) => ({ kind: 'directory' as const, path, name: item.name, entry: item.entry }));
   const fileRows = files
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     .map((item) => ({ kind: 'file' as const, entry: item.entry, name: item.name }));
@@ -370,11 +702,15 @@ function entriesFromJsZip(zip: JSZip): ArchiveEntry[] {
   zip.forEach((relativePath, file) => {
     const path = normalizeEntryPath(relativePath);
     if (!path) return;
+    const lastModified = file.date instanceof Date && !Number.isNaN(file.date.getTime())
+      ? file.date.toISOString()
+      : undefined;
     entries.push({
       path,
       directory: file.dir || path.endsWith('/'),
       compressedSize: 0,
       uncompressedSize: 0,
+      ...(lastModified ? { lastModified } : {}),
     });
   });
   return normalizeArchiveEntries(entries);

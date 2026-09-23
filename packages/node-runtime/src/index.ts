@@ -1,5 +1,6 @@
 export * from './ai/chatPrompt';
 export * from './ai/ai-chat-host';
+export * from './ai/agent-tools';
 export * from './ai/openai-chat-client';
 export * from './conversion/document-conversion';
 export * from './export/docx-export';

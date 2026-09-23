@@ -33,7 +33,7 @@ describe('spreadsheetTheme', () => {
     let rendered = 0;
     const data = {
       settings: { style: { bgcolor: '#ffffff', color: '#0a0a0a' } },
-      getCellStyleOrDefault: () => ({ bgcolor: '#ffffff', color: '#0a0a0a' }),
+      getCellStyleOrDefault: (_ri: number, _ci: number) => ({ bgcolor: '#ffffff', color: '#0a0a0a' }),
     };
     const drawCalls: Array<Record<string, unknown>> = [];
     const draw = {

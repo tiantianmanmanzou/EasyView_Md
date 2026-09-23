@@ -5,6 +5,10 @@ import {
   xsSheetsToWorkbookBytes,
 } from '../src/spreadsheet/xSpreadsheetBridge';
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.slice().buffer;
+}
+
 describe('editable spreadsheet formats', () => {
   it('enables edit for xlsx/xlsm only', () => {
     expect(isEditableSpreadsheetFile('a.xlsx')).toBe(true);
@@ -27,7 +31,7 @@ describe('xSpreadsheetBridge', () => {
     sheet.mergeCells('B2:C3');
     const source = await workbook.xlsx.writeBuffer();
     const bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
-    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const ab = toArrayBuffer(bytes);
 
     const sheets = await workbookBytesToXsSheets(ab);
     expect(sheets[0]?.name).toBe('功能清单');
@@ -39,7 +43,7 @@ describe('xSpreadsheetBridge', () => {
 
     const rewritten = await xsSheetsToWorkbookBytes(sheets);
     const again = await workbookBytesToXsSheets(
-      rewritten.buffer.slice(rewritten.byteOffset, rewritten.byteOffset + rewritten.byteLength),
+      toArrayBuffer(rewritten),
     );
     expect(again[0]?.rows?.[0]?.cells?.[0]?.text).toBe('序号');
     expect(again[0]?.rows?.[1]?.cells?.[1]?.text).toBe('数据资产运营');
@@ -56,7 +60,7 @@ describe('xSpreadsheetBridge', () => {
     }
     const source = await workbook.xlsx.writeBuffer();
     const bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
-    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const ab = toArrayBuffer(bytes);
     const sheets = await workbookBytesToXsSheets(ab);
     expect(sheets[0]?.name).toBe('复杂');
     expect(sheets[0]?.rows?.[0]?.cells?.[0]?.text).toBe('v0');

@@ -4,6 +4,7 @@ import { AiChatHost } from '@easyview/node-runtime';
 import type { HostToEditorMessage } from '@easyview/contracts';
 
 const AI_CHAT_API_KEY_SECRET = 'easyview.aiChat.apiKey';
+const AI_CHAT_WEB_SEARCH_API_KEY_SECRET = 'easyview.aiChat.webSearch.braveApiKey';
 
 function mimeTypeForPath(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();
@@ -29,6 +30,7 @@ function mimeTypeForPath(filePath: string): string {
 export function createPanelAiChatHost(
   context: vscode.ExtensionContext,
   postMessage: (message: HostToEditorMessage) => void,
+  workspaceRootPath: string | null,
 ): AiChatHost {
   const settingsFilePath = path.join(context.globalStorageUri.fsPath, 'ai-chat-settings.json');
   return new AiChatHost({
@@ -38,8 +40,13 @@ export function createPanelAiChatHost(
       setApiKey: async (apiKey) => {
         await context.secrets.store(AI_CHAT_API_KEY_SECRET, apiKey);
       },
+      getWebSearchApiKey: async () => (await context.secrets.get(AI_CHAT_WEB_SEARCH_API_KEY_SECRET)) ?? null,
+      setWebSearchApiKey: async (apiKey) => {
+        await context.secrets.store(AI_CHAT_WEB_SEARCH_API_KEY_SECRET, apiKey);
+      },
     },
     postMessage,
+    getToolContext: () => ({ workspaceRootPath }),
     pickImages: {
       pickImages: async () => {
         const selected = await vscode.window.showOpenDialog({

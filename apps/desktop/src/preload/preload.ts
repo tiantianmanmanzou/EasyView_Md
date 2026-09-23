@@ -13,12 +13,15 @@ import type {
   SaveDocumentResult,
   WorkspaceCreateRequest,
   WorkspaceDeleteRequest,
+  WorkspaceMoveRequest,
   WorkspacePasteRequest,
   WorkspaceRenameRequest,
+  WorkspaceReorderRequest,
   WorkspaceContextCommand,
   DesktopTabContextCommand,
   DesktopWorkspaceState,
   WorkspaceEntry,
+  WorkspaceTreeSortMode,
   HttpPreviewRequest,
 } from '../contracts';
 import type { EasyViewDesktopApi } from './desktopApi';
@@ -98,6 +101,33 @@ const api: EasyViewDesktopApi = {
       assertRelativePath(relativePath);
       return ipcRenderer.invoke('workspace.readDirectory', relativePath) as Promise<OperationResult<WorkspaceEntry[]>>;
     },
+    getSortMode: () => ipcRenderer.invoke('workspace.getSortMode') as Promise<OperationResult<WorkspaceTreeSortMode>>,
+    setSortMode: (sortMode: WorkspaceTreeSortMode) => {
+      if (sortMode !== 'name' && sortMode !== 'created' && sortMode !== 'custom') {
+        throw new TypeError('排序方式无效');
+      }
+      return ipcRenderer.invoke('workspace.setSortMode', sortMode) as Promise<OperationResult<WorkspaceTreeSortMode>>;
+    },
+    getShowCreatedAt: () => ipcRenderer.invoke('workspace.getShowCreatedAt') as Promise<OperationResult<boolean>>,
+    setShowCreatedAt: (showCreatedAt: boolean) => {
+      if (typeof showCreatedAt !== 'boolean') throw new TypeError('showCreatedAt 无效');
+      return ipcRenderer.invoke('workspace.setShowCreatedAt', showCreatedAt) as Promise<OperationResult<boolean>>;
+    },
+    getShowUpdatedAt: () => ipcRenderer.invoke('workspace.getShowUpdatedAt') as Promise<OperationResult<boolean>>,
+    setShowUpdatedAt: (showUpdatedAt: boolean) => {
+      if (typeof showUpdatedAt !== 'boolean') throw new TypeError('showUpdatedAt 无效');
+      return ipcRenderer.invoke('workspace.setShowUpdatedAt', showUpdatedAt) as Promise<OperationResult<boolean>>;
+    },
+    getShowDotEntries: () => ipcRenderer.invoke('workspace.getShowDotEntries') as Promise<OperationResult<boolean>>,
+    setShowDotEntries: (showDotEntries: boolean) => {
+      if (typeof showDotEntries !== 'boolean') throw new TypeError('showDotEntries 无效');
+      return ipcRenderer.invoke('workspace.setShowDotEntries', showDotEntries) as Promise<OperationResult<boolean>>;
+    },
+    getShowTimestampHover: () => ipcRenderer.invoke('workspace.getShowTimestampHover') as Promise<OperationResult<boolean>>,
+    setShowTimestampHover: (showTimestampHover: boolean) => {
+      if (typeof showTimestampHover !== 'boolean') throw new TypeError('showTimestampHover 无效');
+      return ipcRenderer.invoke('workspace.setShowTimestampHover', showTimestampHover) as Promise<OperationResult<boolean>>;
+    },
     create: (request: WorkspaceCreateRequest) => {
       assertRelativePath(request?.parentRelativePath);
       if (!request || (request.kind !== 'file' && request.kind !== 'directory')) throw new TypeError('新建节点参数无效');
@@ -108,6 +138,17 @@ const api: EasyViewDesktopApi = {
       assertRelativePath(request?.relativePath);
       assertString(request?.newName, 'newName');
       return ipcRenderer.invoke('workspace.rename', request) as Promise<OperationResult<WorkspaceEntry>>;
+    },
+    move: (request: WorkspaceMoveRequest) => {
+      assertRelativePath(request?.relativePath);
+      assertRelativePath(request?.targetParentRelativePath);
+      return ipcRenderer.invoke('workspace.move', request) as Promise<OperationResult<WorkspaceEntry>>;
+    },
+    reorder: (request: WorkspaceReorderRequest) => {
+      assertRelativePath(request?.parentRelativePath);
+      assertString(request?.movedName, 'movedName');
+      if (!Array.isArray(request?.siblingNames)) throw new TypeError('siblingNames 无效');
+      return ipcRenderer.invoke('workspace.reorder', request) as Promise<OperationResult<boolean>>;
     },
     delete: (request: WorkspaceDeleteRequest) => {
       assertRelativePath(request?.relativePath);

@@ -1,6 +1,13 @@
 import * as vscode from 'vscode';
 
-const output = vscode.window.createOutputChannel('EasyView_Md Open Debug');
+let output: vscode.OutputChannel | undefined;
+
+function getOutput(): vscode.OutputChannel {
+  if (!output) {
+    output = vscode.window.createOutputChannel('EasyView_Md Open Debug');
+  }
+  return output;
+}
 
 function stringifyMeta(meta?: Record<string, unknown>): string {
   if (!meta) return '';
@@ -11,9 +18,9 @@ function stringifyMeta(meta?: Record<string, unknown>): string {
 }
 
 export function logOpenWithDebug(stage: string, meta?: Record<string, unknown>): void {
-  output.appendLine(`[${new Date().toISOString()}] ${stage}${stringifyMeta(meta)}`);
+  getOutput().appendLine(`[${new Date().toISOString()}] ${stage}${stringifyMeta(meta)}`);
 }
 
 export function showOpenWithDebugChannel(preserveFocus = true): void {
-  output.show(preserveFocus);
+  getOutput().show(preserveFocus);
 }

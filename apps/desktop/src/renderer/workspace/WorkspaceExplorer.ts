@@ -1,6 +1,11 @@
-import type { DesktopWorkspaceState, WorkspaceEntry } from '../../contracts';
+import type { DesktopWorkspaceState, WorkspaceEntry, WorkspaceTreeSortMode } from '../../contracts';
 import type { EasyViewDesktopApi } from '../../preload/desktopApi';
-import { resolveWorkspaceTreeIcon } from '@easyview/contracts';
+import {
+  describeWorkspaceEntryTimestamps,
+  filterWorkspaceEntriesByDotVisibility,
+  resolveWorkspaceTreeDropMode,
+  resolveWorkspaceTreeIcon,
+} from '@easyview/contracts';
 
 interface WorkspaceExplorerOptions {
   api: EasyViewDesktopApi;
@@ -10,6 +15,12 @@ interface WorkspaceExplorerOptions {
   onOpenWithDefaultApp(relativePath: string): void;
   onRevealInFolder(relativePath: string): void;
 }
+
+const SORT_MODE_LABELS: Record<WorkspaceTreeSortMode, string> = {
+  created: 'Sort by Created Time',
+  name: 'Sort by Name',
+  custom: 'Custom',
+};
 
 export class WorkspaceExplorer {
   private state: DesktopWorkspaceState | null = null;
@@ -22,6 +33,22 @@ export class WorkspaceExplorer {
   private resizing = false;
   private readonly subscriptions: Array<{ unsubscribe(): void }> = [];
   private activeRelativePath: string | null = null;
+  /** When true, selection tracks the active tab. User tree clicks turn this off until the tab changes. */
+  private selectionFollowsActive = true;
+  private sortMode: WorkspaceTreeSortMode = 'name';
+  private showCreatedAt = false;
+  private showUpdatedAt = false;
+  private showDotEntries = true;
+  private showTimestampHover = true;
+  private sortMenuOpen = false;
+  private timestampTooltipEl: HTMLElement | null = null;
+  private dragRelativePath: string | null = null;
+  private dropIndicator: HTMLElement | null = null;
+  private dropHoverExpandTimer: number | undefined;
+  private dropIntent: {
+    mode: 'before' | 'into';
+    targetRelativePath: string;
+  } | null = null;
 
   constructor(private readonly options: WorkspaceExplorerOptions) {}
 
@@ -30,8 +57,10 @@ export class WorkspaceExplorer {
     if (!result.ok) throw new Error(result.message);
     this.state = result.value;
     this.activeRelativePath = null;
+    this.selectionFollowsActive = true;
     this.subscriptions.push(this.options.api.workspace.onChanged((paths) => { void this.refreshChanged(paths); }));
     this.subscriptions.push(this.options.api.workspace.onContextCommand((command, relativePath) => {
+      this.selectionFollowsActive = false;
       this.select(relativePath);
       if (command === 'rename') this.beginRename(relativePath);
       if (command === 'paste') void this.refreshChanged([parentRelativePath(relativePath)]);
@@ -39,13 +68,19 @@ export class WorkspaceExplorer {
     this.options.container.tabIndex = 0;
     this.options.container.addEventListener('keydown', this.handleKeyDown);
     this.render();
-    if (this.state.rootPath) await this.loadDirectory('');
+    if (this.state.rootPath) {
+      await this.loadSortMode();
+      await this.loadDirectory('');
+    }
     return this.state;
   }
 
   dispose(): void {
     for (const subscription of this.subscriptions) subscription.unsubscribe();
     this.options.container.removeEventListener('keydown', this.handleKeyDown);
+    this.hideTimestampTooltip();
+    this.timestampTooltipEl?.remove();
+    this.timestampTooltipEl = null;
   }
 
   toggle(): void {
@@ -59,6 +94,7 @@ export class WorkspaceExplorer {
     if (!result.ok || !result.value) return;
     this.state = result.value;
     this.activeRelativePath = null;
+    this.selectionFollowsActive = true;
     this.selectedRelativePath = null;
     this.selectedRelativePaths.clear();
     this.selectionAnchorRelativePath = null;
@@ -66,6 +102,7 @@ export class WorkspaceExplorer {
     this.pendingCreate = null;
     this.renameRelativePath = null;
     this.render();
+    await this.loadSortMode();
     await this.loadDirectory('');
   }
 
@@ -76,17 +113,32 @@ export class WorkspaceExplorer {
   setActiveDocument(filePath: string | null): void { this.setActiveRelativePath(this.relativePathFor(filePath)); }
 
   setActiveRelativePath(relativePath: string | null): void {
-    if (!this.state || this.activeRelativePath === relativePath) return;
-    const expanded = new Set(this.state.expandedRelativePaths);
+    if (!this.state) return;
+    const changed = this.activeRelativePath !== relativePath;
+    if (!changed) {
+      // Same open file: never yank selection back while the user is browsing the tree.
+      return;
+    }
+
     this.activeRelativePath = relativePath;
-    this.select(relativePath);
+    // Switching the active tab resumes follow-mode (default lock to the visible tab).
+    this.selectionFollowsActive = true;
     if (relativePath) {
+      this.select(relativePath);
+      const expanded = new Set(this.state.expandedRelativePaths);
       const segments = relativePath.split('/');
       segments.pop();
-      for (let index = 1; index <= segments.length; index += 1) expanded.add(segments.slice(0, index).join('/'));
+      for (let index = 1; index <= segments.length; index += 1) {
+        expanded.add(segments.slice(0, index).join('/'));
+      }
+      this.updateState({ expandedRelativePaths: [...expanded] });
+      void this.refreshChanged([...expanded, '']);
+    } else {
+      this.selectedRelativePath = null;
+      this.selectedRelativePaths.clear();
+      this.selectionAnchorRelativePath = null;
+      this.render();
     }
-    this.updateState({ expandedRelativePaths: [...expanded] });
-    void this.refreshChanged([...expanded, '']);
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -221,12 +273,15 @@ export class WorkspaceExplorer {
     const previousTree = container.querySelector<HTMLElement>('.workspace-tree');
     const previousScrollTop = previousTree?.scrollTop ?? 0;
     const previousScrollLeft = previousTree?.scrollLeft ?? 0;
+    this.clearDropVisuals();
+    this.dropIndicator = null;
+    this.hideTimestampTooltip();
     container.classList.toggle('is-hidden', !state?.explorerVisible);
     if (state) container.style.width = `${state.explorerWidth}px`;
     container.replaceChildren();
     if (!state?.rootPath) {
       const empty = document.createElement('button');
-      empty.type = 'button'; empty.className = 'workspace-empty'; empty.textContent = '打开文件夹';
+      empty.type = 'button'; empty.className = 'workspace-empty'; empty.textContent = 'Open Folder';
       empty.addEventListener('click', () => { void this.openFolder(); });
       container.appendChild(empty);
       return;
@@ -238,17 +293,81 @@ export class WorkspaceExplorer {
     title.textContent = state.rootPath.split(/[\\/]/).at(-1) || state.rootPath;
     header.appendChild(title);
     for (const [label, titleText, action] of [
-      ['＋', '新建文件', () => this.beginCreate('', 'file')],
-      ['▣', '新建文件夹', () => this.beginCreate('', 'directory')],
-      ['↻', '刷新', () => { this.entriesByDirectory.clear(); void this.refreshExpanded(); }],
+      ['⇅', 'Sort', () => { this.sortMenuOpen = !this.sortMenuOpen; this.render(); }],
+      ['＋', 'New File', () => this.beginCreate('', 'file')],
+      ['▣', 'New Folder', () => this.beginCreate('', 'directory')],
+      ['↻', 'Refresh', () => { this.entriesByDirectory.clear(); void this.refreshExpanded(); }],
     ] as const) {
       const button = document.createElement('button');
       button.type = 'button'; button.className = 'workspace-action';
       button.textContent = label; button.title = titleText;
-      button.addEventListener('click', action);
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        action();
+      });
       header.appendChild(button);
     }
     container.appendChild(header);
+
+    if (this.sortMenuOpen) {
+      const menu = document.createElement('div');
+      menu.className = 'workspace-sort-menu';
+      for (const mode of ['created', 'name', 'custom'] as const) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'workspace-sort-menu-item';
+        item.setAttribute('role', 'menuitemcheckbox');
+        item.setAttribute('aria-checked', String(this.sortMode === mode));
+        const label = document.createElement('span');
+        label.className = 'workspace-menu-item-label';
+        label.textContent = SORT_MODE_LABELS[mode];
+        item.appendChild(label);
+        const check = document.createElement('span');
+        check.className = 'workspace-menu-item-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.textContent = this.sortMode === mode ? '✓' : '';
+        item.appendChild(check);
+        item.addEventListener('click', () => { void this.changeSortMode(mode); });
+        menu.appendChild(item);
+      }
+      const separator = document.createElement('div');
+      separator.className = 'workspace-sort-menu-separator';
+      menu.appendChild(separator);
+      const appendToggle = (text: string, checked: boolean, onClick: () => void) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'workspace-sort-menu-item';
+        item.setAttribute('role', 'menuitemcheckbox');
+        item.setAttribute('aria-checked', String(checked));
+        const label = document.createElement('span');
+        label.className = 'workspace-menu-item-label';
+        label.textContent = text;
+        item.appendChild(label);
+        const check = document.createElement('span');
+        check.className = 'workspace-menu-item-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.textContent = checked ? '✓' : '';
+        item.appendChild(check);
+        item.addEventListener('click', onClick);
+        menu.appendChild(item);
+      };
+      appendToggle('Show Created Time', this.showCreatedAt, () => {
+        void this.changeShowCreatedAt(!this.showCreatedAt);
+      });
+      appendToggle('Show Updated Time', this.showUpdatedAt, () => {
+        void this.changeShowUpdatedAt(!this.showUpdatedAt);
+      });
+      appendToggle('Show Time on Hover', this.showTimestampHover, () => {
+        void this.changeShowTimestampHover(!this.showTimestampHover);
+      });
+      const dotSeparator = document.createElement('div');
+      dotSeparator.className = 'workspace-sort-menu-separator';
+      menu.appendChild(dotSeparator);
+      appendToggle('Show Dotfiles and Folders', this.showDotEntries, () => {
+        void this.changeShowDotEntries(!this.showDotEntries);
+      });
+      container.appendChild(menu);
+    }
 
     const tree = document.createElement('div');
     tree.className = 'workspace-tree';
@@ -266,7 +385,10 @@ export class WorkspaceExplorer {
 
   private renderDirectory(relativePath: string, depth: number): DocumentFragment {
     const fragment = document.createDocumentFragment();
-    const entries = this.entriesByDirectory.get(relativePath) ?? [];
+    const entries = filterWorkspaceEntriesByDotVisibility(
+      this.entriesByDirectory.get(relativePath) ?? [],
+      this.showDotEntries,
+    );
     for (const entry of entries) {
       const row = document.createElement('div');
       row.className = `workspace-entry workspace-entry-${entry.kind}`;
@@ -301,6 +423,7 @@ export class WorkspaceExplorer {
         const label = document.createElement('span'); label.textContent = entry.name; name.appendChild(label);
       }
       name.addEventListener('click', (event) => {
+        this.selectionFollowsActive = false;
         this.select(entry.relativePath, {
           shiftKey: event.shiftKey,
           metaKey: event.metaKey,
@@ -308,25 +431,94 @@ export class WorkspaceExplorer {
         });
         if (event.shiftKey || event.metaKey || event.ctrlKey) return;
         if (entry.kind === 'directory') this.toggleDirectory(entry.relativePath);
-        else void this.options.onOpenFile(entry.relativePath).then((opened) => { if (opened) this.setActiveRelativePath(entry.relativePath); });
+        else {
+          void this.options.onOpenFile(entry.relativePath).then((opened) => {
+            if (!opened) return;
+            // Opening from the tree should lock selection to that file again.
+            this.selectionFollowsActive = true;
+            this.setActiveRelativePath(entry.relativePath);
+          });
+        }
       });
       row.addEventListener('contextmenu', (event) => {
         event.preventDefault();
+        this.selectionFollowsActive = false;
         if (!this.selectedRelativePaths.has(entry.relativePath)) this.select(entry.relativePath);
         void this.options.api.workspace.showContextMenu(entry.relativePath, entry.kind);
       });
+      this.attachDragHandlers(row, entry);
       row.appendChild(name);
+      this.appendEntryTimestamps(row, entry);
       if (entry.kind === 'directory') {
         const create = document.createElement('button');
-        create.type = 'button'; create.className = 'workspace-entry-create'; create.textContent = '＋'; create.title = '新建';
+        create.type = 'button'; create.className = 'workspace-entry-create'; create.textContent = '＋'; create.title = 'New File';
         create.addEventListener('click', (event) => { event.stopPropagation(); this.beginCreate(entry.relativePath, 'file'); });
         row.appendChild(create);
+      } else if (this.showCreatedAt || this.showUpdatedAt) {
+        const spacer = document.createElement('span');
+        spacer.className = 'workspace-entry-create-spacer';
+        row.appendChild(spacer);
       }
       fragment.appendChild(row);
       if (entry.kind === 'directory' && expanded) fragment.appendChild(this.renderDirectory(entry.relativePath, depth + 1));
     }
     if (this.pendingCreate?.parentRelativePath === relativePath) fragment.appendChild(this.renderCreateInput(depth));
     return fragment;
+  }
+
+  private appendEntryTimestamps(row: HTMLElement, entry: WorkspaceEntry): void {
+    const display = describeWorkspaceEntryTimestamps(entry, {
+      showCreatedAt: this.showCreatedAt,
+      showUpdatedAt: this.showUpdatedAt,
+    });
+    if (!display) return;
+    if (this.showTimestampHover) {
+      row.addEventListener('pointerenter', (event) => {
+        this.showTimestampTooltip(display.title, event.clientX, event.clientY);
+      });
+      row.addEventListener('pointerleave', () => this.hideTimestampTooltip());
+    }
+    if (display.parts.length === 0) return;
+    row.classList.add('has-timestamps');
+    const meta = document.createElement('span');
+    meta.className = 'workspace-entry-timestamps';
+    for (const part of display.parts) {
+      const item = document.createElement('span');
+      item.className = `workspace-entry-timestamp is-${part.kind}`;
+      const icon = document.createElement('span');
+      icon.className = `workspace-entry-timestamp-icon is-${part.kind}`;
+      icon.setAttribute('aria-hidden', 'true');
+      const value = document.createElement('span');
+      value.className = 'workspace-entry-timestamp-value';
+      value.textContent = part.value;
+      item.append(icon, value);
+      meta.appendChild(item);
+    }
+    row.appendChild(meta);
+  }
+
+  private showTimestampTooltip(text: string, x: number, y: number): void {
+    const el = this.timestampTooltipEl ?? document.createElement('div');
+    if (!this.timestampTooltipEl) {
+      el.className = 'workspace-timestamp-tooltip';
+      document.body.appendChild(el);
+      this.timestampTooltipEl = el;
+    }
+    el.textContent = text;
+    el.hidden = false;
+    const pad = 8;
+    const width = el.offsetWidth;
+    const height = el.offsetHeight;
+    let left = x + 12;
+    let top = y + 16;
+    if (left + width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - width - pad);
+    if (top + height > window.innerHeight - pad) top = Math.max(pad, y - height - 12);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }
+
+  private hideTimestampTooltip(): void {
+    if (this.timestampTooltipEl) this.timestampTooltipEl.hidden = true;
   }
 
   private renderRenameInput(entry: WorkspaceEntry): HTMLInputElement {
@@ -423,6 +615,295 @@ export class WorkspaceExplorer {
     };
     const onEnd = () => { this.resizing = false; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onEnd); };
     window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onEnd);
+  }
+
+  private async loadSortMode(): Promise<void> {
+    const [sortResult, createdResult, updatedResult, hoverResult, dotResult] = await Promise.all([
+      this.options.api.workspace.getSortMode(),
+      this.options.api.workspace.getShowCreatedAt(),
+      this.options.api.workspace.getShowUpdatedAt(),
+      this.options.api.workspace.getShowTimestampHover(),
+      this.options.api.workspace.getShowDotEntries(),
+    ]);
+    if (sortResult.ok) this.sortMode = sortResult.value;
+    if (createdResult.ok) this.showCreatedAt = createdResult.value;
+    if (updatedResult.ok) this.showUpdatedAt = updatedResult.value;
+    if (hoverResult.ok) this.showTimestampHover = hoverResult.value;
+    if (dotResult.ok) this.showDotEntries = dotResult.value;
+  }
+
+  private async changeSortMode(sortMode: WorkspaceTreeSortMode): Promise<void> {
+    this.sortMenuOpen = false;
+    if (sortMode === this.sortMode) {
+      this.render();
+      return;
+    }
+    const result = await this.options.api.workspace.setSortMode(sortMode);
+    if (!result.ok) {
+      window.alert(result.message);
+      this.render();
+      return;
+    }
+    this.sortMode = result.value;
+    this.entriesByDirectory.clear();
+    await this.refreshExpanded();
+  }
+
+  private async changeShowCreatedAt(showCreatedAt: boolean): Promise<void> {
+    this.sortMenuOpen = false;
+    const result = await this.options.api.workspace.setShowCreatedAt(showCreatedAt);
+    if (!result.ok) {
+      window.alert(result.message);
+      this.render();
+      return;
+    }
+    this.showCreatedAt = result.value;
+    this.render();
+  }
+
+  private async changeShowUpdatedAt(showUpdatedAt: boolean): Promise<void> {
+    this.sortMenuOpen = false;
+    const result = await this.options.api.workspace.setShowUpdatedAt(showUpdatedAt);
+    if (!result.ok) {
+      window.alert(result.message);
+      this.render();
+      return;
+    }
+    this.showUpdatedAt = result.value;
+    this.render();
+  }
+
+  private async changeShowTimestampHover(showTimestampHover: boolean): Promise<void> {
+    this.sortMenuOpen = false;
+    this.hideTimestampTooltip();
+    const result = await this.options.api.workspace.setShowTimestampHover(showTimestampHover);
+    if (!result.ok) {
+      window.alert(result.message);
+      this.render();
+      return;
+    }
+    this.showTimestampHover = result.value;
+    this.render();
+  }
+
+  private async changeShowDotEntries(showDotEntries: boolean): Promise<void> {
+    this.sortMenuOpen = false;
+    const result = await this.options.api.workspace.setShowDotEntries(showDotEntries);
+    if (!result.ok) {
+      window.alert(result.message);
+      this.render();
+      return;
+    }
+    this.showDotEntries = result.value;
+    this.render();
+  }
+
+  private attachDragHandlers(row: HTMLElement, entry: WorkspaceEntry): void {
+    row.draggable = true;
+    row.addEventListener('dragstart', (event) => {
+      this.dragRelativePath = entry.relativePath;
+      event.dataTransfer?.setData('text/plain', entry.relativePath);
+      event.dataTransfer!.effectAllowed = 'move';
+      row.classList.add('is-dragging');
+      this.clearDropVisuals();
+    });
+    row.addEventListener('dragend', () => {
+      this.dragRelativePath = null;
+      row.classList.remove('is-dragging');
+      this.clearDropVisuals();
+    });
+    row.addEventListener('dragover', (event) => {
+      if (!this.dragRelativePath || this.dragRelativePath === entry.relativePath) return;
+      if (
+        entry.kind === 'directory'
+        && (
+          this.dragRelativePath === entry.relativePath
+          || entry.relativePath.startsWith(`${this.dragRelativePath}/`)
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer!.dropEffect = 'move';
+      this.updateDropIntent(row, entry, event.clientY);
+    });
+    row.addEventListener('dragleave', (event) => {
+      const related = event.relatedTarget;
+      if (related instanceof Node && row.contains(related)) return;
+      if (this.dropIntent?.targetRelativePath === entry.relativePath) {
+        this.clearDropVisuals();
+      }
+    });
+    row.addEventListener('drop', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
+      const intent = this.dropIntent;
+      this.clearDropVisuals();
+      if (!source || source === entry.relativePath) return;
+      const mode = intent?.targetRelativePath === entry.relativePath
+        ? intent.mode
+        : this.resolveDropMode(entry, event.clientY, row);
+      void this.handleDrop(source, entry, mode);
+    });
+  }
+
+  private resolveDropMode(
+    entry: WorkspaceEntry,
+    clientY: number,
+    row: HTMLElement,
+  ): 'before' | 'into' {
+    const rect = row.getBoundingClientRect();
+    return resolveWorkspaceTreeDropMode(entry.kind, clientY, rect.top, rect.height);
+  }
+
+  private updateDropIntent(row: HTMLElement, entry: WorkspaceEntry, clientY: number): void {
+    const mode = this.resolveDropMode(entry, clientY, row);
+    this.dropIntent = { mode, targetRelativePath: entry.relativePath };
+    this.renderDropVisuals(row, entry, mode);
+  }
+
+  private renderDropVisuals(row: HTMLElement, entry: WorkspaceEntry, mode: 'before' | 'into'): void {
+    this.options.container.querySelectorAll('.workspace-entry.is-drop-into').forEach((node) => {
+      node.classList.remove('is-drop-into');
+    });
+    if (!this.dropIndicator) {
+      this.dropIndicator = document.createElement('div');
+      this.dropIndicator.className = 'workspace-drop-indicator';
+      this.options.container.appendChild(this.dropIndicator);
+    }
+
+    if (mode === 'into') {
+      this.dropIndicator.classList.remove('is-visible');
+      row.classList.add('is-drop-into');
+      return;
+    }
+
+    row.classList.remove('is-drop-into');
+    const tree = this.options.container.querySelector('.workspace-tree');
+    const containerRect = this.options.container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const left = (tree?.getBoundingClientRect().left ?? rowRect.left) - containerRect.left;
+    const width = tree?.clientWidth ?? rowRect.width;
+    const top = rowRect.top - containerRect.top - 1;
+    this.dropIndicator.style.left = `${Math.max(0, left + 8)}px`;
+    this.dropIndicator.style.width = `${Math.max(40, width - 16)}px`;
+    this.dropIndicator.style.top = `${top}px`;
+    this.dropIndicator.classList.add('is-visible');
+  }
+
+  private clearDropVisuals(): void {
+    window.clearTimeout(this.dropHoverExpandTimer);
+    this.dropHoverExpandTimer = undefined;
+    this.dropIntent = null;
+    this.options.container.querySelectorAll('.workspace-entry.is-drop-into, .workspace-entry.is-drop-target').forEach((node) => {
+      node.classList.remove('is-drop-into', 'is-drop-target');
+    });
+    if (this.dropIndicator) this.dropIndicator.classList.remove('is-visible');
+  }
+
+  private async handleDrop(
+    sourceRelativePath: string,
+    target: WorkspaceEntry,
+    mode: 'before' | 'into',
+  ): Promise<void> {
+    const sourceParent = parentRelativePath(sourceRelativePath);
+    const sourceName = sourceRelativePath.split('/').at(-1)!;
+    const targetParent = parentRelativePath(target.relativePath);
+
+    if (mode === 'into' && target.kind === 'directory') {
+      if (
+        sourceRelativePath === target.relativePath
+        || target.relativePath.startsWith(`${sourceRelativePath}/`)
+      ) {
+        window.alert('Cannot move a folder into itself or its descendants.');
+        return;
+      }
+      if (sourceParent === target.relativePath) {
+        // Already inside: treat as reorder to end is not requested; no-op.
+        return;
+      }
+      const result = await this.options.api.workspace.move({
+        relativePath: sourceRelativePath,
+        targetParentRelativePath: target.relativePath,
+      });
+      if (!result.ok) {
+        window.alert(result.message);
+        return;
+      }
+      if (this.sortMode !== 'custom') {
+        // Moving into a folder should flip to custom so the new sibling order can be kept.
+        await this.options.api.workspace.setSortMode('custom');
+        this.sortMode = 'custom';
+      }
+      const siblings = (this.entriesByDirectory.get(target.relativePath) ?? [])
+        .map((entry) => entry.name)
+        .filter((name) => name !== sourceName);
+      siblings.push(result.value.name);
+      await this.options.api.workspace.reorder({
+        parentRelativePath: target.relativePath,
+        movedName: result.value.name,
+        siblingNames: siblings,
+      });
+      const expanded = new Set(this.state?.expandedRelativePaths ?? []);
+      expanded.add(target.relativePath);
+      this.updateState({ expandedRelativePaths: [...expanded] });
+      await this.refreshChanged([sourceParent, target.relativePath]);
+      return;
+    }
+
+    // Insert before target (same or different parent).
+    if (sourceParent === targetParent) {
+      await this.reorderBefore(sourceParent, sourceName, target.name);
+      return;
+    }
+
+    const result = await this.options.api.workspace.move({
+      relativePath: sourceRelativePath,
+      targetParentRelativePath: targetParent,
+    });
+    if (!result.ok) {
+      window.alert(result.message);
+      return;
+    }
+    if (this.sortMode !== 'custom') {
+      await this.options.api.workspace.setSortMode('custom');
+      this.sortMode = 'custom';
+    }
+    const siblings = (this.entriesByDirectory.get(targetParent) ?? []).map((entry) => entry.name);
+    if (!siblings.includes(result.value.name)) siblings.push(result.value.name);
+    await this.options.api.workspace.reorder({
+      parentRelativePath: targetParent,
+      movedName: result.value.name,
+      siblingNames: siblings,
+      beforeName: target.name,
+    });
+    await this.refreshChanged([sourceParent, targetParent]);
+  }
+
+  private async reorderBefore(parentRelativePathValue: string, movedName: string, beforeName: string): Promise<void> {
+    if (this.sortMode !== 'custom') {
+      const sortResult = await this.options.api.workspace.setSortMode('custom');
+      if (!sortResult.ok) {
+        window.alert(sortResult.message);
+        return;
+      }
+      this.sortMode = 'custom';
+    }
+    if (movedName === beforeName) return;
+    const siblings = (this.entriesByDirectory.get(parentRelativePathValue) ?? []).map((entry) => entry.name);
+    const result = await this.options.api.workspace.reorder({
+      parentRelativePath: parentRelativePathValue,
+      movedName,
+      siblingNames: siblings,
+      beforeName,
+    });
+    if (!result.ok) {
+      window.alert(result.message);
+      return;
+    }
+    await this.loadDirectory(parentRelativePathValue);
   }
 }
 

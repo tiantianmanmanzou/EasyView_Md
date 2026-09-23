@@ -9,10 +9,17 @@ import type { EditorToHostMessage, HostToEditorMessage } from '@easyview/contrac
 import { normalizeAiChatSettings, type AiChatSettings } from '@easyview/contracts';
 import { buildAiChatMessages } from './chatPrompt';
 import { OpenAiChatError, streamOpenAiChat } from './openai-chat-client';
+import { createAiAgentTools } from './agent-tools';
 
 export interface AiChatSecretStore {
   getApiKey(): Promise<string | null>;
   setApiKey(apiKey: string): Promise<void>;
+  getWebSearchApiKey(): Promise<string | null>;
+  setWebSearchApiKey(apiKey: string): Promise<void>;
+}
+
+export interface AiChatToolContext {
+  workspaceRootPath: string | null;
 }
 
 export interface AiChatImagePicker {
@@ -24,6 +31,7 @@ export interface AiChatHostOptions {
   secretStore: AiChatSecretStore;
   postMessage: (message: HostToEditorMessage) => void;
   pickImages?: AiChatImagePicker;
+  getToolContext?: () => Promise<AiChatToolContext> | AiChatToolContext;
   fetchImpl?: typeof fetch;
 }
 
@@ -53,6 +61,9 @@ export class AiChatHost {
         return;
       case 'aiChat.saveApiKey':
         await this.saveApiKey(message.requestId, message.apiKey);
+        return;
+      case 'aiChat.saveWebSearchApiKey':
+        await this.saveWebSearchApiKey(message.requestId, message.apiKey);
         return;
       case 'aiChat.send':
         void this.runSend(message);
@@ -96,12 +107,16 @@ export class AiChatHost {
 
   private async respondSettings(requestId: string): Promise<void> {
     const settings = await this.loadSettings();
-    const apiKey = await this.options.secretStore.getApiKey();
+    const [apiKey, webSearchApiKey] = await Promise.all([
+      this.options.secretStore.getApiKey(),
+      this.options.secretStore.getWebSearchApiKey(),
+    ]);
     this.options.postMessage({
       type: 'aiChat.settingsResponse',
       requestId,
       settings,
       hasApiKey: Boolean(apiKey?.trim()),
+      hasWebSearchApiKey: Boolean(webSearchApiKey?.trim()),
     });
   }
 
@@ -146,6 +161,27 @@ export class AiChatHost {
     }
   }
 
+  private async saveWebSearchApiKey(requestId: string, apiKey: string): Promise<void> {
+    try {
+      const trimmed = apiKey.trim();
+      if (!trimmed) throw new Error('Web Search API Key 不能为空');
+      await this.options.secretStore.setWebSearchApiKey(trimmed);
+      this.options.postMessage({
+        type: 'aiChat.settingsSaved',
+        requestId,
+        ok: true,
+        message: 'Web Search API Key 已保存',
+      });
+    } catch (error) {
+      this.options.postMessage({
+        type: 'aiChat.settingsSaved',
+        requestId,
+        ok: false,
+        message: toErrorMessage(error),
+      });
+    }
+  }
+
   private async pickImages(): Promise<void> {
     if (!this.options.pickImages) return;
     try {
@@ -177,6 +213,25 @@ export class AiChatHost {
         documentContent: message.documentContent,
         documentFileName: message.documentFileName,
       });
+      const [toolContext, webSearchApiKey] = await Promise.all([
+        this.options.getToolContext?.() ?? { workspaceRootPath: null },
+        this.options.secretStore.getWebSearchApiKey(),
+      ]);
+      const tools = await createAiAgentTools({
+        workspaceRootPath: toolContext.workspaceRootPath,
+        activeDocument: message.mode === 'agent' && message.documentFilePath && message.documentContent !== undefined
+          ? {
+            path: message.documentFilePath,
+            content: message.documentContent,
+            applyPatches: (patches) => {
+              this.options.postMessage({ type: 'aiChat.applyPatches', requestId, path: message.documentFilePath!, patches });
+            },
+          }
+          : undefined,
+        includeWorkspaceTools: message.mode === 'agent',
+        webSearchApiKey,
+        fetchImpl: this.options.fetchImpl,
+      });
       const result = await streamOpenAiChat(
         {
           baseUrl: settings.baseUrl,
@@ -188,14 +243,26 @@ export class AiChatHost {
           maxTokens: settings.maxTokens,
           stream: settings.stream,
           signal: controller.signal,
+          tools,
           fetchImpl: this.options.fetchImpl,
         },
         (event) => {
+          if (event.type === 'delta') {
+            this.options.postMessage({
+              type: 'aiChat.delta',
+              requestId,
+              text: event.text,
+              reasoning: event.reasoning,
+            });
+            return;
+          }
           this.options.postMessage({
-            type: 'aiChat.delta',
+            type: 'aiChat.tool',
             requestId,
-            text: event.text,
-            reasoning: event.reasoning,
+            phase: event.type === 'tool-call' ? 'call' : 'result',
+            toolName: event.toolName,
+            input: event.input,
+            ...(event.type === 'tool-result' ? { output: event.output } : {}),
           });
         },
       );

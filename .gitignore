@@ -17,3 +17,12 @@ dist/
 .vscode-test/
 笔记.md
 🌟测试文件夹
+.cursor
+.cursor/rules
+.easyview
+.vscode
+.vscode-test
+z笔记/
+tests
+test-results
+🌟测试文件夹

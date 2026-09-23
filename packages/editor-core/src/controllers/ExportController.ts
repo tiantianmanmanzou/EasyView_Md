@@ -1,6 +1,5 @@
 import type { EditorView } from 'prosemirror-view';
 import type { EditorCore } from '../editor/EditorCore';
-import { generateStandaloneHtml } from '../extensions/export/html/ExportHtml';
 import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
 import type { EditorHostSubscription, EditorHostTransport } from '@easyview/contracts';
 import type { createFileHeader } from '../ui/FileHeader';
@@ -159,6 +158,7 @@ export class ExportController {
 
   async exportHtml(theme: 'light' | 'dark' = 'light'): Promise<void> {
     try {
+      const { generateStandaloneHtml } = await import('../extensions/export/html/ExportHtml');
       const result = await generateStandaloneHtml(this.deps.view, {
         title: this.title(),
         isDark: theme === 'dark',

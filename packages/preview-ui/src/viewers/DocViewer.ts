@@ -1,3 +1,5 @@
+// oxlint-disable-next-line typescript/triple-slash-reference
+/// <reference path="../css-modules.d.ts" />
 import * as React from 'react';
 import type { DocxEditorRef } from '@eigenpal/docx-editor-react';
 import type { PreviewWriteResult } from '@easyview/contracts';
@@ -290,7 +292,7 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
             showFileOpen: false,
             showHelpMenu: false,
             showZoomControl: true,
-            showOutlineButton: false,
+            showOutlineButton: true,
             showRuler: false,
             // Filename + File/Format/Insert menu row are hidden via CSS; keep a single formatting bar.
             // EasyView chrome is injected into that same formatting-bar via toolbarExtra.

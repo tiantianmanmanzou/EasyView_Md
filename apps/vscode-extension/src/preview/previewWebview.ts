@@ -27,11 +27,79 @@ declare global {
     };
     acquireVsCodeApi?: () => {
       postMessage(message: unknown): void;
+      getState?(): unknown;
+      setState?(state: unknown): void;
     };
   }
 }
 
 const vscode = window.acquireVsCodeApi?.();
+
+const PREVIEW_UI_STATE_VERSION = 1;
+type PreviewUiState = {
+  version: typeof PREVIEW_UI_STATE_VERSION;
+  scrollTop: number;
+  scrollLeft: number;
+};
+
+function readPreviewUiState(): PreviewUiState | null {
+  const state = vscode?.getState?.();
+  if (!state || typeof state !== 'object') return null;
+  const candidate = state as Partial<PreviewUiState>;
+  if (candidate.version !== PREVIEW_UI_STATE_VERSION) return null;
+  const { scrollTop, scrollLeft } = candidate;
+  if (typeof scrollTop !== 'number' || !Number.isFinite(scrollTop)) return null;
+  if (typeof scrollLeft !== 'number' || !Number.isFinite(scrollLeft)) return null;
+  return {
+    version: PREVIEW_UI_STATE_VERSION,
+    scrollTop: Math.max(0, scrollTop),
+    scrollLeft: Math.max(0, scrollLeft),
+  };
+}
+
+function getPreviewScrollContainer(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.preview-content');
+}
+
+function savePreviewUiState(): void {
+  if (!vscode?.setState) return;
+  const container = getPreviewScrollContainer();
+  if (!container) return;
+  // Keep only viewport facts. Never put descriptor content or viewer bytes in VS Code state.
+  vscode.setState({
+    version: PREVIEW_UI_STATE_VERSION,
+    scrollTop: container.scrollTop,
+    scrollLeft: container.scrollLeft,
+  } satisfies PreviewUiState);
+}
+
+function restorePreviewUiState(state: PreviewUiState | null): void {
+  if (!state) return;
+  const restore = () => {
+    const container = getPreviewScrollContainer();
+    if (!container) return;
+    container.scrollTop = state.scrollTop;
+    container.scrollLeft = state.scrollLeft;
+  };
+  requestAnimationFrame(() => {
+    restore();
+    requestAnimationFrame(restore);
+  });
+}
+
+function installPreviewUiStatePersistence(): void {
+  let scheduled = false;
+  const scheduleSave = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      savePreviewUiState();
+    });
+  };
+  document.addEventListener('scroll', scheduleSave, true);
+  window.addEventListener('pagehide', savePreviewUiState);
+}
 
 class ExtensionPreviewHost implements PreviewHost {
   private readonly listeners = new Set<() => void>();
@@ -144,6 +212,8 @@ function uint8ToBase64(bytes: Uint8Array): string {
 }
 
 function bootstrap(): void {
+  const savedUiState = readPreviewUiState();
+  installPreviewUiStatePersistence();
   const payload = window.__EASYVIEW_PREVIEW_BOOTSTRAP__;
   const rootEl = document.getElementById('root');
   if (!payload || !rootEl) return;
@@ -164,6 +234,7 @@ function bootstrap(): void {
       },
     }),
   );
+  restorePreviewUiState(savedUiState);
 }
 
 bootstrap();

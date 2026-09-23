@@ -127,6 +127,8 @@ function parseZipEntries(bytes: Buffer): InternalZipEntry[] {
     if (offset + 46 > bytes.length || bytes.readUInt32LE(offset) !== 0x02014b50) throw new PreviewSessionError('invalid', 'ZIP 中央目录损坏');
     const flags = bytes.readUInt16LE(offset + 8);
     const compressionMethod = bytes.readUInt16LE(offset + 10);
+    const dosTime = bytes.readUInt16LE(offset + 12);
+    const dosDate = bytes.readUInt16LE(offset + 14);
     const compressedSize = bytes.readUInt32LE(offset + 20);
     const uncompressedSize = bytes.readUInt32LE(offset + 24);
     const nameLength = bytes.readUInt16LE(offset + 28);
@@ -141,7 +143,16 @@ function parseZipEntries(bytes: Buffer): InternalZipEntry[] {
     expandedBytes += uncompressedSize;
     if (expandedBytes > MAX_EXPANDED_BYTES) throw new PreviewSessionError('invalid', '压缩包解压后总大小超过安全上限');
     if (compressedSize > 0 && uncompressedSize / compressedSize > 100) throw new PreviewSessionError('invalid', '压缩包条目压缩比超过安全上限');
-    entries.push({ path: name, directory: name.endsWith('/'), compressedSize, uncompressedSize, compressionMethod, localHeaderOffset });
+    const lastModified = dosDateTimeToIso(dosDate, dosTime);
+    entries.push({
+      path: name,
+      directory: name.endsWith('/'),
+      compressedSize,
+      uncompressedSize,
+      ...(lastModified ? { lastModified } : {}),
+      compressionMethod,
+      localHeaderOffset,
+    });
     offset = end;
   }
   return entries;
@@ -201,7 +212,22 @@ function toArchiveEntry(entry: InternalZipEntry): ArchiveEntry {
     directory: entry.directory,
     compressedSize: entry.compressedSize,
     uncompressedSize: entry.uncompressedSize,
+    ...(entry.lastModified ? { lastModified: entry.lastModified } : {}),
   };
+}
+
+function dosDateTimeToIso(dosDate: number, dosTime: number): string | undefined {
+  if (!dosDate && !dosTime) return undefined;
+  const year = ((dosDate >> 9) & 0x7f) + 1980;
+  const month = (dosDate >> 5) & 0x0f;
+  const day = dosDate & 0x1f;
+  const hour = (dosTime >> 11) & 0x1f;
+  const minute = (dosTime >> 5) & 0x3f;
+  const second = (dosTime & 0x1f) * 2;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
 }
 
 function findEndOfCentralDirectory(bytes: Buffer): number {

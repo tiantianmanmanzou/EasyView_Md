@@ -10,7 +10,7 @@ export interface DesktopEditorHostTransportOptions {
   subscribe(listener: (message: HostToEditorMessage) => void): EditorHostSubscription;
 }
 
-/** Creates the explicit Desktop adapter used by the shared editor renderer. */
+/** Electron renderer transport for the single revision/patch editor protocol. */
 export function createDesktopEditorHostTransport(
   options: DesktopEditorHostTransportOptions,
 ): EditorHostTransport {

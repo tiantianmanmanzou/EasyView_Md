@@ -1,6 +1,12 @@
 import * as vscode from 'vscode';
-import { findRepository, getFileStatus, getIndexFileContent } from '@easyview/node-runtime';
+import {
+  findRepository,
+  getFileStatus,
+  getIndexFileContent,
+  getIndexObjectId,
+} from '@easyview/node-runtime';
 import { SETTINGS_COMMENT_RE } from '@easyview/markdown-core/editor-settings';
+import { resolveMarkdownDiskUri } from '../document/openMarkdownEditor';
 
 export type GitChangeKind = 'modified' | 'added';
 
@@ -9,6 +15,28 @@ export interface GitLineRange {
   endLine: number;
   kind: GitChangeKind;
 }
+
+export type DocumentRevision = number | string;
+export type GitTaskId = number | string;
+
+export interface GitLineRangesResult {
+  revision: DocumentRevision;
+  taskId?: GitTaskId;
+  lineRanges: GitLineRange[];
+  isUntracked: boolean;
+  indexObjectId: string | null;
+  elapsedMs: number;
+  cacheHit: boolean;
+}
+
+interface GitLineRangesCacheEntry {
+  lineRanges: GitLineRange[];
+  isUntracked: boolean;
+  indexObjectId: string | null;
+  elapsedMs: number;
+}
+
+const gitLineRangesCache = new Map<string, GitLineRangesCacheEntry>();
 
 function normalizeContent(content: string): string {
   return content.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n');
@@ -110,26 +138,89 @@ function computeChangedLineRanges(baseContent: string, currentContent: string): 
   return groupLineNumbers(changed);
 }
 
-export async function computeGitLineRanges(
+function cacheKey(
+  repositoryRoot: string,
+  filePath: string,
+  indexObjectId: string | null,
+  revision: DocumentRevision,
+): string {
+  return [repositoryRoot, filePath, indexObjectId ?? 'untracked', String(revision)].join('\\0');
+}
+
+/**
+ * Computes Git markers without retaining either the index or editor document body.
+ * The caller owns task ordering and can discard stale results using taskId/revision.
+ */
+export async function computeGitLineRangesResult(
   uri: vscode.Uri,
-  currentContent: string
-): Promise<GitLineRange[]> {
-  if (uri.scheme !== 'file') return [];
+  currentContent: string,
+  revision: DocumentRevision,
+  taskId?: GitTaskId,
+): Promise<GitLineRangesResult> {
+  const startedAt = Date.now();
+  const diskUri = resolveMarkdownDiskUri(uri);
+  if (diskUri.scheme !== 'file') {
+    return { revision, taskId, lineRanges: [], isUntracked: false, indexObjectId: null, elapsedMs: Date.now() - startedAt, cacheHit: false };
+  }
 
   try {
-    const repository = await findRepository(uri.fsPath);
-    if (!repository) return [];
+    const repository = await findRepository(diskUri.fsPath);
+    if (!repository) {
+      return { revision, taskId, lineRanges: [], isUntracked: false, indexObjectId: null, elapsedMs: Date.now() - startedAt, cacheHit: false };
+    }
 
-    const status = await getFileStatus(repository.rootPath, uri.fsPath);
-    if (!status.isModified) return [];
+    const status = await getFileStatus(repository.rootPath, diskUri.fsPath);
+    const indexObjectId = await getIndexObjectId(repository.rootPath, diskUri.fsPath);
+    const key = cacheKey(repository.rootPath, status.filePath, indexObjectId, revision);
+    const cached = gitLineRangesCache.get(key);
+    if (cached) {
+      return { revision, taskId, ...cached, lineRanges: [...cached.lineRanges], cacheHit: true };
+    }
 
+    let lineRanges: GitLineRange[] = [];
     const normalizedCurrent = normalizeContent(currentContent);
-    if (status.isUntracked) return allLines(normalizedCurrent, 'added');
+    if (status.isUntracked) {
+      lineRanges = allLines(normalizedCurrent, 'added');
+    } else if (status.isModified) {
+      const indexContent = await getIndexFileContent(repository.rootPath, diskUri.fsPath);
+      lineRanges = indexContent === null
+        ? allLines(normalizedCurrent, 'added')
+        : computeChangedLineRanges(normalizeContent(indexContent), normalizedCurrent);
+    }
 
-    const indexContent = await getIndexFileContent(repository.rootPath, uri.fsPath);
-    if (indexContent === null) return allLines(normalizedCurrent, 'added');
-    return computeChangedLineRanges(normalizeContent(indexContent), normalizedCurrent);
+    const result = {
+      lineRanges,
+      isUntracked: status.isUntracked,
+      indexObjectId,
+      elapsedMs: Date.now() - startedAt,
+    } satisfies GitLineRangesCacheEntry;
+    gitLineRangesCache.set(key, { ...result, lineRanges: [...result.lineRanges] });
+    return { revision, taskId, ...result, lineRanges: [...lineRanges], cacheHit: false };
   } catch {
-    return [];
+    return { revision, taskId, lineRanges: [], isUntracked: false, indexObjectId: null, elapsedMs: Date.now() - startedAt, cacheHit: false };
   }
+}
+
+export function computeGitLineRanges(
+  uri: vscode.Uri,
+  currentContent: string,
+): Promise<GitLineRange[]>;
+export function computeGitLineRanges(
+  uri: vscode.Uri,
+  currentContent: string,
+  revision: DocumentRevision,
+  taskId?: GitTaskId,
+): Promise<GitLineRangesResult>;
+export async function computeGitLineRanges(
+  uri: vscode.Uri,
+  currentContent: string,
+  revision?: DocumentRevision,
+  taskId?: GitTaskId,
+): Promise<GitLineRange[] | GitLineRangesResult> {
+  const result = await computeGitLineRangesResult(uri, currentContent, revision ?? 'legacy', taskId);
+  return revision === undefined ? result.lineRanges : result;
+}
+
+export function clearGitLineRangesCache(): void {
+  gitLineRangesCache.clear();
 }

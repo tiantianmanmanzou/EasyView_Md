@@ -8,6 +8,7 @@ import {
   type WorkspaceEntry,
   type WorkspaceEntryKind,
   type WorkspaceGateway,
+  type WorkspaceMoveRequest,
   type WorkspaceRenameRequest,
   type WorkspaceRootDescriptor,
   WorkspaceOperationError,
@@ -85,17 +86,24 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
       const normalizedPath = normalizeWorkspaceRelativePath(relativePath);
       const realDirectoryPath = await this.resolveTraversableDirectory(root, normalizedPath);
       const entries = await fs.readdir(realDirectoryPath, { withFileTypes: true });
-      return entries.map((entry) => {
+      return Promise.all(entries.map(async (entry) => {
+        const absolutePath = path.join(realDirectoryPath, entry.name);
         const entryRelativePath = normalizeWorkspaceRelativePath(
-          path.relative(root.rootPath, path.join(realDirectoryPath, entry.name)),
+          path.relative(root.rootPath, absolutePath),
         );
-        return this.toEntry(
-          root.id,
-          entryRelativePath,
-          entry.name,
-          entry.isSymbolicLink() ? 'symlink' : entry.isDirectory() ? 'directory' : 'file',
-        );
-      });
+        const kind = entry.isSymbolicLink() ? 'symlink' : entry.isDirectory() ? 'directory' : 'file';
+        let createdAt: number | undefined;
+        let updatedAt: number | undefined;
+        try {
+          const stat = await fs.lstat(absolutePath);
+          createdAt = resolveCreatedAtMs(stat);
+          updatedAt = Number.isFinite(stat.mtimeMs) ? Math.trunc(stat.mtimeMs) : undefined;
+        } catch {
+          createdAt = undefined;
+          updatedAt = undefined;
+        }
+        return this.toEntry(root.id, entryRelativePath, entry.name, kind, createdAt, updatedAt);
+      }));
     }, `Unable to list workspace directory: ${relativePath}`);
   }
 
@@ -144,8 +152,52 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
         renamedRelativePath,
         request.newName,
         this.kindFromStat(sourceStat),
+        resolveCreatedAtMs(sourceStat),
+        Number.isFinite(sourceStat.mtimeMs) ? Math.trunc(sourceStat.mtimeMs) : undefined,
       );
     }, `Unable to rename workspace entry: ${request.relativePath}`);
+  }
+
+  async move(rootId: string, request: WorkspaceMoveRequest): Promise<WorkspaceEntry> {
+    return this.withFilesystemErrors(async () => {
+      const relativePath = normalizeWorkspaceRelativePath(request.relativePath);
+      if (!relativePath) throw new WorkspaceOperationError('INVALID_PATH', 'Workspace root cannot be moved');
+
+      const root = await this.resolveRoot(rootId);
+      const sourceParentRelativePath = parentWorkspaceRelativePath(relativePath);
+      const targetParentRelativePath = normalizeWorkspaceRelativePath(request.targetParentRelativePath);
+      const sourceName = path.basename(relativePath);
+      const nextName = request.newName ?? sourceName;
+      validateWorkspaceEntryName(nextName);
+
+      const realSourceParent = await this.resolveTraversableDirectory(root, sourceParentRelativePath);
+      const realTargetParent = await this.resolveTraversableDirectory(root, targetParentRelativePath);
+      const sourcePath = path.join(realSourceParent, sourceName);
+      this.ensureWithinRoot(root.rootPath, sourcePath);
+      const sourceStat = await fs.lstat(sourcePath);
+
+      if (sourceStat.isDirectory() && !sourceStat.isSymbolicLink()) {
+        const realSource = await fs.realpath(sourcePath);
+        if (realTargetParent === realSource || realTargetParent.startsWith(`${realSource}${path.sep}`)) {
+          throw new WorkspaceOperationError('INVALID_PATH', 'Cannot move a folder into itself or its descendants');
+        }
+      }
+
+      const targetPath = path.join(realTargetParent, nextName);
+      this.ensureWithinRoot(root.rootPath, targetPath);
+      if (!sameFilesystemEntry(sourcePath, targetPath)) await this.assertMissing(targetPath);
+      await fs.rename(sourcePath, targetPath);
+
+      const movedRelativePath = joinWorkspaceRelativePath(targetParentRelativePath, nextName);
+      return this.toEntry(
+        root.id,
+        movedRelativePath,
+        nextName,
+        this.kindFromStat(sourceStat),
+        resolveCreatedAtMs(sourceStat),
+        Number.isFinite(sourceStat.mtimeMs) ? Math.trunc(sourceStat.mtimeMs) : undefined,
+      );
+    }, `Unable to move workspace entry: ${request.relativePath}`);
   }
 
   async delete(rootId: string, request: WorkspaceDeleteRequest): Promise<void> {
@@ -264,6 +316,8 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
     relativePath: string,
     name: string,
     kind: WorkspaceEntryKind,
+    createdAt?: number,
+    updatedAt?: number,
   ): WorkspaceEntry {
     return {
       id: createWorkspaceNodeId(rootId, relativePath),
@@ -271,6 +325,8 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
       relativePath,
       name,
       kind,
+      ...(createdAt !== undefined ? { createdAt } : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     };
   }
 
@@ -299,4 +355,10 @@ function sameFilesystemEntry(left: string, right: string): boolean {
     return resolvedLeft.toLocaleLowerCase() === resolvedRight.toLocaleLowerCase();
   }
   return resolvedLeft === resolvedRight;
+}
+
+function resolveCreatedAtMs(stat: { birthtimeMs: number; ctimeMs: number; birthtime: Date }): number {
+  // On Linux, birthtime is often epoch 0 when unsupported.
+  if (Number.isFinite(stat.birthtimeMs) && stat.birthtimeMs > 0) return Math.trunc(stat.birthtimeMs);
+  return Math.trunc(stat.ctimeMs);
 }

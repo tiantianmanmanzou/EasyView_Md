@@ -12,12 +12,52 @@ import { Packer } from 'docx';
 import { markdownToDocx, writeDocxExport } from '../src/export/docx-export';
 
 describe('markdownToDocx page orientation', () => {
-  it('places a table in a landscape section and keeps surrounding text portrait', async () => {
+  it('keeps a narrow table in the same portrait section as surrounding text', async () => {
     const document = await markdownToDocx(
       '前文\n\n| 字段 | 描述 |\n| --- | --- |\n| 名称 | 示例 |\n\n后文',
       'orientation-test',
       '/tmp',
     );
+    const zip = await JSZip.loadAsync(await Packer.toBuffer(document));
+    const xml = await zip.file('word/document.xml')!.async('string');
+
+    expect((xml.match(/<w:sectPr/g) ?? [])).toHaveLength(1);
+    expect(xml).not.toMatch(/w:orient="landscape"/);
+    expect(xml).toMatch(/<w:pgSz\b[^>]*w:orient="portrait"/);
+  });
+
+  it('keeps tables with fewer than 5 columns portrait even when cells are long', async () => {
+    const longFields = Array.from({ length: 20 }, (_, i) => `field_name_${i}_very_long`).join(', ');
+    const markdown = [
+      '前文',
+      '',
+      '| 表名 | 说明 | 关键字段 |',
+      '| --- | --- | --- |',
+      `| orp_ops_ovw | 主数据/业务表 | ${longFields} |`,
+      '',
+      '后文',
+    ].join('\n');
+    const document = await markdownToDocx(markdown, 'three-col-portrait', '/tmp');
+    const zip = await JSZip.loadAsync(await Packer.toBuffer(document));
+    const xml = await zip.file('word/document.xml')!.async('string');
+
+    expect(xml).not.toMatch(/w:orient="landscape"/);
+    expect((xml.match(/<w:sectPr/g) ?? [])).toHaveLength(1);
+  });
+
+  it('places only an over-wide table with 5+ columns in a landscape section', async () => {
+    const wideCols = Array.from({ length: 8 }, (_, i) => `列${i + 1}很长内容ABCDEFGHIJKLMNOP`);
+    const wideRow = wideCols.map((_, i) => `cell-${i}-long-unbroken-path-/api/orp/vio/detect/status/detail`);
+    const markdown = [
+      '前文',
+      '',
+      `| ${wideCols.join(' | ')} |`,
+      `| ${wideCols.map(() => '---').join(' | ')} |`,
+      `| ${wideRow.join(' | ')} |`,
+      '',
+      '后文',
+    ].join('\n');
+    const document = await markdownToDocx(markdown, 'wide-orientation-test', '/tmp');
     const zip = await JSZip.loadAsync(await Packer.toBuffer(document));
     const xml = await zip.file('word/document.xml')!.async('string');
 

@@ -840,16 +840,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   let commitSyncHandler: ((message: string) => void) | null = null;
   let commitModalBusy = false;
 
-  const postCurrentEdit = () => {
-    const s = getState();
-    postMessage({
-      type: 'edit',
-      content: s.currentContent,
-      fullWidth: s.isFullWidth,
-      tocVisible: s.isTocVisible,
-      tableWrap: s.isTableWrap,
-    });
-  };
+
 
   const nameEl = document.createElement('span');
   nameEl.className = 'file-header-name';
@@ -933,7 +924,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     dom.getById('editor')?.classList.toggle('full-width', newFullWidth);
     syncWidthButton(newFullWidth);
     dom.eventTarget.dispatchEvent(new CustomEvent('easyview-editor-layout-change'));
-    postCurrentEdit();
     onSettingsChange();
   });
   leftGroup.appendChild(widthBtn);
@@ -948,7 +938,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     dom.getById('editor')?.classList.toggle('table-wrap', newTableWrap);
     dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
     syncTableWrapButton(newTableWrap);
-    postCurrentEdit();
     onSettingsChange();
   });
   leftGroup.appendChild(tableWrapBtn);
@@ -1657,7 +1646,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
         const newTocVisible = !state.isTocVisible;
         setState({ isTocVisible: newTocVisible });
         syncTocButton(newTocVisible);
-        postCurrentEdit();
         onSettingsChange();
       });
     },

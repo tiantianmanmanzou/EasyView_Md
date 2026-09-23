@@ -55,6 +55,14 @@ await forbidImports('packages/contracts/src', (specifier) =>
   || specifier.startsWith('@easyview/node-runtime')
   || specifier.startsWith('apps/'),
 'contracts must contain platform-neutral interfaces only');
+await forbidImports('packages/editor-sync', (specifier) =>
+  specifier === 'vscode'
+  || specifier === 'electron'
+  || specifier.startsWith('@easyview/editor-core')
+  || specifier.startsWith('@easyview/node-runtime')
+  || specifier.startsWith('apps/')
+  || nodeBuiltins.has(specifier),
+'editor-sync must remain platform-neutral');
 await forbidImports('packages/markdown-core/src', (specifier) =>
   specifier === 'vscode'
   || specifier === 'electron'
@@ -108,6 +116,7 @@ for (const required of [
   'packages/contracts/src/messages',
   'packages/contracts/src/results',
   'packages/contracts/src/validation',
+  'packages/editor-sync',
   'packages/contracts/src/preview',
   'packages/preview-ui/src',
   'packages/markdown-core/src/transforms',
@@ -122,7 +131,7 @@ for (const required of [
   'tests/e2e/desktop',
   'tests/fixtures/editor',
 ]) await requirePath(required);
-for (const obsolete of ['src/host', 'e2e', 'test', 'esbuild.mjs', '.vscodeignore', 'scripts', '.vscode-test.mjs', 'assets', 'media']) {
+for (const obsolete of ['src/host', 'e2e', 'test', 'esbuild.mjs', '.vscodeignore', '.vscode-test.mjs', 'assets', 'media']) {
   try {
     await readFile(path.join(root, obsolete));
     violations.push(`obsolete root product path still exists: ${obsolete}`);

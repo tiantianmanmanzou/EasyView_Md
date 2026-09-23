@@ -10,7 +10,8 @@
     "./editor-settings": "./src/models/editor-settings.ts",
     "./frontmatter": "./src/parsing/frontmatter.ts",
     "./table-style-metadata": "./src/serialization/table-style-metadata.ts",
-    "./pandoc-highlight-markup": "./src/transforms/pandoc-highlight-markup.ts"
+    "./pandoc-highlight-markup": "./src/transforms/pandoc-highlight-markup.ts",
+    "./document": "./src/document/index.ts"
   },
   "files": [
     "src",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAiChatMessages, MAX_DOCUMENT_CONTEXT_CHARS } from '../src/ai/chatPrompt';
+import { buildAiChatMessages } from '../src/ai/chatPrompt';
 
 describe('buildAiChatMessages', () => {
   it('chat mode: base system instruction + custom prompt + history + user text', () => {
@@ -23,7 +23,7 @@ describe('buildAiChatMessages', () => {
     expect(messages[3]).toEqual({ role: 'user', content: '问题二' });
   });
 
-  it('agent mode: document content is injected into the system message', () => {
+  it('agent mode requires an inspect_file baseline instead of injecting document content', () => {
     const messages = buildAiChatMessages({
       systemPrompt: '',
       mode: 'agent',
@@ -35,24 +35,12 @@ describe('buildAiChatMessages', () => {
     });
     expect(messages).toHaveLength(2);
     const system = messages[0].content as string;
-    expect(system).toContain('COMPLETE updated document');
-    expect(system).toContain('当前文档: notes.md');
-    expect(system).toContain('# Title');
-  });
-
-  it('truncates oversized documents', () => {
-    const big = 'a'.repeat(MAX_DOCUMENT_CONTEXT_CHARS + 5000);
-    const messages = buildAiChatMessages({
-      systemPrompt: '',
-      mode: 'agent',
-      history: [],
-      userMessage: '改一下',
-      attachments: [],
-      documentContent: big,
-    });
-    const system = messages[0].content as string;
-    expect(system.length).toBeLessThan(MAX_DOCUMENT_CONTEXT_CHARS + 1000);
-    expect(system).toContain('已截断');
+    expect(system).toContain('inspect_file');
+    expect(system).toContain('apply_patch');
+    expect(system).not.toContain('COMPLETE updated document');
+    expect(system).toContain('当前打开文档: notes.md');
+    expect(system).toContain('不带 path 的 inspect_file');
+    expect(system).not.toContain('# Title');
   });
 
   it('builds multimodal parts when attachments are present', () => {

@@ -67,6 +67,10 @@ export function getWorkspaceAncestorPaths(relativePath: string): string[] {
 }
 
 export function compareWorkspaceEntries(left: WorkspaceEntry, right: WorkspaceEntry): number {
+  return compareWorkspaceEntriesByName(left, right);
+}
+
+export function compareWorkspaceEntriesByName(left: WorkspaceEntry, right: WorkspaceEntry): number {
   const leftDirectory = left.kind === 'directory';
   const rightDirectory = right.kind === 'directory';
   if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1;

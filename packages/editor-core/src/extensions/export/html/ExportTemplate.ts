@@ -194,69 +194,77 @@ const EXPORT_JS = /* js */ `
 
   var mermaidBlocks = document.querySelectorAll('pre.mermaid');
   if (mermaidBlocks.length === 0) return; // No mermaid diagrams, skip initialization
+  var mermaidGeneration = 0;
+  var mermaidRenderChain = Promise.resolve();
 
   function reinitMermaid() {
     if (typeof mermaid === 'undefined') return;
+    var generation = ++mermaidGeneration;
     var isDark = html.getAttribute('data-theme') === 'dark';
 
-    mermaid.initialize({
-      startOnLoad: false,
-      suppressErrorRendering: true,
-      theme: isDark ? 'dark' : 'base',
-      darkMode: isDark,
-      fontFamily: getComputedStyle(document.body).fontFamily || 'inherit',
-      themeVariables: isDark ? undefined : {
-        background: '#ffffff',
-        mainBkg: '#f8fafc',
-        secondBkg: '#eef6ff',
-        tertiaryColor: '#f8fafc',
-        primaryColor: '#f8fafc',
-        primaryTextColor: '#1f2328',
-        primaryBorderColor: '#8c959f',
-        secondaryColor: '#eef6ff',
-        secondaryTextColor: '#1f2328',
-        secondaryBorderColor: '#8c959f',
-        tertiaryTextColor: '#1f2328',
-        tertiaryBorderColor: '#8c959f',
-        nodeBorder: '#8c959f',
-        clusterBkg: '#f6f8fa',
-        clusterBorder: '#d0d7de',
-        lineColor: '#8c959f',
-        textColor: '#1f2328',
-        edgeLabelBackground: '#ffffff',
-        labelBackground: '#ffffff',
-      },
-    });
+    mermaidRenderChain = mermaidRenderChain.then(async function() {
+      if (generation !== mermaidGeneration) return;
+      mermaid.initialize({
+        startOnLoad: false,
+        suppressErrorRendering: true,
+        theme: isDark ? 'dark' : 'base',
+        darkMode: isDark,
+        fontFamily: getComputedStyle(document.body).fontFamily || 'inherit',
+        themeVariables: isDark ? undefined : {
+          background: '#ffffff',
+          mainBkg: '#f8fafc',
+          secondBkg: '#eef6ff',
+          tertiaryColor: '#f8fafc',
+          primaryColor: '#f8fafc',
+          primaryTextColor: '#1f2328',
+          primaryBorderColor: '#8c959f',
+          secondaryColor: '#eef6ff',
+          secondaryTextColor: '#1f2328',
+          secondaryBorderColor: '#8c959f',
+          tertiaryTextColor: '#1f2328',
+          tertiaryBorderColor: '#8c959f',
+          nodeBorder: '#8c959f',
+          clusterBkg: '#f6f8fa',
+          clusterBorder: '#d0d7de',
+          lineColor: '#8c959f',
+          textColor: '#1f2328',
+          edgeLabelBackground: '#ffffff',
+          labelBackground: '#ffffff',
+        },
+      });
 
-    mermaidBlocks.forEach(function(el, idx) {
-      var source = el.getAttribute('data-source');
-      if (!source) return;
-      var id = 'mermaid-' + idx + '-' + Date.now();
-      try {
-        mermaid.render(id, source).then(function(result) {
+      for (var idx = 0; idx < mermaidBlocks.length; idx++) {
+        if (generation !== mermaidGeneration) return;
+        var el = mermaidBlocks[idx];
+        var source = el.getAttribute('data-source');
+        if (!source) continue;
+        var id = 'mermaid-' + idx + '-' + generation;
+        try {
+          var result = await mermaid.render(id, source);
+          if (generation !== mermaidGeneration) return;
           el.innerHTML = result.svg;
           if (result.bindFunctions) result.bindFunctions(el);
-        }).catch(function(err) {
+        } catch(err) {
+          if (generation !== mermaidGeneration) return;
           el.textContent = 'Mermaid error: ' + err;
-        });
-      } catch(err) {
-        el.textContent = 'Mermaid error: ' + err;
+        }
       }
+    }).catch(function(err) {
+      console.error('Mermaid render queue failed:', err);
     });
   }
 
-  // Initialize mermaid on load
+  // Render every diagram serially. Mermaid uses mutable global configuration and
+  // concurrent render calls can corrupt or omit diagrams in large exports.
   if (typeof mermaid !== 'undefined') {
     reinitMermaid();
   } else {
-    // Wait for mermaid CDN to load
     var checkMermaid = setInterval(function() {
       if (typeof mermaid !== 'undefined') {
         clearInterval(checkMermaid);
         reinitMermaid();
       }
     }, 200);
-    // Stop checking after 10s
     setTimeout(function() { clearInterval(checkMermaid); }, 10000);
   }
 })();
@@ -281,7 +289,7 @@ export function buildTemplate(
   const escapedTitle = escapeHtml(options.title);
 
   const mermaidScript = options.hasMermaid
-    ? '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><\/script>'
+    ? '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>'
     : '';
 
   const katexCss = options.hasMath
@@ -327,7 +335,7 @@ ${contentHtml}
     </main>
   </div>
   ${mermaidScript}
-  <script>${EXPORT_JS}<\/script>
+  <script>${EXPORT_JS}</script>
 </body>
 </html>`;
 }

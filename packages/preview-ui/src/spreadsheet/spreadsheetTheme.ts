@@ -1,5 +1,6 @@
 import type { EasyViewThemeMode } from '@easyview/contracts';
 import { EASYVIEW_THEME_PALETTE } from '@easyview/contracts';
+import type { XsDataLike, XsDrawLike, XsSpreadsheetLike, XsStyleLike } from './xSpreadsheetTypes';
 
 /** Canvas chrome + default cell colors driven by EasyView theme (not IDE). */
 export interface SpreadsheetCanvasTheme {
@@ -93,11 +94,6 @@ export function isThemeableForeground(color: string | undefined): boolean {
   return lum <= 0.18 && isNearNeutral(color);
 }
 
-type XsStyleLike = {
-  bgcolor?: string;
-  color?: string;
-  [key: string]: unknown;
-};
 
 export function adaptCellStyleForTheme(style: XsStyleLike, mode: EasyViewThemeMode): XsStyleLike {
   const theme = spreadsheetCanvasTheme(mode);
@@ -111,21 +107,6 @@ export function adaptCellStyleForTheme(style: XsStyleLike, mode: EasyViewThemeMo
   return next;
 }
 
-type XsDataLike = {
-  settings?: { style?: XsStyleLike };
-  getCellStyleOrDefault?: (ri: number, ci: number) => XsStyleLike;
-};
-
-type XsDrawLike = {
-  attr: (options: Record<string, unknown>) => unknown;
-};
-
-type XsSpreadsheetLike = {
-  datas?: XsDataLike[];
-  data?: XsDataLike;
-  sheet?: { table?: { draw?: XsDrawLike; render?: () => void } };
-  reRender?: () => void;
-};
 
 const STYLE_HOOK = '__easyviewGetCellStyleOrDefault';
 const DRAW_HOOK = '__easyviewDrawAttr';
@@ -137,7 +118,6 @@ const THEME_REF = '__easyviewThemeMode';
  */
 export function applyXSpreadsheetTheme(spreadsheet: XsSpreadsheetLike | null | undefined, mode: EasyViewThemeMode): void {
   if (!spreadsheet) return;
-  const theme = spreadsheetCanvasTheme(mode);
   const defaults = spreadsheetDefaultStyle(mode);
   const datas = Array.isArray(spreadsheet.datas) && spreadsheet.datas.length > 0
     ? spreadsheet.datas

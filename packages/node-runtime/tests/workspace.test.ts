@@ -8,16 +8,25 @@ import {
   type WorkspaceDeleteRequest,
   type WorkspaceEntry,
   type WorkspaceGateway,
+  type WorkspaceMoveRequest,
   type WorkspaceRenameRequest,
+  describeWorkspaceEntryTimestamps,
+  formatWorkspaceEntryTimestamps,
+  formatWorkspaceTimestamp,
   WorkspaceOperationError,
 } from '@easyview/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  applyEntryDeleted,
+  applyEntryRenamed,
   getWorkspaceAncestorPaths,
   LocalWorkspaceGateway,
   normalizeWorkspaceRelativePath,
+  parseWorkspaceTreeOrderConfig,
+  sortWorkspaceEntries,
   WorkspaceFileOperationService,
   WorkspaceTreeModel,
+  WorkspaceTreeOrderState,
 } from '../src/workspace';
 
 const tempDirectories: string[] = [];
@@ -60,18 +69,28 @@ class ListingGateway implements WorkspaceGateway {
     throw new Error('not used');
   }
 
+  async move(_rootId: string, _request: WorkspaceMoveRequest): Promise<WorkspaceEntry> {
+    throw new Error('not used');
+  }
+
   async delete(_rootId: string, _request: WorkspaceDeleteRequest): Promise<void> {
     throw new Error('not used');
   }
 }
 
-function entry(rootId: string, relativePath: string, kind: WorkspaceEntry['kind']): WorkspaceEntry {
+function entry(
+  rootId: string,
+  relativePath: string,
+  kind: WorkspaceEntry['kind'],
+  createdAt?: number,
+): WorkspaceEntry {
   return {
     id: 'gateway-specific-id',
     rootId,
     relativePath,
     name: relativePath.split('/').at(-1) ?? relativePath,
     kind,
+    ...(createdAt !== undefined ? { createdAt } : {}),
   };
 }
 
@@ -205,13 +224,13 @@ describe('LocalWorkspaceGateway and WorkspaceFileOperationService', () => {
     const gateway = new LocalWorkspaceGateway([{ id: 'root', rootPath: root }]);
     const model = new WorkspaceTreeModel(gateway);
     const listed = await model.listChildren('root');
-    expect(listed).toContainEqual({
+    expect(listed).toContainEqual(expect.objectContaining({
       id: createWorkspaceNodeId('root', 'linked'),
       rootId: 'root',
       relativePath: 'linked',
       name: 'linked',
       kind: 'symlink',
-    });
+    }));
     await expect(model.listChildren('root', 'linked')).rejects.toMatchObject({
       code: 'SYMLINK_NOT_TRAVERSABLE',
     });
@@ -256,5 +275,167 @@ describe('LocalWorkspaceGateway and WorkspaceFileOperationService', () => {
     await expect(
       withoutTrash.delete('root', { relativePath: 'no-trash.md', options: { useTrash: true } }),
     ).rejects.toMatchObject({ code: 'TRASH_UNAVAILABLE' });
+  });
+
+  it('moves entries across directories and rejects moving a folder into itself', async () => {
+    const root = await tempWorkspace();
+    await fs.mkdir(path.join(root, 'docs'));
+    await fs.mkdir(path.join(root, 'docs', 'nested'));
+    await fs.writeFile(path.join(root, 'docs', 'note.md'), 'note');
+    const gateway = new LocalWorkspaceGateway([{ id: 'root', rootPath: root }]);
+    const service = new WorkspaceFileOperationService(gateway);
+
+    const moved = await service.move('root', {
+      relativePath: 'docs/note.md',
+      targetParentRelativePath: '',
+    });
+    expect(moved.relativePath).toBe('note.md');
+    await expect(fs.readFile(path.join(root, 'note.md'), 'utf8')).resolves.toBe('note');
+
+    await expect(service.move('root', {
+      relativePath: 'docs',
+      targetParentRelativePath: 'docs/nested',
+    })).rejects.toMatchObject({ code: 'INVALID_PATH' });
+  });
+});
+
+describe('workspace tree order', () => {
+  it('sorts by name, created time, and custom order with unlisted names appended', () => {
+    const entries: WorkspaceEntry[] = [
+      entry('root', 'b.md', 'file', 200),
+      entry('root', 'a.md', 'file', 100),
+      entry('root', 'z-dir', 'directory', 50),
+      entry('root', 'a-dir', 'directory', 300),
+    ];
+
+    expect(sortWorkspaceEntries(entries, 'name').map((item) => item.name)).toEqual([
+      'a-dir',
+      'z-dir',
+      'a.md',
+      'b.md',
+    ]);
+    expect(sortWorkspaceEntries(entries, 'created').map((item) => item.name)).toEqual([
+      'z-dir',
+      'a-dir',
+      'a.md',
+      'b.md',
+    ]);
+    expect(sortWorkspaceEntries(entries, 'custom', ['b.md', 'a-dir']).map((item) => item.name)).toEqual([
+      'a-dir',
+      'z-dir',
+      'b.md',
+      'a.md',
+    ]);
+  });
+
+  it('parses config and patches orders on rename, move, and delete', () => {
+    const config = parseWorkspaceTreeOrderConfig({
+      version: 1,
+      sortMode: 'custom',
+      showCreatedAt: true,
+      showUpdatedAt: false,
+      orders: {
+        '': ['docs', 'a.md'],
+        docs: ['note.md', 'guide.md'],
+      },
+    });
+    expect(config.showCreatedAt).toBe(true);
+    expect(config.showUpdatedAt).toBe(false);
+    expect(config.showDotEntries).toBe(true);
+    expect(config.showTimestampHover).toBe(true);
+
+    const legacy = parseWorkspaceTreeOrderConfig({
+      version: 1,
+      sortMode: 'name',
+      showTimestamps: true,
+      orders: {},
+    });
+    expect(legacy.showCreatedAt).toBe(true);
+    expect(legacy.showUpdatedAt).toBe(true);
+    expect(legacy.showDotEntries).toBe(true);
+
+    const hideDots = parseWorkspaceTreeOrderConfig({
+      version: 1,
+      sortMode: 'name',
+      showDotEntries: false,
+      orders: {},
+    });
+    expect(hideDots.showDotEntries).toBe(false);
+
+    const hideHover = parseWorkspaceTreeOrderConfig({
+      version: 1,
+      sortMode: 'name',
+      showTimestampHover: false,
+      orders: {},
+    });
+    expect(hideHover.showTimestampHover).toBe(false);
+
+    const renamed = applyEntryRenamed(config, 'docs/note.md', 'docs/intro.md');
+    expect(renamed.orders.docs).toEqual(['intro.md', 'guide.md']);
+
+    const moved = applyEntryRenamed(config, 'docs/note.md', 'note.md');
+    expect(moved.orders.docs).toEqual(['guide.md']);
+    expect(moved.orders['']).toEqual(['docs', 'a.md', 'note.md']);
+
+    const deleted = applyEntryDeleted(config, 'docs');
+    expect(deleted.orders['']).toEqual(['a.md']);
+    expect(deleted.orders.docs).toBeUndefined();
+  });
+
+  it('formats local timestamps as YYYY-MM-DD HH:mm:ss', () => {
+    const stamp = formatWorkspaceTimestamp(Date.UTC(2026, 8, 22, 2, 0, 0));
+    // Local timezone dependent — just assert shape when defined.
+    expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(formatWorkspaceEntryTimestamps({
+      createdAt: Date.UTC(2026, 8, 22, 2, 0, 0),
+      updatedAt: Date.UTC(2026, 8, 22, 3, 0, 0),
+    }, { showCreatedAt: true, showUpdatedAt: true })).toMatch(/^Created \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} · Updated \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(formatWorkspaceEntryTimestamps({
+      createdAt: Date.UTC(2026, 8, 22, 2, 0, 0),
+      updatedAt: Date.UTC(2026, 8, 22, 3, 0, 0),
+    }, { showCreatedAt: true, showUpdatedAt: false })).toMatch(/^Created \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(formatWorkspaceEntryTimestamps({
+      createdAt: Date.UTC(2026, 8, 22, 2, 0, 0),
+      updatedAt: Date.UTC(2026, 8, 22, 3, 0, 0),
+    }, { showCreatedAt: false, showUpdatedAt: true })).toMatch(/^Updated \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+
+    const both = describeWorkspaceEntryTimestamps({
+      createdAt: Date.UTC(2026, 8, 22, 2, 0, 0),
+      updatedAt: Date.UTC(2026, 8, 22, 3, 0, 0),
+    }, { showCreatedAt: true, showUpdatedAt: true });
+    expect(both?.parts.map((part) => part.kind)).toEqual(['created', 'updated']);
+    expect(both?.parts.every((part) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(part.value))).toBe(true);
+    expect(both?.title).toMatch(/^Created .+\nUpdated .+$/);
+
+    const hoverOnly = describeWorkspaceEntryTimestamps({
+      createdAt: Date.UTC(2026, 8, 22, 2, 0, 0),
+      updatedAt: Date.UTC(2026, 8, 22, 3, 0, 0),
+    });
+    expect(hoverOnly?.parts).toEqual([]);
+    expect(hoverOnly?.title).toMatch(/^Created .+\nUpdated .+$/);
+  });
+
+  it('applies order state through WorkspaceTreeModel', async () => {
+    const gateway = new ListingGateway();
+    const orderState = new WorkspaceTreeOrderState();
+    orderState.setSortMode('custom');
+    orderState.reorder('', 'file10.md', [
+      'a-folder',
+      'z-folder',
+      '.hidden.md',
+      'file2.md',
+      'file10.md',
+      'linked',
+    ], 'file2.md');
+    const model = new WorkspaceTreeModel(gateway, { sortProvider: orderState });
+    const listed = await model.listChildren('root');
+    expect(listed.map((item) => item.name)).toEqual([
+      'a-folder',
+      'z-folder',
+      '.hidden.md',
+      'file10.md',
+      'file2.md',
+      'linked',
+    ]);
   });
 });

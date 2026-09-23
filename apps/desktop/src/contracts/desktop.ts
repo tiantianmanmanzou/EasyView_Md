@@ -1,4 +1,4 @@
-import type { DocumentUpdatePayload, XlsxTablePayload } from '@easyview/contracts';
+import type { DocumentSnapshotPayload, XlsxTablePayload } from '@easyview/contracts';
 import type {
   DesktopTabContextCommand,
   DesktopTabSnapshot,
@@ -124,7 +124,7 @@ export interface ExportXlsxRequest {
   suggestedFileName: string;
 }
 
-export interface EditorBootstrapData extends DocumentUpdatePayload {
+export interface EditorBootstrapData extends DocumentSnapshotPayload {
   filePath: string;
   fileName: string;
 }
@@ -170,8 +170,20 @@ export interface WorkspaceApi {
   getState(): Promise<import('@easyview/contracts').OperationResult<DesktopWorkspaceState>>;
   setState(state: DesktopWorkspaceState): Promise<import('@easyview/contracts').OperationResult<DesktopWorkspaceState>>;
   readDirectory(relativePath: string): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry[]>>;
+  getSortMode(): Promise<import('@easyview/contracts').OperationResult<import('./workspace').WorkspaceTreeSortMode>>;
+  setSortMode(sortMode: import('./workspace').WorkspaceTreeSortMode): Promise<import('@easyview/contracts').OperationResult<import('./workspace').WorkspaceTreeSortMode>>;
+  getShowCreatedAt(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setShowCreatedAt(showCreatedAt: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  getShowUpdatedAt(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setShowUpdatedAt(showUpdatedAt: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  getShowDotEntries(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setShowDotEntries(showDotEntries: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  getShowTimestampHover(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setShowTimestampHover(showTimestampHover: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   create(request: WorkspaceCreateRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
   rename(request: WorkspaceRenameRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
+  move(request: import('./workspace').WorkspaceMoveRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
+  reorder(request: import('./workspace').WorkspaceReorderRequest): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   delete(request: WorkspaceDeleteRequest): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   copyClipboard(relativePath: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   pasteClipboard(request: WorkspacePasteRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;

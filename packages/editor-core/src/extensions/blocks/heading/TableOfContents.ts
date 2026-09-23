@@ -445,7 +445,7 @@ export class TableOfContents {
       }
       .toc-table-controls { display:flex; align-items:center; justify-content:center; padding:8px 12px 10px; }
       .toc-table-mode-group { display:grid; grid-template-columns:1fr 1fr; width:min(100%, 224px); align-items:stretch; border:1px solid var(--vscode-input-border,rgba(128,128,128,.3)); border-radius:8px; overflow:hidden; background:var(--vscode-input-background,rgba(128,128,128,.12)); }
-      .toc-table-mode-option { height:30px; min-width:0; padding:0 12px; border:0; border-right:1px solid var(--vscode-input-border,rgba(128,128,128,.3)); background:transparent; color:var(--vscode-editor-foreground,#ccc); cursor:pointer; font:inherit; font-size:12px; font-weight:600; }
+      .toc-table-mode-option { height:22px; min-width:0; padding:0 12px; border:0; border-right:1px solid var(--vscode-input-border,rgba(128,128,128,.3)); background:transparent; color:var(--vscode-editor-foreground,#ccc); cursor:pointer; font:inherit; font-size:12px; font-weight:600; }
       .toc-table-mode-option:last-child { border-right:0; }
       .toc-table-mode-option.active {
         background: var(--mdpre-accent, var(--vscode-button-background, #65aaf5));
@@ -1652,22 +1652,30 @@ export class TableOfContents {
     this.view = view;
     if (!this.isVisible) return;
 
-    const newHeadings = this.extractHeadings(view.state.doc);
-
+    // Selection-only transactions do not change the heading index. Keep the
+    // cached headings and only update the active item. Hidden TOC instances
+    // return above, so they do not scan the document at all.
     if (this.tableMode) {
-      if (transaction?.docChanged) this.renderList();
-      else this.highlightActiveTableNode();
+      if (transaction?.docChanged) {
+        this.headings = this.extractHeadings(view.state.doc);
+        this.renderList();
+      } else if (transaction?.selectionSet) {
+        this.highlightActiveTableNode();
+      }
       return;
     }
 
-    if (this.headingsChanged(this.headings, newHeadings)) {
-      this.headings = newHeadings;
-      this.renderList();
-      return;
+    if (transaction?.docChanged || !transaction) {
+      const newHeadings = this.extractHeadings(view.state.doc);
+      if (this.headingsChanged(this.headings, newHeadings)) {
+        this.headings = newHeadings;
+        this.renderList();
+        return;
+      }
     }
 
     // Fast path for large documents: when only cursor/selection moves,
-    // compute active heading from document position instead of scanning DOM.
+    // compute active heading from the cached heading index instead of scanning.
     if (transaction?.selectionSet || transaction?.docChanged) {
       const activePos = this.findActiveHeadingPosBySelectionPos(view.state.selection.from);
       if (activePos !== this.activeIndex) {

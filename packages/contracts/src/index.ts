@@ -1,4 +1,5 @@
 export * from './ai/ai-chat';
+export * from './ai/text-patch';
 export * from './capabilities/editor-host-capabilities';
 export * from './editor-host/transport';
 export * from './export/xlsx-export';

@@ -1,6 +1,6 @@
 /**
  * AI Chat Panel — right-side chat panel for conversing with an LLM and, in
- * agent mode, applying full-document edits to the current markdown file.
+ * agent mode, applying exact structured patches to the current markdown file.
  */
 
 import type {
@@ -10,8 +10,8 @@ import type {
   EditorToHostMessage,
   HostToEditorMessage,
 } from '@easyview/contracts';
-import { DEFAULT_AI_CHAT_SETTINGS } from '@easyview/contracts';
-import { decorateRenderedMarkdown, extractMarkdownBlock, renderAssistantMarkdown } from './aiChatMarkdown';
+import { applyAiTextPatches, DEFAULT_AI_CHAT_SETTINGS } from '@easyview/contracts';
+import { decorateRenderedMarkdown, renderAssistantMarkdown } from './aiChatMarkdown';
 
 const PANEL_WIDTH_STORAGE_KEY = 'easyview-ai-chat-width';
 const MODEL_STORAGE_KEY = 'easyview-ai-chat-model';
@@ -31,6 +31,7 @@ interface ChatUiMessage {
   role: 'user' | 'assistant';
   content: string;
   reasoning?: string;
+  toolActivities?: string[];
   attachments?: AiChatAttachment[];
   badge?: MessageBadge;
   error?: string;
@@ -529,11 +530,11 @@ function ensureAiChatPanelStyles(): void {
       font-size: 12px;
       color: var(--vscode-editor-foreground, #e5e7eb);
     }
-    .ai-chat-key-status {
+    .ai-chat-key-status, .ai-chat-web-search-key-status {
       font-size: 10px;
       color: var(--vscode-descriptionForeground, #888);
     }
-    .ai-chat-key-status.saved { color: #4ade80; }
+    .ai-chat-key-status.saved, .ai-chat-web-search-key-status.saved { color: #4ade80; }
     .ai-chat-settings-actions {
       display: flex;
       gap: 8px;
@@ -635,6 +636,10 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
         <input class="ai-chat-settings-key" type="password" placeholder="sk-..." autocomplete="off" />
       </div>
       <div class="ai-chat-field">
+        <label>Brave Search API Key <span class="ai-chat-web-search-key-status"></span></label>
+        <input class="ai-chat-settings-web-search-key" type="password" placeholder="用于 web_search 工具" autocomplete="off" />
+      </div>
+      <div class="ai-chat-field">
         <label>Base URL（OpenAI 兼容接口）</label>
         <input class="ai-chat-settings-baseurl" type="text" placeholder="https://api.deepseek.com" />
       </div>
@@ -668,7 +673,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
         <button class="ai-chat-settings-save" type="button">保存</button>
       </div>
       <div class="ai-chat-settings-status"></div>
-      <div class="ai-chat-settings-hint">API Key 加密存储于系统钥匙串，不会写入明文文件。设置保存后立即生效。默认配置为 Deepseek 官方接口，也可填写任意 OpenAI 兼容服务地址。</div>
+      <div class="ai-chat-settings-hint">模型 API Key 与 Brave Search API Key 均加密存储于系统钥匙串。Brave Key 已保存时，Agent 模式可调用 web_search。</div>
     </div>
   `;
 
@@ -688,9 +693,11 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
   const urlInput = root.querySelector('.ai-chat-url-input') as HTMLInputElement;
   const settingsView = root.querySelector('.ai-chat-settings-view') as HTMLElement;
   const keyStatusEl = root.querySelector('.ai-chat-key-status') as HTMLElement;
+  const webSearchKeyStatusEl = root.querySelector('.ai-chat-web-search-key-status') as HTMLElement;
 
   const settingsEls = {
     key: root.querySelector('.ai-chat-settings-key') as HTMLInputElement,
+    webSearchKey: root.querySelector('.ai-chat-settings-web-search-key') as HTMLInputElement,
     baseUrl: root.querySelector('.ai-chat-settings-baseurl') as HTMLInputElement,
     models: root.querySelector('.ai-chat-settings-models') as HTMLTextAreaElement,
     temperature: root.querySelector('.ai-chat-settings-temperature') as HTMLInputElement,
@@ -712,12 +719,15 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
   let pendingAttachments: AiChatAttachment[] = [];
   let settings: AiChatSettings = { ...DEFAULT_AI_CHAT_SETTINGS };
   let hasApiKey = false;
+  let hasWebSearchApiKey = false;
   let selectedModel = '';
   let settingsLoaded = false;
   let activeRequestId: string | null = null;
   let streamingMessageId: string | null = null;
   let currentFilePath = '';
   let renderScheduled = false;
+  let inputHistoryIndex: number | null = null;
+  let inputHistoryDraft = '';
 
   // ---------------------------------------------------------------- layout
 
@@ -895,6 +905,14 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
       }
       item.appendChild(bubble);
 
+      if (message.toolActivities && message.toolActivities.length > 0) {
+        const tools = document.createElement('div');
+        tools.className = 'ai-chat-tool-activities';
+        tools.textContent = message.toolActivities.join('\n');
+        tools.style.whiteSpace = 'pre-wrap';
+        item.appendChild(tools);
+      }
+
       if (message.reasoning) {
         const details = document.createElement('details');
         details.className = 'ai-chat-reasoning';
@@ -1004,8 +1022,11 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     settingsEls.systemPrompt.value = settings.systemPrompt;
     settingsEls.stream.checked = settings.stream;
     settingsEls.key.value = '';
+    settingsEls.webSearchKey.value = '';
     keyStatusEl.textContent = hasApiKey ? '（已保存）' : '（未设置）';
     keyStatusEl.classList.toggle('saved', hasApiKey);
+    webSearchKeyStatusEl.textContent = hasWebSearchApiKey ? '（已保存）' : '（未设置）';
+    webSearchKeyStatusEl.classList.toggle('saved', hasWebSearchApiKey);
   };
 
   const openSettings = (): void => {
@@ -1074,6 +1095,10 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     const apiKey = settingsEls.key.value.trim();
     if (apiKey.length > 0) {
       deps.postMessage({ type: 'aiChat.saveApiKey', requestId: `${requestId}-key`, apiKey });
+    }
+    const webSearchApiKey = settingsEls.webSearchKey.value.trim();
+    if (webSearchApiKey.length > 0) {
+      deps.postMessage({ type: 'aiChat.saveWebSearchApiKey', requestId: `${requestId}-web-search-key`, apiKey: webSearchApiKey });
     }
     setSettingsStatus('保存中…', true);
   });
@@ -1182,10 +1207,13 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
       history: history.slice(0, -1).slice(-40),
       documentContent: mode === 'agent' && documentContextAvailable ? deps.getDocumentContent() : undefined,
       documentFileName: mode === 'agent' && documentContextAvailable ? deps.getFileName() : undefined,
+      documentFilePath: mode === 'agent' && documentContextAvailable ? deps.getFilePath() : undefined,
     };
     deps.postMessage(request);
 
     inputEl.value = '';
+    inputHistoryIndex = null;
+    inputHistoryDraft = '';
     autoResizeInput();
     pendingAttachments = [];
     updatePendingAttachments();
@@ -1203,14 +1231,51 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     else sendMessage();
   });
 
+  const navigateSentMessageHistory = (direction: -1 | 1): boolean => {
+    const sentMessages = messages
+      .filter((message) => message.role === 'user' && message.content.trim().length > 0)
+      .map((message) => message.content);
+    if (sentMessages.length === 0) return false;
+
+    if (inputHistoryIndex === null) {
+      inputHistoryDraft = inputEl.value;
+      inputHistoryIndex = direction === -1 ? sentMessages.length - 1 : null;
+    } else {
+      inputHistoryIndex += direction;
+    }
+
+    if (inputHistoryIndex === null || inputHistoryIndex >= sentMessages.length) {
+      inputHistoryIndex = null;
+      inputEl.value = inputHistoryDraft;
+    } else {
+      inputHistoryIndex = Math.max(0, inputHistoryIndex);
+      inputEl.value = sentMessages[inputHistoryIndex];
+    }
+    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    autoResizeInput();
+    return true;
+  };
+
   inputEl.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       sendMessage();
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key === 'ArrowUp' && inputEl.selectionStart === 0 && inputEl.selectionEnd === 0) {
+      if (navigateSentMessageHistory(-1)) event.preventDefault();
+      return;
+    }
+    if (event.key === 'ArrowDown' && inputEl.selectionStart === inputEl.value.length && inputEl.selectionEnd === inputEl.value.length) {
+      if (navigateSentMessageHistory(1)) event.preventDefault();
     }
   });
 
-  inputEl.addEventListener('input', autoResizeInput);
+  inputEl.addEventListener('input', () => {
+    inputHistoryIndex = null;
+    autoResizeInput();
+  });
 
   inputEl.addEventListener('paste', (event) => {
     const files = event.clipboardData?.files;
@@ -1301,23 +1366,26 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
 
   // --------------------------------------------------------- host messages
 
-  const applyAgentReply = (content: string, messageId: string): void => {
+  const applyAgentPatches = (patches: import('@easyview/contracts').AiTextPatch[], messageId: string): void => {
     const message = messages.find((item) => item.id === messageId);
     if (!documentContextAvailable) {
       if (message) message.badge = 'no-doc';
       return;
     }
-    const block = extractMarkdownBlock(content);
-    if (!block) {
-      if (message) message.badge = 'no-doc';
-      return;
+    try {
+      const nextContent = applyAiTextPatches(deps.getDocumentContent(), patches);
+      if (nextContent === deps.getDocumentContent()) {
+        if (message) message.badge = 'no-change';
+        return;
+      }
+      deps.applyDocumentEdit(nextContent);
+      if (message) message.badge = 'applied';
+    } catch (error) {
+      if (message) {
+        message.badge = 'error';
+        message.error = error instanceof Error ? error.message : String(error);
+      }
     }
-    if (block.content.trim() === deps.getDocumentContent().trim()) {
-      if (message) message.badge = 'no-change';
-      return;
-    }
-    deps.applyDocumentEdit(block.content);
-    if (message) message.badge = 'applied';
   };
 
   const handleMessage = (message: HostToEditorMessage): boolean => {
@@ -1332,16 +1400,29 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
         renderStreamingMessage();
         return true;
       }
+      case 'aiChat.tool': {
+        if (message.requestId !== activeRequestId) return true;
+        const target = messages.find((item) => item.id === streamingMessageId);
+        if (!target) return true;
+        const action = message.phase === 'call' ? '调用' : '完成';
+        target.toolActivities = [...(target.toolActivities ?? []), `${action}工具：${message.toolName}`];
+        renderMessages();
+        return true;
+      }
+      case 'aiChat.applyPatches': {
+        if (message.requestId !== activeRequestId) return true;
+        const target = messages.find((item) => item.id === streamingMessageId);
+        if (!target || message.path !== deps.getFilePath()) return true;
+        applyAgentPatches(message.patches, target.id);
+        renderMessages();
+        return true;
+      }
       case 'aiChat.done': {
         if (message.requestId !== activeRequestId) return true;
-        const messageId = streamingMessageId;
-        const target = messages.find((item) => item.id === messageId);
+        const target = messages.find((item) => item.id === streamingMessageId);
         if (target) {
           target.content = message.content;
           target.reasoning = message.reasoning;
-          if (mode === 'agent' && message.content) {
-            applyAgentReply(message.content, target.id);
-          }
         }
         if (message.finishReason === 'length' && target) {
           target.error = '注意：回复因长度限制被截断。';
@@ -1382,6 +1463,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
         settingsLoaded = true;
         settings = message.settings;
         hasApiKey = message.hasApiKey;
+        hasWebSearchApiKey = message.hasWebSearchApiKey;
         rebuildModelMenu();
         if (settingsView.classList.contains('open')) fillSettingsForm();
         return true;

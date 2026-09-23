@@ -12,6 +12,7 @@ import {
 describe('platform-neutral shared protocol', () => {
   it('accepts known editor message types without requiring a host platform', () => {
     expect(isEditorToHostMessage({ type: 'ready' })).toBe(true);
+    expect(isEditorToHostMessage({ type: 'applyEdits' })).toBe(true);
     expect(isEditorToHostMessage({ type: 'exportXlsx', payload: {}, fileName: 'table.xlsx' })).toBe(true);
     expect(isEditorToHostMessage({ type: 'unknown-command' })).toBe(false);
     expect(isEditorToHostMessage({ type: 'openNativeSourceMode' })).toBe(false);
@@ -28,6 +29,7 @@ describe('platform-neutral shared protocol', () => {
       git: false,
       terminal: false,
       aiCommitMessage: false,
+      aiChat: false,
       documentConversion: false,
       shortcutPersistence: false,
     },

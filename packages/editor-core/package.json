@@ -53,7 +53,8 @@
     "scroll-into-view-if-needed": "^3.1.0",
     "uuid": "^11.1.0",
     "@lezer/highlight": "^1.2.1",
-    "prosemirror-transform": "^1.10.5"
+    "prosemirror-transform": "^1.10.5",
+    "@easyview/editor-sync": "*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

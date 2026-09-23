@@ -4,19 +4,26 @@ import {
   type WorkspaceGateway,
   type WorkspacePathChange,
   type WorkspacePathReference,
+  type WorkspaceTreeSortMode,
   WorkspaceOperationError,
 } from '@easyview/contracts';
 import {
-  compareWorkspaceEntries,
   getWorkspaceAncestorPaths,
   normalizeWorkspaceRelativePath,
   parentWorkspaceRelativePath,
   validateWorkspaceEntryName,
 } from './workspace-path';
+import { sortWorkspaceEntries } from './workspace-tree-order';
+
+export interface WorkspaceTreeSortProvider {
+  getSortMode(): WorkspaceTreeSortMode;
+  getOrderNames(parentRelativePath: string): readonly string[];
+}
 
 export interface WorkspaceTreeModelOptions {
   /** Optional bound for the number of lazily loaded directory snapshots. */
   maxCachedDirectories?: number;
+  sortProvider?: WorkspaceTreeSortProvider;
 }
 
 function cacheKey(rootId: string, relativePath: string): string {
@@ -28,12 +35,18 @@ export class WorkspaceTreeModel {
   private readonly childCache = new Map<string, Promise<readonly WorkspaceEntry[]>>();
   private readonly nodes = new Map<string, WorkspaceEntry>();
   private readonly maxCachedDirectories?: number;
+  private sortProvider?: WorkspaceTreeSortProvider;
 
   constructor(
     private readonly gateway: WorkspaceGateway,
     options: WorkspaceTreeModelOptions = {},
   ) {
     this.maxCachedDirectories = options.maxCachedDirectories;
+    this.sortProvider = options.sortProvider;
+  }
+
+  setSortProvider(provider: WorkspaceTreeSortProvider | undefined): void {
+    this.sortProvider = provider;
   }
 
   listChildren(rootId: string, relativePath = ''): Promise<readonly WorkspaceEntry[]> {
@@ -151,11 +164,13 @@ export class WorkspaceTreeModel {
   private async loadChildren(rootId: string, directoryPath: string): Promise<readonly WorkspaceEntry[]> {
     const entries = await this.gateway.listChildren(rootId, directoryPath);
     const normalizedEntries = entries.map((entry) => this.normalizeGatewayEntry(rootId, directoryPath, entry));
-    normalizedEntries.sort(compareWorkspaceEntries);
-    for (const entry of normalizedEntries) {
+    const sortMode = this.sortProvider?.getSortMode() ?? 'name';
+    const orderNames = this.sortProvider?.getOrderNames(directoryPath) ?? [];
+    const sorted = sortWorkspaceEntries(normalizedEntries, sortMode, orderNames);
+    for (const entry of sorted) {
       this.nodes.set(cacheKey(rootId, entry.relativePath), entry);
     }
-    return Object.freeze(normalizedEntries);
+    return Object.freeze(sorted);
   }
 
   private normalizeGatewayEntry(
@@ -199,10 +214,9 @@ export class WorkspaceTreeModel {
   private evictIfNeeded(protectedKey: string): void {
     if (!this.maxCachedDirectories || this.childCache.size <= this.maxCachedDirectories) return;
     for (const key of this.childCache.keys()) {
-      if (key !== protectedKey) {
-        this.childCache.delete(key);
-        return;
-      }
+      if (key === protectedKey) continue;
+      this.childCache.delete(key);
+      if (this.childCache.size <= this.maxCachedDirectories) return;
     }
   }
 }

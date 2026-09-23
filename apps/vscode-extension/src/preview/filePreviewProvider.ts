@@ -27,15 +27,22 @@ class FilePreviewDocument implements vscode.CustomDocument {
 
 export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<FilePreviewDocument> {
   static readonly viewType = VIEW_TYPE;
+  private static readonly activePanels = new Set<vscode.WebviewPanel>();
   static readonly filenamePatterns = PHASE1_FILENAME_PATTERNS;
+
+  static getDiagnostics(): { previewSessions: number; visiblePreviews: number; hiddenPreviews: number } {
+    const panels = [...FilePreviewProvider.activePanels];
+    const visiblePreviews = panels.filter((panel) => panel.visible).length;
+    return { previewSessions: panels.length, visiblePreviews, hiddenPreviews: panels.length - visiblePreviews };
+  }
 
   static register(context: vscode.ExtensionContext): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(
       VIEW_TYPE,
       new FilePreviewProvider(context),
       {
-        webviewOptions: { retainContextWhenHidden: true },
-        supportsMultipleEditorsPerDocument: true,
+        webviewOptions: { retainContextWhenHidden: false },
+        supportsMultipleEditorsPerDocument: false,
       },
     );
   }
@@ -55,6 +62,8 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken,
   ): Promise<void> {
+    FilePreviewProvider.activePanels.add(webviewPanel);
+    webviewPanel.onDidDispose(() => FilePreviewProvider.activePanels.delete(webviewPanel));
     const fileName = path.basename(document.uri.fsPath || document.uri.path);
     const route = resolvePreviewRoute(fileName);
     const localRoots = [
@@ -194,12 +203,13 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     fileTheme: EasyViewThemeMode | null,
   ): string {
     const nonce = getNonce();
-    const scriptUri = webview.asWebviewUri(
+    const resourceVersion = getStableResourceVersion(this.context);
+    const scriptUri = withResourceVersion(webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'preview-webview.js'),
-    );
-    const styleUri = webview.asWebviewUri(
+    ), resourceVersion);
+    const styleUri = withResourceVersion(webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'preview', 'preview.css'),
-    );
+    ), resourceVersion);
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} data: blob:`,
@@ -285,6 +295,15 @@ function decodePreviewBytes(bytes: unknown, encoding: unknown): Uint8Array | nul
 function errorHtml(message: string): string {
   const safe = message.replace(/[<>&]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[ch]!));
   return `<!DOCTYPE html><html><body style="margin:0;display:grid;place-items:center;height:100vh;font:13px var(--vscode-font-family);color:var(--vscode-errorForeground);background:var(--vscode-editor-background)"><p>${safe}</p></body></html>`;
+}
+
+function getStableResourceVersion(context: vscode.ExtensionContext): string {
+  const version = context.extension.packageJSON?.version;
+  return typeof version === 'string' && version.length > 0 ? version : 'dev';
+}
+
+function withResourceVersion(uri: vscode.Uri, version: string): vscode.Uri {
+  return uri.with({ query: `v=${encodeURIComponent(version)}` });
 }
 
 function getNonce(): string {

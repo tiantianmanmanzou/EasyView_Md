@@ -16,20 +16,11 @@ export interface BuildAiChatMessagesOptions {
   documentFileName?: string;
 }
 
-const AGENT_SYSTEM_INSTRUCTION = `You are editing a Markdown document inside an editor.
-When the user asks for a modification to the document, output the COMPLETE updated document inside a single fenced code block tagged \`markdown\`, with no text before or after the block. If the document itself contains triple-backtick fenced blocks, use four backticks for the outer fence. Preserve all content the user did not ask to change.
-When no modification is requested, reply normally without any fenced document block.`;
+const AGENT_SYSTEM_INSTRUCTION = `You are editing Markdown and text files inside an editor.
+For every modification to an existing file, first call inspect_file to establish the current content, Git working-tree state, and the exact section boundary. Then call apply_patch with one or more small, non-overlapping, semantic patches. Each expectedText must be an exact unique anchor from the inspected content. Never output or rewrite a complete document for a local change.
+For a new file, use create_file. Use list_files before assuming a path. Do not claim that a file was changed unless the corresponding tool completed. After tool completion, reply with a concise summary only.`;
 
 const CHAT_SYSTEM_INSTRUCTION = `You are a helpful assistant inside a Markdown editor. Reply in the same language the user writes in.`;
-
-/** Documents larger than this are truncated before being sent as context. */
-export const MAX_DOCUMENT_CONTEXT_CHARS = 150_000;
-
-function truncateDocument(content: string): string {
-  if (content.length <= MAX_DOCUMENT_CONTEXT_CHARS) return content;
-  const truncated = content.slice(0, MAX_DOCUMENT_CONTEXT_CHARS);
-  return `${truncated}\n\n[... 文档过长，已截断 ...]`;
-}
 
 function buildUserContent(
   userMessage: string,
@@ -60,8 +51,8 @@ export function buildAiChatMessages(options: BuildAiChatMessagesOptions): OpenAi
     systemParts.push(systemPrompt.trim());
   }
   if (mode === 'agent' && documentContent !== undefined) {
-    const label = documentFileName ? `当前文档: ${documentFileName}` : '当前文档';
-    systemParts.push(`${label}\n\n${truncateDocument(documentContent)}`);
+    const label = documentFileName ? `当前打开文档: ${documentFileName}` : '当前打开文档';
+    systemParts.push(`${label}。修改它前必须调用不带 path 的 inspect_file 建立编辑基线。`);
   }
   messages.push({ role: 'system', content: systemParts.join('\n\n') });
 

@@ -146,46 +146,76 @@ function createTocNodeView(
   list.className = 'toc-block-list';
   dom.appendChild(list);
 
+  const keyedItems = new Map<string, HTMLDivElement>();
+  let emptyState: HTMLDivElement | null = null;
+
+  function createHeadingItem(): HTMLDivElement {
+    const item = document.createElement('div');
+    item.className = 'toc-block-item';
+    const link = document.createElement('a');
+    link.className = 'toc-block-link';
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const anchorId = link.dataset.anchorId;
+      if (!anchorId) return;
+      const targetEl = document.getElementById(anchorId);
+      if (targetEl) {
+        const headingEl =
+          targetEl.closest('h1, h2, h3, h4, h5, h6') ||
+          targetEl.nextElementSibling ||
+          targetEl.parentElement;
+        (headingEl || targetEl).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+    item.appendChild(link);
+    return item;
+  }
+
+  function updateHeadingItem(item: HTMLDivElement, anchor: HeadingAnchor, minLevel: number): void {
+    const link = item.firstElementChild as HTMLAnchorElement;
+    item.setAttribute('data-level', String(anchor.level));
+    item.dataset.anchorId = anchor.id;
+    item.style.paddingLeft = `${(anchor.level - minLevel) * 16 + 8}px`;
+    link.dataset.anchorId = anchor.id;
+    link.textContent = anchor.text || '(empty heading)';
+    link.href = `#${anchor.id}`;
+  }
+
   function renderHeadings(editorView: EditorView) {
     const anchors = getHeadingAnchors(editorView.state.doc);
-    list.innerHTML = '';
-
     if (anchors.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'toc-block-empty';
-      empty.textContent = 'No headings found';
-      list.appendChild(empty);
+      keyedItems.forEach((item) => item.remove());
+      keyedItems.clear();
+      if (!emptyState) {
+        emptyState = document.createElement('div');
+        emptyState.className = 'toc-block-empty';
+        emptyState.textContent = 'No headings found';
+      }
+      list.appendChild(emptyState);
       return;
     }
 
-    // Find minimum level for indentation normalization
-    const minLevel = Math.min(...anchors.map(a => a.level));
+    emptyState?.remove();
+    emptyState = null;
+    const minLevel = Math.min(...anchors.map((anchor) => anchor.level));
+    const nextKeys = new Set(anchors.map((anchor) => anchor.id));
+    keyedItems.forEach((item, key) => {
+      if (!nextKeys.has(key)) {
+        item.remove();
+        keyedItems.delete(key);
+      }
+    });
 
+    // Reuse keyed rows and append them in document order. Existing rows keep
+    // their DOM/listener state; only changed text/attributes are updated.
     for (const anchor of anchors) {
-      const item = document.createElement('div');
-      item.className = 'toc-block-item';
-      item.setAttribute('data-level', String(anchor.level));
-      item.style.paddingLeft = `${(anchor.level - minLevel) * 16 + 8}px`;
-
-      const link = document.createElement('a');
-      link.className = 'toc-block-link';
-      link.textContent = anchor.text || '(empty heading)';
-      link.href = `#${anchor.id}`;
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        // Scroll to heading in editor
-        const targetEl = document.getElementById(anchor.id);
-        if (targetEl) {
-          const headingEl =
-            targetEl.closest('h1, h2, h3, h4, h5, h6') ||
-            targetEl.nextElementSibling ||
-            targetEl.parentElement;
-          (headingEl || targetEl).scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      });
-
-      item.appendChild(link);
+      let item = keyedItems.get(anchor.id);
+      if (!item) {
+        item = createHeadingItem();
+        keyedItems.set(anchor.id, item);
+      }
+      updateHeadingItem(item, anchor, minLevel);
       list.appendChild(item);
     }
   }

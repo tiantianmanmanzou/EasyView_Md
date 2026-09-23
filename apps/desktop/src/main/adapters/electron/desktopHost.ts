@@ -52,6 +52,9 @@ import { JavaDecompileService } from '../../application/preview/JavaDecompileSer
 import { PreviewSessionError, PreviewSessionStore } from '../../application/preview/PreviewSession';
 import { registerPreviewProtocol, registerPreviewScheme } from './previewProtocol';
 import { isAllowedExternalUrl } from './rendererSecurity';
+import { DesktopDocumentAdapter } from '../../application/document/desktopDocumentAdapter';
+import { DocumentSyncSession } from '@easyview/editor-sync';
+import { hashContent, applyTextPatches, validatePatches, minimalTextPatch, type TextOffsetPatch } from '@easyview/editor-sync';
 import type {
   HostToEditorMessage,
   OperationErrorCode,
@@ -71,8 +74,11 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceDeleteRequest,
   WorkspaceEntry,
+  WorkspaceMoveRequest,
   WorkspacePasteRequest,
   WorkspaceRenameRequest,
+  WorkspaceReorderRequest,
+  WorkspaceTreeSortMode,
 } from '../../../contracts';
 import { resolvePreviewRoute } from '../../../contracts';
 
@@ -81,12 +87,16 @@ interface DocumentSession {
   filePath: string | null;
   fileName: string;
   content: string;
+  rawContent: string;
   diskContent: string;
   lineEnding: '\n' | '\r\n';
   diskMtimeMs: number | null;
   dirty: boolean;
   watcher?: FSWatcher;
   externalConflict: { mtimeMs: number | null; content: string } | null;
+  readonly documentId: string;
+  readonly documentAdapter: DesktopDocumentAdapter;
+  readonly sync: DocumentSyncSession;
 }
 
 let mainWindow: BrowserWindow | undefined;
@@ -131,11 +141,15 @@ function createEmptySession(): DocumentSession {
     filePath: null,
     fileName: 'Untitled.md',
     content: '',
+    rawContent: '',
     diskContent: '',
     lineEnding: '\n',
     diskMtimeMs: null,
     dirty: false,
     externalConflict: null,
+    documentId: 'untitled',
+    documentAdapter: new DesktopDocumentAdapter(''),
+    sync: new DocumentSyncSession({ documentId: 'untitled', initialContent: '' }),
   };
 }
 
@@ -295,12 +309,14 @@ async function resolveGitContext(): Promise<{ rootPath: string; filePath: string
   return { rootPath: repository.rootPath, filePath };
 }
 
-function currentEditorDocumentMessage(
-  type: 'init' | 'documentChanged',
-): HostToEditorMessage {
+function currentEditorDocumentMessage(reason: 'initial' | 'visible' | 'resync' | 'reload' = 'visible'): HostToEditorMessage {
   return {
-    type,
+    type: 'documentSnapshot',
+    documentId: documentSession.documentId,
+    revision: documentSession.sync.snapshot.revision,
     content: documentSession.content,
+    contentHash: hashContent(documentSession.content),
+    reason,
     filename: fileNameWithoutExtension(documentSession.fileName),
     filePath: documentSession.filePath ?? '',
     fullWidth: true,
@@ -322,6 +338,7 @@ function createDesktopAiChatHost(): AiChatHost {
   const userDataPath = app.getPath('userData');
   const settingsFilePath = path.join(userDataPath, 'ai-chat-settings.json');
   const apiKeyPath = path.join(userDataPath, 'ai-chat-api-key.bin');
+  const webSearchApiKeyPath = path.join(userDataPath, 'ai-chat-web-search-api-key.bin');
   return new AiChatHost({
     settingsFilePath,
     secretStore: {
@@ -341,8 +358,23 @@ function createDesktopAiChatHost(): AiChatHost {
         const encrypted = safeStorage.encryptString(apiKey);
         await fs.writeFile(apiKeyPath, encrypted);
       },
+      async getWebSearchApiKey() {
+        if (!safeStorage.isEncryptionAvailable()) return null;
+        try {
+          return safeStorage.decryptString(await fs.readFile(webSearchApiKeyPath));
+        } catch {
+          return null;
+        }
+      },
+      async setWebSearchApiKey(apiKey) {
+        if (!safeStorage.isEncryptionAvailable()) {
+          throw new Error('当前系统不支持安全存储 Web Search API Key');
+        }
+        await fs.writeFile(webSearchApiKeyPath, safeStorage.encryptString(apiKey));
+      },
     },
     postMessage: sendEditorMessage,
+    getToolContext: () => ({ workspaceRootPath: workspaceCore.getRootPath() }),
     pickImages: {
       pickImages: async () => {
         const chosen = await dialog.showOpenDialog(mainWindow!, {
@@ -450,11 +482,11 @@ function activateEditorSession(tabId: string): DocumentSession | null {
   return session;
 }
 
-function notifyActiveDocument(type: 'init' | 'documentChanged' = 'init'): void {
+function notifyActiveDocument(reason: 'initial' | 'visible' | 'resync' | 'reload' = 'visible'): void {
   const active = activeEditorTab();
   if (!active || !activateEditorSession(active.id)) return;
   sendToWindow('document.changed', currentDocumentResult());
-  sendEditorMessage(currentEditorDocumentMessage(type));
+  sendEditorMessage(currentEditorDocumentMessage(reason));
 }
 
 function publishMenuCommand(command: DesktopMenuCommand): void {
@@ -587,22 +619,42 @@ async function reloadIfChanged(session: DocumentSession): Promise<void> {
       if (stats.mtimeMs === session.diskMtimeMs) return;
       if (session.dirty && session.externalConflict?.mtimeMs === stats.mtimeMs) return;
       const raw = await fs.readFile(session.filePath, 'utf8');
-      const normalized = normalizeLineEnding(raw);
+      const externalAdapter = new DesktopDocumentAdapter(raw);
       if (!session.dirty) {
-        session.content = normalized.content;
-        session.diskContent = normalized.content;
-        session.lineEnding = normalized.lineEnding;
+        const previousContent = session.content;
+        const externalPatch = minimalTextPatch(previousContent, externalAdapter.content);
+        session.documentAdapter.replaceRaw(raw);
+        session.rawContent = raw;
+        session.content = externalAdapter.content;
+        session.diskContent = externalAdapter.content;
+        session.lineEnding = externalAdapter.lineEnding;
         session.diskMtimeMs = stats.mtimeMs;
         session.externalConflict = null;
+        const nextRevision = session.sync.snapshot.revision + 1;
+        session.sync.applySnapshot(session.content, nextRevision);
         if (activeEditorTab()?.id === session.tabId) {
           documentSession = session;
           sendToWindow('document.changed', currentDocumentResult());
-          sendEditorMessage(currentEditorDocumentMessage('documentChanged'));
+          sendEditorMessage({
+            type: 'documentPatched', documentId: session.documentId,
+            baseRevision: nextRevision - 1, revision: nextRevision,
+            edits: externalPatch, resultHash: hashContent(session.content), source: 'external',
+            skipAutoScroll: true,
+          });
         }
       } else {
-        session.externalConflict = { mtimeMs: stats.mtimeMs, content: normalized.content };
+        session.externalConflict = { mtimeMs: stats.mtimeMs, content: externalAdapter.content };
+        session.sync.markConflict();
         sendToWindow('document.externalChange', { filePath: session.filePath });
-        if (activeEditorTab()?.id === session.tabId) await resolveExternalConflict(session, normalized.content, stats.mtimeMs);
+        if (activeEditorTab()?.id === session.tabId) {
+          documentSession = session;
+          sendEditorMessage({
+            type: 'resyncRequired', documentId: session.documentId,
+            revision: session.sync.snapshot.revision,
+            reason: 'External modification conflicts with unsaved local edits',
+          });
+          await resolveExternalConflict(session, externalAdapter.content, stats.mtimeMs);
+        }
       }
     } catch {
       if (session.dirty) session.externalConflict ??= { mtimeMs: null, content: '' };
@@ -623,14 +675,18 @@ async function resolveExternalConflict(session: DocumentSession, diskContent = s
     detail: '请选择保留当前编辑内容、重新加载磁盘版本，或明确覆盖磁盘文件。',
   });
   if (decision.response === 1) {
-    session.content = diskContent;
-    session.diskContent = diskContent;
+    const reloaded = session.documentAdapter.replaceRaw(diskContent);
+    session.rawContent = reloaded.rawContent;
+    session.content = reloaded.canonicalContent;
+    session.diskContent = reloaded.canonicalContent;
+    session.lineEnding = session.documentAdapter.lineEnding;
     session.diskMtimeMs = diskMtimeMs;
+    session.sync.applySnapshot(session.content, session.sync.snapshot.revision + 1);
     session.externalConflict = null;
     session.dirty = false;
     tabRegistry.setEditorDirty(session.tabId, false);
     syncTabState();
-    notifyActiveDocument('documentChanged');
+    notifyActiveDocument('reload');
   } else if (decision.response === 2 && diskMtimeMs !== null) {
     session.diskMtimeMs = diskMtimeMs;
     session.externalConflict = null;
@@ -651,25 +707,30 @@ async function loadEditorTab(filePath: string, requestedId?: string, notify = tr
     activateEditorSession(existing.id);
     if (notify) {
       syncTabState();
-      notifyActiveDocument('init');
+      notifyActiveDocument('initial');
     }
     return success(currentDocumentResult());
   }
   try {
     const [raw, stats] = await Promise.all([fs.readFile(resolvedPath, 'utf8'), fs.stat(resolvedPath)]);
     if (!stats.isFile()) return failure('INVALID_ARGUMENT', '只能打开普通 Markdown 文件');
-    const normalized = normalizeLineEnding(raw);
+    const adapter = new DesktopDocumentAdapter(raw);
     const tab = tabRegistry.openEditor(resolvedPath, path.basename(resolvedPath), requestedId);
+    const documentId = filePathKey(resolvedPath);
     const session: DocumentSession = {
       tabId: tab.id,
       filePath: resolvedPath,
       fileName: path.basename(resolvedPath),
-      content: normalized.content,
-      diskContent: normalized.content,
-      lineEnding: normalized.lineEnding,
+      content: adapter.content,
+      rawContent: raw,
+      diskContent: adapter.content,
+      lineEnding: adapter.lineEnding,
       diskMtimeMs: stats.mtimeMs,
       dirty: false,
       externalConflict: null,
+      documentId,
+      documentAdapter: adapter,
+      sync: new DocumentSyncSession({ documentId, initialContent: adapter.content }),
     };
     documentSessions.set(tab.id, session);
     documentSession = session;
@@ -677,7 +738,7 @@ async function loadEditorTab(filePath: string, requestedId?: string, notify = tr
     getAppStateStore().rememberRecentFile(resolvedPath);
     if (notify) {
       syncTabState();
-      notifyActiveDocument('init');
+      notifyActiveDocument('initial');
     }
     return success(currentDocumentResult());
   } catch (error) {
@@ -733,7 +794,7 @@ async function activateTab(tabId: string): Promise<OperationResult<DesktopTabSna
   }
   syncTabState();
   if (tab.kind === 'editor') {
-    notifyActiveDocument('init');
+    notifyActiveDocument('initial');
     if (documentSession.externalConflict) void resolveExternalConflict(documentSession);
   }
   return success(tabSnapshot());
@@ -757,15 +818,22 @@ async function writeDocument(
   content: string,
   lineEnding: '\n' | '\r\n',
 ): Promise<OperationResult<SaveDocumentResult>> {
-  const targetContent = withLineEnding(content, lineEnding);
+  const targetContent = documentSession.filePath === filePath
+    ? documentSession.documentAdapter.rawContent
+    : withLineEnding(content, lineEnding);
   try {
     await stopWatcher(documentSession);
     await writeFileAtomically(filePath, targetContent);
     const stats = await fs.stat(filePath);
     documentSession.filePath = filePath;
     documentSession.fileName = path.basename(filePath);
-    documentSession.content = content;
-    documentSession.diskContent = content;
+    const savedAdapter = new DesktopDocumentAdapter(targetContent);
+    documentSession.rawContent = targetContent;
+    documentSession.documentAdapter.replaceRaw(targetContent);
+    documentSession.content = savedAdapter.content;
+    documentSession.diskContent = savedAdapter.content;
+    documentSession.lineEnding = savedAdapter.lineEnding;
+    documentSession.sync.applySnapshot(savedAdapter.content, documentSession.sync.snapshot.revision);
     documentSession.diskMtimeMs = stats.mtimeMs;
     documentSession.externalConflict = null;
     documentSession.dirty = false;
@@ -899,12 +967,15 @@ async function confirmCloseSession(session: DocumentSession): Promise<boolean> {
   });
   if (response.response === 2) return false;
   if (response.response === 1) {
-    session.content = session.diskContent;
+    const reverted = session.documentAdapter.replaceRaw(session.diskContent);
+    session.rawContent = reverted.rawContent;
+    session.content = reverted.canonicalContent;
+    session.sync.applySnapshot(session.content, session.sync.snapshot.revision + 1);
     session.dirty = false;
     session.externalConflict = null;
     tabRegistry.setEditorDirty(session.tabId, false);
     syncTabState();
-    if (activeEditorTab()?.id === session.tabId) notifyActiveDocument('init');
+    if (activeEditorTab()?.id === session.tabId) notifyActiveDocument('initial');
     return true;
   }
   const previous = documentSession;
@@ -932,7 +1003,10 @@ async function confirmCloseAll(): Promise<boolean> {
   if (response.response === 2) return false;
   if (response.response === 1) {
     for (const session of dirtySessions) {
-      session.content = session.diskContent;
+      const reverted = session.documentAdapter.replaceRaw(session.diskContent);
+      session.rawContent = reverted.rawContent;
+      session.content = reverted.canonicalContent;
+      session.sync.applySnapshot(session.content, session.sync.snapshot.revision + 1);
       session.dirty = false;
       session.externalConflict = null;
       tabRegistry.setEditorDirty(session.tabId, false);
@@ -947,7 +1021,7 @@ async function confirmCloseAll(): Promise<boolean> {
     const result = await saveCurrent(session.content, session.diskMtimeMs);
     if (!result.ok || !result.value) {
       syncTabState();
-      notifyActiveDocument('init');
+      notifyActiveDocument('initial');
       await showOperationError(result.ok ? failure('CANCELLED', '保存已取消') : result);
       return false;
     }
@@ -975,7 +1049,7 @@ async function closeTab(tabId: string): Promise<OperationResult<DesktopTabSnapsh
   if (active?.kind === 'editor') activateEditorSession(active.id);
   else if (!active) documentSession = createEmptySession();
   syncTabState();
-  if (active?.kind === 'editor') notifyActiveDocument('init');
+  if (active?.kind === 'editor') notifyActiveDocument('initial');
   return success(tabSnapshot());
 }
 
@@ -1109,6 +1183,7 @@ function validateEditorMessage(value: EditorToHostMessage): string | null {
     case 'aiChat.pickImage':
       return null;
     case 'aiChat.saveApiKey':
+    case 'aiChat.saveWebSearchApiKey':
       return isNonEmptyString(message.requestId) && typeof message.apiKey === 'string' ? null : 'AI API Key 字段无效';
     case 'aiChat.saveSettings':
       return isNonEmptyString(message.requestId) && isRecord(message.settings) ? null : 'AI 设置字段无效';
@@ -1121,6 +1196,7 @@ function validateEditorMessage(value: EditorToHostMessage): string | null {
         && Array.isArray(message.history)
         && (message.documentContent === undefined || typeof message.documentContent === 'string')
         && (message.documentFileName === undefined || typeof message.documentFileName === 'string')
+        && (message.documentFilePath === undefined || typeof message.documentFilePath === 'string')
         ? null
         : 'AI 对话请求字段无效';
     default:
@@ -1138,7 +1214,6 @@ async function handleEditorMessage(message: EditorToHostMessage): Promise<void> 
     !activeEditorTab()
     && !message.type.startsWith('aiChat.')
     && message.type !== 'ready'
-    && message.type !== 'edit'
     && message.type !== 'webviewRuntimeError'
     && message.type !== 'openWithDebugLog'
     && message.type !== 'rowResizeDebug'
@@ -1149,18 +1224,46 @@ async function handleEditorMessage(message: EditorToHostMessage): Promise<void> 
     case 'aiChat.getSettings':
     case 'aiChat.saveSettings':
     case 'aiChat.saveApiKey':
+    case 'aiChat.saveWebSearchApiKey':
     case 'aiChat.pickImage':
       await getAiChatHost().handle(message);
       return;
     case 'ready':
-      sendEditorMessage(currentEditorDocumentMessage('init'));
+      sendEditorMessage(currentEditorDocumentMessage('initial'));
       return;
-    case 'edit': {
-      const wasDirty = documentSession.dirty;
-      documentSession.content = message.content;
-      documentSession.dirty = message.content !== documentSession.diskContent;
-      if (documentSession.tabId) tabRegistry.setEditorDirty(documentSession.tabId, documentSession.dirty);
-      if (wasDirty !== documentSession.dirty) syncTabState();
+    case 'snapshotApplied': {
+      if (message.documentId !== documentSession.documentId || message.revision !== documentSession.sync.snapshot.revision || message.contentHash !== hashContent(documentSession.content)) {
+        sendEditorMessage({ type: 'resyncRequired', documentId: documentSession.documentId, revision: documentSession.sync.snapshot.revision, reason: 'Snapshot acknowledgement mismatch' });
+      }
+      return;
+    }
+    case 'requestResync':
+      if (message.documentId === documentSession.documentId) {
+        sendEditorMessage(currentEditorDocumentMessage('resync'));
+      }
+      return;
+    case 'applyEdits': {
+      const session = documentSession;
+      if (message.documentId !== session.documentId || message.baseRevision !== session.sync.snapshot.revision) {
+        sendEditorMessage({ type: 'resyncRequired', documentId: session.documentId, revision: session.sync.snapshot.revision, reason: 'Document revision is stale' });
+        return;
+      }
+      try {
+        validatePatches(message.edits, session.content.length);
+        const nextContent = applyTextPatches(session.content, message.edits);
+        if (hashContent(nextContent) !== message.resultHash) throw new Error('Edit result hash mismatch');
+        const previousDirty = session.dirty;
+        const result = session.documentAdapter.apply(message.edits);
+        session.content = result.canonicalContent;
+        session.rawContent = result.rawContent;
+        session.sync.applySnapshot(session.content, session.sync.snapshot.revision + 1);
+        session.dirty = session.content !== session.diskContent;
+        if (session.tabId) tabRegistry.setEditorDirty(session.tabId, session.dirty);
+        if (previousDirty !== session.dirty) syncTabState();
+        sendEditorMessage({ type: 'editsApplied', documentId: session.documentId, clientEditId: message.clientEditId, revision: session.sync.snapshot.revision, resultHash: result.resultHash });
+      } catch (error) {
+        sendEditorMessage({ type: 'resyncRequired', documentId: session.documentId, revision: session.sync.snapshot.revision, reason: error instanceof Error ? error.message : 'Invalid document patch' });
+      }
       return;
     }
     case 'save': {
@@ -1538,7 +1641,7 @@ async function closeTabIds(tabIds: string[]): Promise<boolean> {
   if (active?.kind === 'editor') activateEditorSession(active.id);
   else if (!active) documentSession = createEmptySession();
   syncTabState();
-  if (active?.kind === 'editor') notifyActiveDocument('init');
+  if (active?.kind === 'editor') notifyActiveDocument('initial');
   return true;
 }
 
@@ -1549,7 +1652,7 @@ async function closeOtherTabs(tabId: string): Promise<OperationResult<DesktopTab
   tabRegistry.activate(tabId);
   syncTabState();
   const active = tabRegistry.active();
-  if (active?.kind === 'editor') notifyActiveDocument('init');
+  if (active?.kind === 'editor') notifyActiveDocument('initial');
   return success(tabSnapshot());
 }
 
@@ -1609,7 +1712,7 @@ async function renameWorkspaceEntry(request: WorkspaceRenameRequest): Promise<Op
     }
     tabRegistry.renamePreview(request.relativePath, entry.relativePath, entry.name);
     syncTabState();
-    if (activeEditorTab()) notifyActiveDocument('documentChanged');
+    if (activeEditorTab()) notifyActiveDocument('reload');
     sendToWindow('workspace.changed', [workspaceCore.parentRelativePath(request.relativePath), workspaceCore.parentRelativePath(entry.relativePath)]);
     return success(entry);
   } catch (error) {
@@ -2138,6 +2241,108 @@ function registerIpc(): void {
     }
   });
 
+  ipcMain.handle('workspace.getSortMode', (event) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!workspaceRoot()) return failure('INVALID_ARGUMENT', '尚未打开工作区');
+    return success(workspaceCore.getSortMode());
+  });
+
+  ipcMain.handle('workspace.setSortMode', async (event, sortMode: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (sortMode !== 'name' && sortMode !== 'created' && sortMode !== 'custom') {
+      return failure('INVALID_ARGUMENT', '排序方式无效');
+    }
+    try {
+      const next = await workspaceCore.setSortMode(sortMode as WorkspaceTreeSortMode);
+      sendToWindow('workspace.changed', null);
+      return success(next);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
+  });
+
+  ipcMain.handle('workspace.getShowCreatedAt', (event) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!workspaceRoot()) return failure('INVALID_ARGUMENT', '尚未打开工作区');
+    return success(workspaceCore.getShowCreatedAt());
+  });
+
+  ipcMain.handle('workspace.setShowCreatedAt', async (event, showCreatedAt: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof showCreatedAt !== 'boolean') return failure('INVALID_ARGUMENT', '创建时间显示参数无效');
+    try {
+      const next = await workspaceCore.setShowCreatedAt(showCreatedAt);
+      sendToWindow('workspace.changed', null);
+      return success(next);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
+  });
+
+  ipcMain.handle('workspace.getShowUpdatedAt', (event) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!workspaceRoot()) return failure('INVALID_ARGUMENT', '尚未打开工作区');
+    return success(workspaceCore.getShowUpdatedAt());
+  });
+
+  ipcMain.handle('workspace.setShowUpdatedAt', async (event, showUpdatedAt: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof showUpdatedAt !== 'boolean') return failure('INVALID_ARGUMENT', '更新时间显示参数无效');
+    try {
+      const next = await workspaceCore.setShowUpdatedAt(showUpdatedAt);
+      sendToWindow('workspace.changed', null);
+      return success(next);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
+  });
+
+  ipcMain.handle('workspace.getShowDotEntries', (event) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!workspaceRoot()) return failure('INVALID_ARGUMENT', '尚未打开工作区');
+    return success(workspaceCore.getShowDotEntries());
+  });
+
+  ipcMain.handle('workspace.setShowDotEntries', async (event, showDotEntries: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof showDotEntries !== 'boolean') return failure('INVALID_ARGUMENT', '点开头条目显示参数无效');
+    try {
+      const next = await workspaceCore.setShowDotEntries(showDotEntries);
+      sendToWindow('workspace.changed', null);
+      return success(next);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
+  });
+
+  ipcMain.handle('workspace.getShowTimestampHover', (event) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!workspaceRoot()) return failure('INVALID_ARGUMENT', '尚未打开工作区');
+    return success(workspaceCore.getShowTimestampHover());
+  });
+
+  ipcMain.handle('workspace.setShowTimestampHover', async (event, showTimestampHover: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof showTimestampHover !== 'boolean') return failure('INVALID_ARGUMENT', '时间悬停显示参数无效');
+    try {
+      const next = await workspaceCore.setShowTimestampHover(showTimestampHover);
+      sendToWindow('workspace.changed', null);
+      return success(next);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
+  });
+
   ipcMain.handle('workspace.create', async (event, request: WorkspaceCreateRequest) => {
     const denied = assertTrustedRenderer(event);
     if (denied) return denied;
@@ -2160,6 +2365,49 @@ function registerIpc(): void {
     if (denied) return denied;
     if (!request || typeof request.relativePath !== 'string' || typeof request.newName !== 'string') return failure('INVALID_ARGUMENT', '重命名参数无效');
     return renameWorkspaceEntry(request);
+  });
+
+  ipcMain.handle('workspace.move', async (event, request: WorkspaceMoveRequest) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!request || typeof request.relativePath !== 'string' || typeof request.targetParentRelativePath !== 'string') {
+      return failure('INVALID_ARGUMENT', '移动参数无效');
+    }
+    try {
+      const entry = await workspaceCore.move(request);
+      sendToWindow('workspace.changed', [
+        workspaceCore.parentRelativePath(request.relativePath),
+        request.targetParentRelativePath,
+      ]);
+      return success(entry);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
+  });
+
+  ipcMain.handle('workspace.reorder', async (event, request: WorkspaceReorderRequest) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (
+      !request
+      || typeof request.parentRelativePath !== 'string'
+      || typeof request.movedName !== 'string'
+      || !Array.isArray(request.siblingNames)
+    ) {
+      return failure('INVALID_ARGUMENT', '排序参数无效');
+    }
+    try {
+      await workspaceCore.reorder(
+        request.parentRelativePath,
+        request.movedName,
+        request.siblingNames.filter((name): name is string => typeof name === 'string'),
+        typeof request.beforeName === 'string' ? request.beforeName : undefined,
+      );
+      sendToWindow('workspace.changed', [request.parentRelativePath]);
+      return success(true);
+    } catch (error) {
+      return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
+    }
   });
 
   ipcMain.handle('workspace.delete', async (event, request: WorkspaceDeleteRequest) => {

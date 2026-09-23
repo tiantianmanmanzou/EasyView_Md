@@ -1,47 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { type EditorSettings } from './providerUtils';
-import { SETTINGS_COMMENT_RE } from '@easyview/markdown-core/editor-settings';
-import { extractSettings, repairSerializedMarkdownContent } from './providerUtils';
-import { buildImagePathMap } from './providerImageManager';
-import { handleVscodeEditorHostAction, handleWebviewMessage, MessageHandlerContext } from '../../application/document/editorMessageHandler';
-import { isVscodeEditorHostActionMessage } from './vscodeProtocol';
-import { isEditorToHostMessage } from '@easyview/contracts/protocol';
-import { computeGitLineRanges, type GitLineRange } from '../../application/git/gitChangeTracker';
-import { consumePendingCursorForUri } from '../../application/document/openCursorContext';
-import { consumePendingDocumentContentForUri } from '../../application/document/openDocumentSnapshot';
-import { logOpenWithDebug } from '../../application/document/openWithDebug';
-import { disposeTerminalForPanel } from '../../application/terminal/terminalSessionManager';
+import { type EditorSettings, extractSettings } from './providerUtils';
 import { registerNativeOutlineNavigationGuard } from '../../native-editor/nativeOutlineNavigation';
-import { createPanelAiChatHost } from '../../application/ai/createPanelAiChatHost';
+import { productThemeBootstrapScript, readProductTheme } from '../../theme/productThemeBridge';
+import { resolveMarkdownDiskUri } from '../../application/document/openMarkdownEditor';
+import { MarkdownEditorSession } from '../../application/document/markdownEditorSession';
 import {
-  productThemeBootstrapScript,
-  readProductTheme,
-  registerMarkdownThemePanel,
-} from '../../theme/productThemeBridge';
-
-function getDefaultTerminalFontFamily(): string {
-  if (process.platform === 'darwin') {
-    return 'Menlo, Monaco, "Courier New", monospace';
-  }
-  if (process.platform === 'win32') {
-    return 'Cascadia Mono, Consolas, "Courier New", monospace';
-  }
-  return '"DejaVu Sans Mono", "Liberation Mono", monospace';
-}
-
-function readTerminalAppearance(): { fontFamily: string; fontSize: number; lineHeight: number; fontWeight: string; fontWeightBold: string; letterSpacing: number } {
-  const terminalConfig = vscode.workspace.getConfiguration('terminal.integrated');
-  const terminalFontFamily = terminalConfig.get<string>('fontFamily', '').trim();
-  return {
-    fontFamily: terminalFontFamily || getDefaultTerminalFontFamily(),
-    fontSize: terminalConfig.get<number>('fontSize', 13),
-    lineHeight: terminalConfig.get<number>('lineHeight', 1),
-    fontWeight: terminalConfig.get<string>('fontWeight', 'normal'),
-    fontWeightBold: terminalConfig.get<string>('fontWeightBold', 'bold'),
-    letterSpacing: terminalConfig.get<number>('letterSpacing', 0),
-  };
-}
+  sameMarkdownResource,
+  toDiskFileUri,
+  toEasyViewMarkdownUri,
+} from '../../application/document/markdownUri';
 
 /**
  * CustomTextEditorProvider for WYSIWYG Markdown editing.
@@ -55,6 +23,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /** The most recently focused webview panel (for command-triggered actions). */
   private activePanel: vscode.WebviewPanel | undefined;
   private readonly panelsByDocumentUri = new Map<string, Set<vscode.WebviewPanel>>();
+  private readonly sessionsByDocumentUri = new Map<string, Set<MarkdownEditorSession>>();
 
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
     const provider = new MarkdownEditorProvider(context);
@@ -64,8 +33,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       MarkdownEditorProvider.viewType,
       provider,
       {
-        webviewOptions: { retainContextWhenHidden: true },
-        supportsMultipleEditorsPerDocument: true,
+        webviewOptions: { retainContextWhenHidden: false },
+        supportsMultipleEditorsPerDocument: false,
       }
     );
     const outlineNavigationGuard = registerNativeOutlineNavigationGuard(context, MarkdownEditorProvider.viewType);
@@ -133,6 +102,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return true;
   }
 
+  public static getDiagnostics(): Record<string, unknown> {
+    return MarkdownEditorProvider.instance?.collectDiagnostics() ?? {
+      editorSessions: 0,
+      visibleEditors: 0,
+      hiddenEditors: 0,
+      sessions: [],
+    };
+  }
+
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   private getSettingsKey(document: vscode.TextDocument): string {
@@ -148,8 +126,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   private hasPanelsForDocument(uri: vscode.Uri): boolean {
-    const panels = this.panelsByDocumentUri.get(uri.toString());
-    return !!panels && panels.size > 0;
+    const keys = new Set<string>([uri.toString()]);
+    try {
+      keys.add(toDiskFileUri(uri).toString());
+      keys.add(toEasyViewMarkdownUri(toDiskFileUri(uri)).toString());
+      keys.add(resolveMarkdownDiskUri(uri).toString());
+    } catch {
+      // ignore URI mapping failures
+    }
+    for (const key of keys) {
+      const panels = this.panelsByDocumentUri.get(key);
+      if (panels && panels.size > 0) return true;
+    }
+    return false;
   }
 
   private readStoredSettings(document: vscode.TextDocument, rawContent: string): EditorSettings {
@@ -163,52 +152,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   private async reloadPanelsForDocument(uri: vscode.Uri, contentOverride?: string): Promise<boolean> {
-    const key = uri.toString();
-    const panels = this.panelsByDocumentUri.get(key);
-    if (!panels || panels.size === 0) {
-      logOpenWithDebug('provider.reloadPanels.skipped', { path: uri.fsPath, reason: 'no-panels' });
-      return false;
-    }
-
-    const document = await vscode.workspace.openTextDocument(uri);
-    const rawContent = contentOverride ?? document.getText();
-    const settings = this.readStoredSettings(document, rawContent);
-    const contentWithoutComment = repairSerializedMarkdownContent(rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
-    const gitLineRanges = await computeGitLineRanges(document.uri, rawContent);
-    const activeEditor = vscode.window.activeTextEditor;
-    const initialCursorLine = activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
-      ? activeEditor.selection.active.line
-      : 0;
-    const initialCursorCharacter = activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
-      ? activeEditor.selection.active.character
-      : 0;
-
-    for (const panel of panels) {
-      const imagePathMap = buildImagePathMap(contentWithoutComment, panel.webview, document.uri);
-      panel.webview.postMessage({
-        type: 'init',
-        content: contentWithoutComment,
-        filename: path.basename(document.uri.fsPath).replace(/\.(md|markdown|mdx)$/i, ''),
-        filePath: document.uri.fsPath,
-        fullWidth: settings.fullWidth,
-        tocVisible: settings.tocVisible,
-        tableWrap: settings.tableWrap,
-        tableFirstRowStickyDefault: this.getTableFirstRowStickyDefault(),
-        imagePathMap,
-        gitLineRanges,
-        initialCursorLine,
-        initialCursorCharacter,
-        initialTotalLines: Math.max(1, document.lineCount),
-        terminalAppearance: readTerminalAppearance(),
-      });
-    }
-
-    logOpenWithDebug('provider.reloadPanels.completed', {
-      path: uri.fsPath,
-      panelCount: panels.size,
-      contentLength: contentWithoutComment.length,
-      mode: 'soft-init-postMessage',
-    });
+    const keys = new Set([uri.toString(), toDiskFileUri(uri).toString(), toEasyViewMarkdownUri(toDiskFileUri(uri)).toString()]);
+    const sessions = [...keys].flatMap((key) => [...(this.sessionsByDocumentUri.get(key) ?? [])]);
+    if (sessions.length === 0) return false;
+    await Promise.all(sessions.map((session) => session.refreshSnapshot('reload', contentOverride)));
     return true;
   }
 
@@ -232,279 +179,63 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken
   ): Promise<void> {
-    const t0 = performance.now();
-    console.log(`[EasyView_Md perf] resolveCustomTextEditor START`);
-
-    // Get document directory and workspace folder for image access
-    const documentDir = vscode.Uri.joinPath(document.uri, '..');
-    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-
+    const diskUri = resolveMarkdownDiskUri(document.uri);
+    const documentDir = vscode.Uri.file(path.dirname(diskUri.fsPath));
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(diskUri);
     const localResourceRoots = [
       vscode.Uri.joinPath(this.context.extensionUri, 'dist'),
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'media'),
-      documentDir, // Allow images relative to document
+      documentDir,
     ];
+    if (workspaceFolder) localResourceRoots.push(workspaceFolder.uri);
+    webviewPanel.webview.options = { enableScripts: true, localResourceRoots };
 
-    // Add workspace folder root if available
-    if (workspaceFolder) {
-      localResourceRoots.push(workspaceFolder.uri);
-    }
-
-    webviewPanel.webview.options = {
-      enableScripts: true,
-      localResourceRoots,
-    };
-
-    // Track active panel for command-triggered actions
-    this.activePanel = webviewPanel;
     const documentUriKey = document.uri.toString();
     const panelSet = this.panelsByDocumentUri.get(documentUriKey) ?? new Set<vscode.WebviewPanel>();
     panelSet.add(webviewPanel);
     this.panelsByDocumentUri.set(documentUriKey, panelSet);
-    webviewPanel.onDidChangeViewState(() => {
-      if (webviewPanel.active) {
-        this.activePanel = webviewPanel;
-      }
-    });
+    this.activePanel = webviewPanel;
 
-    // Track whether we are currently pushing an update to avoid loops
-    let isUpdatingWebview = false;
-    let isUpdatingDocument = false;
-    const pendingInitialContent = consumePendingDocumentContentForUri(document.uri);
-    let lastKnownContent = pendingInitialContent ?? document.getText();
-    logOpenWithDebug('provider.resolve.start', {
-      path: document.uri.fsPath,
-      pendingInitialLength: pendingInitialContent?.length ?? -1,
-      documentTextLength: document.getText().length,
-      initialLastKnownLength: lastKnownContent.length,
-      isDirty: document.isDirty,
-    });
-
-    // Sequential operation queue — prevents edit/save interleaving via await
-    let operationQueue: Promise<void> = Promise.resolve();
-    let lastGitLineRangesJson = '';
-    let latestGitRequestId = 0;
-
-    const normalizeForWebview = (content: string) =>
-      repairSerializedMarkdownContent(content.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
-
-    const postGitChanges = async (contentOverride?: string) => {
-      const requestId = ++latestGitRequestId;
-      const content = contentOverride ?? lastKnownContent;
-      const normalizedContent = normalizeForWebview(content);
-      let lineRanges: GitLineRange[] = [];
-      try {
-        lineRanges = await computeGitLineRanges(document.uri, content);
-      } catch (error) {
-        console.warn('[EasyView_Md] Failed to compute Git changes:', error);
-      }
-
-      // Ignore stale async responses; only latest invocation may update UI.
-      if (requestId !== latestGitRequestId) return;
-
-      const nextJson = JSON.stringify({ lineRanges, content: normalizedContent });
-      if (nextJson === lastGitLineRangesJson) return;
-      lastGitLineRangesJson = nextJson;
-      webviewPanel.webview.postMessage({
-        type: 'gitStatusChanged',
-        lineRanges,
-        content: normalizedContent,
-      });
-    };
-
-    // Helper: get filename without extension
-    const getFilename = () => {
-      const basename = path.basename(document.uri.fsPath);
-      return basename.replace(/\.(md|markdown|mdx)$/i, '');
-    };
-
-    const settingsKey = this.getSettingsKey(document);
-    const readStoredSettings = (rawContent: string): EditorSettings => this.readStoredSettings(document, rawContent);
-
-    const updateStoredSettings = async (settings: EditorSettings) => {
-      await this.context.workspaceState.update(settingsKey, settings);
-    };
-
-    // Build message handler context — bridges closure state to the extracted handler
-    const messageCtx: MessageHandlerContext = {
-      webviewPanel,
+    const session = new MarkdownEditorSession({
+      context: this.context,
       document,
-      extensionContext: this.context,
-      getFilename,
-      getLastKnownContent: () => lastKnownContent,
-      setLastKnownContent: (content: string) => { lastKnownContent = content; },
-      getIsUpdatingWebview: () => isUpdatingWebview,
-      setIsUpdatingWebview: (value: boolean) => { isUpdatingWebview = value; },
-      getIsUpdatingDocument: () => isUpdatingDocument,
-      setIsUpdatingDocument: (value: boolean) => { isUpdatingDocument = value; },
-      getOperationQueue: () => operationQueue,
-      setOperationQueue: (queue: Promise<void>) => { operationQueue = queue; },
-      refreshGitChanges: () => postGitChanges(),
-      getEditorSettings: () => readStoredSettings(document.getText()),
-      updateEditorSettings: updateStoredSettings,
+      panel: webviewPanel,
+      getHtml: (webview) => this.getHtmlForWebview(webview),
       getTableFirstRowStickyDefault: () => this.getTableFirstRowStickyDefault(),
-      setTableFirstRowStickyDefault: (sticky: boolean) => this.setTableFirstRowStickyDefault(sticky),
-    };
-
-    const themePanelSub = registerMarkdownThemePanel(webviewPanel);
-    const aiChatHost = createPanelAiChatHost(this.context, (msg) => {
-      webviewPanel.webview.postMessage(msg);
+      getEditorSettings: () => this.readStoredSettings(document, document.getText()),
+      updateEditorSettings: (settings) => Promise.resolve(this.context.workspaceState.update(this.getSettingsKey(document), settings)),
+      onActive: () => { this.activePanel = webviewPanel; },
+      setTableFirstRowStickyDefault: (value) => this.setTableFirstRowStickyDefault(value),
+      onDisposed: () => {
+        const sessions = this.sessionsByDocumentUri.get(documentUriKey);
+        sessions?.delete(session);
+        if (sessions?.size === 0) this.sessionsByDocumentUri.delete(documentUriKey);
+        if (this.activePanel === webviewPanel) this.activePanel = undefined;
+        const panels = this.panelsByDocumentUri.get(documentUriKey);
+        panels?.delete(webviewPanel);
+        if (panels?.size === 0) this.panelsByDocumentUri.delete(documentUriKey);
+      },
     });
-    webviewPanel.onDidDispose(() => {
-      themePanelSub.dispose();
-      aiChatHost.dispose();
-    });
-
-    // Extension -> Webview: sync on external document changes
-    const changeSubscription = vscode.workspace.onDidChangeTextDocument((e) => {
-      if (e.document.uri.toString() !== document.uri.toString()) return;
-      if (isUpdatingDocument) return;
-
-      const newContent = document.getText();
-      if (newContent === lastKnownContent) return;
-
-      logOpenWithDebug('provider.onDidChangeTextDocument', {
-        path: document.uri.fsPath,
-        newLength: newContent.length,
-        previousLength: lastKnownContent.length,
-        reason: e.reason ?? 'unknown',
-        changeCount: e.contentChanges.length,
-      });
-      lastKnownContent = newContent;
-
-      // Remove settings comment and normalize to LF before sending to webview
-      const contentWithoutComment = normalizeForWebview(newContent);
-
-      // Build image path mapping
-      const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
-
-      const isUndoRedo = e.reason === vscode.TextDocumentChangeReason.Undo ||
-                          e.reason === vscode.TextDocumentChangeReason.Redo;
-
-      isUpdatingWebview = true;
-      webviewPanel.webview.postMessage({
-        type: 'documentChanged',
-        content: contentWithoutComment,
-        imagePathMap: imagePathMap,
-        isUndoRedo,
-      });
-      void postGitChanges(newContent);
-      setTimeout(() => { isUpdatingWebview = false; }, 100);
-    });
-
-    // Editor -> Extension: handle messages from ProseMirror
-    const messageSubscription = webviewPanel.webview.onDidReceiveMessage(async (message) => {
-      if (isVscodeEditorHostActionMessage(message)) {
-        await handleVscodeEditorHostAction(messageCtx, message);
-        return;
-      }
-      if (!isEditorToHostMessage(message)) {
-        console.warn('[EasyView_Md] Ignoring unknown editor message:', message?.type);
-        return;
-      }
-      if (aiChatHost.handles(message)) {
-        await aiChatHost.handle(message);
-        return;
-      }
-      await handleWebviewMessage(messageCtx, message);
-    });
-
-    // Prepare initial data to embed directly in HTML (avoids postMessage race condition)
-    const t1 = performance.now();
-    const rawContent = lastKnownContent;
-    console.log(`[EasyView_Md perf] getText: ${(performance.now() - t1).toFixed(1)}ms`);
-    logOpenWithDebug('provider.initialDataPrepared', {
-      path: document.uri.fsPath,
-      rawLength: rawContent.length,
-    });
-
-    const t2 = performance.now();
-    const settings = readStoredSettings(rawContent);
-    const contentWithoutComment = normalizeForWebview(rawContent);
-    console.log(`[EasyView_Md perf] extractSettings+strip: ${(performance.now() - t2).toFixed(1)}ms`);
-
-    const t3 = performance.now();
-    const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
-    console.log(`[EasyView_Md perf] buildImagePathMap: ${(performance.now() - t3).toFixed(1)}ms`);
-
-    const initialGitLineRanges = await computeGitLineRanges(document.uri, rawContent);
-    const pendingCursor = consumePendingCursorForUri(document.uri);
-    const activeEditor = vscode.window.activeTextEditor;
-    const initialCursorLine = pendingCursor
-      ? pendingCursor.line
-      : (activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
-        ? activeEditor.selection.active.line
-        : 0);
-    const initialCursorCharacter = pendingCursor
-      ? pendingCursor.character
-      : (activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
-        ? activeEditor.selection.active.character
-        : 0);
-
-    const initialData = {
-      type: 'init',
-      content: contentWithoutComment,
-      filename: getFilename(),
-      filePath: document.uri.fsPath,
-      fullWidth: settings.fullWidth,
-      tocVisible: settings.tocVisible,
-      tableWrap: settings.tableWrap,
-      tableFirstRowStickyDefault: this.getTableFirstRowStickyDefault(),
-      imagePathMap,
-      gitLineRanges: initialGitLineRanges,
-      initialCursorLine,
-      initialCursorCharacter,
-      initialTotalLines: Math.max(1, document.lineCount),
-      terminalAppearance: readTerminalAppearance(),
-      productTheme: readProductTheme(this.context),
-    };
-    lastGitLineRangesJson = JSON.stringify({
-      lineRanges: initialGitLineRanges,
-      content: contentWithoutComment,
-    });
-
-    // Set HTML with embedded initial data — no postMessage needed for first load
-    const t4 = performance.now();
-    webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview, initialData);
-    logOpenWithDebug('provider.webviewHtmlAssigned', {
-      path: document.uri.fsPath,
-      initContentLength: contentWithoutComment.length,
-    });
-    console.log(`[EasyView_Md perf] getHtmlForWebview+assign: ${(performance.now() - t4).toFixed(1)}ms`);
-    console.log(`[EasyView_Md perf] resolveCustomTextEditor TOTAL: ${(performance.now() - t0).toFixed(1)}ms`);
-
-    const gitRefreshInterval = setInterval(() => {
-      void postGitChanges();
-    }, 1500);
-
-    const saveSubscription = vscode.workspace.onDidSaveTextDocument((savedDocument) => {
-      if (savedDocument.uri.toString() === document.uri.toString()) {
-        void postGitChanges(savedDocument.getText());
-      }
-    });
-
-    // Cleanup
-    webviewPanel.onDidDispose(() => {
-      disposeTerminalForPanel(webviewPanel);
-      changeSubscription.dispose();
-      messageSubscription.dispose();
-      saveSubscription.dispose();
-      clearInterval(gitRefreshInterval);
-      if (this.activePanel === webviewPanel) {
-        this.activePanel = undefined;
-      }
-      const existing = this.panelsByDocumentUri.get(documentUriKey);
-      if (existing) {
-        existing.delete(webviewPanel);
-        if (existing.size === 0) {
-          this.panelsByDocumentUri.delete(documentUriKey);
-        }
-      }
-    });
+    const sessions = this.sessionsByDocumentUri.get(documentUriKey) ?? new Set<MarkdownEditorSession>();
+    sessions.add(session);
+    this.sessionsByDocumentUri.set(documentUriKey, sessions);
+    await session.start();
   }
 
-  private getHtmlForWebview(webview: vscode.Webview, initialData?: any): string {
-    const assetVersion = `${Date.now()}`;
+  private collectDiagnostics(): Record<string, unknown> {
+    const sessions = [...this.sessionsByDocumentUri.values()].flatMap((items) => [...items]);
+    const details = sessions.map((session) => session.getDiagnostics());
+    const visibleEditors = details.filter((item) => item.visible === true).length;
+    return {
+      editorSessions: sessions.length,
+      visibleEditors,
+      hiddenEditors: sessions.length - visibleEditors,
+      sessions: details,
+    };
+  }
+
+  private getHtmlForWebview(webview: vscode.Webview): string {
+    const assetVersion = String(this.context.extension.packageJSON.version ?? 'dev');
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
     ).with({ query: `v=${assetVersion}` });
@@ -546,7 +277,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     <meta http-equiv="Content-Security-Policy"
       content="default-src 'none';
         style-src ${webview.cspSource} 'unsafe-inline';
-        script-src 'nonce-${nonce}';
+        script-src 'nonce-${nonce}' ${webview.cspSource};
         img-src ${webview.cspSource} https: http: data:;
         font-src ${webview.cspSource};
         connect-src ${webview.cspSource} https: http:;
@@ -589,7 +320,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         symbols: pdfSymbolsFontUri.toString(),
       })};
       ${productThemeBootstrapScript(readProductTheme(this.context))}
-      ${initialData ? `window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};` : ''}
     </script>
 </head>
 <body class="inlinemd-booting" data-easyview-theme="${readProductTheme(this.context)}">
@@ -599,7 +329,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         <div id="editor"></div>
       </div>
     </div>
-    <script nonce="${nonce}" src="${scriptUri}"></script>
+    <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>
 </html>`;
   }

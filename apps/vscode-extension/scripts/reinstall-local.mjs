@@ -15,9 +15,10 @@ function readExtensionPackage() {
 }
 
 function parseArgs(argv) {
-  const options = { target: 'both', bump: false };
+  const options = { target: 'both', bump: true };
   for (const arg of argv) {
     if (arg === '--bump') options.bump = true;
+    else if (arg === '--no-bump') options.bump = false;
     else if (arg.startsWith('--target=')) options.target = arg.slice('--target='.length);
     else if (arg === '--help' || arg === '-h') options.help = true;
   }
@@ -61,7 +62,7 @@ async function installTo(cli, file) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node apps/vscode-extension/scripts/reinstall-local.mjs [--target=both|cursor|code] [--bump]');
+    console.log('Usage: node apps/vscode-extension/scripts/reinstall-local.mjs [--target=both|cursor|code] [--no-bump]');
     return;
   }
 

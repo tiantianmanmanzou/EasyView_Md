@@ -1,7 +1,11 @@
+// oxlint-disable-next-line typescript/triple-slash-reference
+/// <reference path="../css-modules.d.ts" />
+// oxlint-disable-next-line typescript/triple-slash-reference
+/// <reference path="../x-data-spreadsheet-dist.d.ts" />
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import type { SheetData } from 'x-data-spreadsheet';
 import type { PreviewWriteResult } from '@easyview/contracts';
+import type { XsSpreadsheetFactory, XsSpreadsheetInstance } from '../spreadsheet/xSpreadsheetTypes';
 import type { PreviewHost } from '../types';
 import {
   extension,
@@ -22,6 +26,7 @@ import {
   applyXSpreadsheetTheme,
   spreadsheetDefaultStyle,
 } from '../spreadsheet/spreadsheetTheme';
+import { attachSpreadsheetWheelNormalization } from '../spreadsheet/spreadsheetWheel';
 import {
   workbookBytesToXsSheets,
   xsSheetsToWorkbookBytes,
@@ -67,7 +72,7 @@ export function SpreadsheetViewer({ descriptor, host }: SpreadsheetViewerProps):
 
 function SpreadsheetEditor({ descriptor, host }: { descriptor: ViewerProps['descriptor']; host: PreviewHost }): React.ReactElement {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
-  const sheetRef = React.useRef<{ getData: () => SheetData[]; loadData: (data: SheetData[]) => unknown; reRender?: () => void } | null>(null);
+  const sheetRef = React.useRef<XsSpreadsheetInstance | null>(null);
   const [error, setError] = React.useState<unknown>(null);
   const [loading, setLoading] = React.useState(true);
   const [dirty, setDirty] = React.useState(false);
@@ -82,6 +87,7 @@ function SpreadsheetEditor({ descriptor, host }: { descriptor: ViewerProps['desc
   React.useEffect(() => {
     let disposed = false;
     let resizeObserver: ResizeObserver | null = null;
+    let detachWheel: (() => void) | null = null;
 
     async function boot(): Promise<void> {
       setLoading(true);
@@ -146,6 +152,7 @@ html, body, .preview-root, .preview-shell, .preview-content {
         });
         sheetRef.current = spreadsheet;
         applyXSpreadsheetTheme(spreadsheet, themeModeRef.current);
+        detachWheel = attachSpreadsheetWheelNormalization(mountRef.current);
 
         // Append EasyView chrome after formatting buttons so the whole strip can center as one group.
         const toolbar = mountRef.current.querySelector('.x-spreadsheet-toolbar');
@@ -183,6 +190,8 @@ html, body, .preview-root, .preview-shell, .preview-content {
     void boot();
     return () => {
       disposed = true;
+      detachWheel?.();
+      detachWheel = null;
       resizeObserver?.disconnect();
       sheetRef.current = null;
       setChromeSlot(null);
@@ -209,7 +218,7 @@ html, body, .preview-root, .preview-shell, .preview-content {
     setSaving(true);
     setSaveMessage(null);
     try {
-      const bytes = await xsSheetsToWorkbookBytes(sheetRef.current.getData() as SheetData[]);
+      const bytes = await xsSheetsToWorkbookBytes(sheetRef.current.getData());
       const result: PreviewWriteResult = await host.writeBytes(descriptor.sessionId, bytes);
       setDirty(false);
       setSaveMessage(`已保存 · ${(result.size / 1024).toFixed(result.size >= 10240 ? 0 : 1)} KB`);
@@ -258,31 +267,17 @@ html, body, .preview-root, .preview-shell, .preview-content {
   );
 }
 
-type XSpreadsheetInstance = {
-  loadData: (data: SheetData[]) => unknown;
-  getData: () => SheetData[];
-  change: (cb: () => void) => unknown;
-  reRender?: () => void;
-  datas?: unknown[];
-  data?: unknown;
-  sheet?: { table?: { draw?: { attr: (options: Record<string, unknown>) => unknown }; render?: () => void } };
-};
 
-type XSpreadsheetFactory = (
-  container: HTMLElement,
-  options?: Record<string, unknown>,
-) => XSpreadsheetInstance;
-
-function resolveXSpreadsheetFactory(moduleValue: unknown): XSpreadsheetFactory {
-  const fromWindow = (window as Window & { x_spreadsheet?: XSpreadsheetFactory }).x_spreadsheet;
+function resolveXSpreadsheetFactory(moduleValue: unknown): XsSpreadsheetFactory {
+  const fromWindow = (window as unknown as Window & { x_spreadsheet?: XsSpreadsheetFactory }).x_spreadsheet;
   if (typeof fromWindow === 'function') return fromWindow;
 
-  const mod = moduleValue as { default?: unknown } | XSpreadsheetFactory | null;
+  const mod = moduleValue as { default?: unknown } | XsSpreadsheetFactory | null;
   const candidate = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
   if (typeof candidate === 'function') {
-    const fn = candidate as XSpreadsheetFactory & { prototype?: { loadData?: unknown } };
+    const fn = candidate as XsSpreadsheetFactory & { prototype?: { loadData?: unknown } };
     if (fn.prototype && typeof fn.prototype.loadData === 'function') {
-      return (container, options) => new (fn as unknown as new (el: HTMLElement, opts?: Record<string, unknown>) => XSpreadsheetInstance)(container, options);
+      return (container, options) => new (fn as unknown as new (el: HTMLElement, opts?: Record<string, unknown>) => XsSpreadsheetInstance)(container, options);
     }
     return fn;
   }

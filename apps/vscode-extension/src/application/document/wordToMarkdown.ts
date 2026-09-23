@@ -5,6 +5,7 @@ import {
   flattenPngWithWhiteBackground,
   rewriteExtractedMediaPaths,
 } from '@easyview/node-runtime';
+import { openMarkdownInEasyViewEditor } from './openMarkdownEditor';
 
 export { flattenPngWithWhiteBackground, rewriteExtractedMediaPaths };
 
@@ -27,7 +28,7 @@ async function convertWithOverwritePrompt(sourcePath: string) {
   }
 }
 
-export function registerWordToMarkdownCommand(): vscode.Disposable {
+export function registerWordToMarkdownCommand(context: vscode.ExtensionContext): vscode.Disposable {
   return vscode.commands.registerCommand('easyviewMd.convertWordToMarkdown', async (uri?: vscode.Uri) => {
     const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
     if (!targetUri || targetUri.scheme !== 'file') {
@@ -51,7 +52,7 @@ export function registerWordToMarkdownCommand(): vscode.Disposable {
         'Open Markdown',
       );
       if (selection === 'Open Markdown') {
-        await vscode.commands.executeCommand('vscode.openWith', outputUri, 'easyviewMd.markdownEditor');
+        await openMarkdownInEasyViewEditor(outputUri, context);
       }
     } catch (error: any) {
       vscode.window.showErrorMessage(`Word to Markdown conversion failed: ${error?.message || String(error)}`);

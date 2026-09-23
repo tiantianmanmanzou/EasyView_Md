@@ -224,6 +224,18 @@ export function resolveWorkspaceTreeIcon(input: ResolveWorkspaceTreeIconInput): 
   }
 
   if (input.kind === 'directory') {
+    const base = basenameOf(input.name);
+    // Dot-directories (.git / .vscode / …) use a config glyph, not the yellow folder.
+    if (base.startsWith('.')) {
+      const color = SETI_THEME.grey;
+      const raw = icons.config ?? icons[definitions.default[0]] ?? icons.default;
+      return {
+        id: expanded ? 'folder-dot-opened' : 'folder-dot',
+        codicon: 'settings-gear',
+        color,
+        svg: paintSvg(raw || '<svg viewBox="0 0 32 32"></svg>', color),
+      };
+    }
     return {
       id: expanded ? 'folder-opened' : 'folder',
       codicon: expanded ? 'folder-opened' : 'folder',

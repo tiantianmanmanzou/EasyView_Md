@@ -1,9 +1,8 @@
 import ExcelJS from 'exceljs';
-import type { SheetData } from 'x-data-spreadsheet';
+import type { XsCell, XsCellStyle, XsColumnsData, XsRowsData, XsSheetData } from './xSpreadsheetTypes';
 import { isThemeableBackground, isThemeableForeground } from './spreadsheetTheme';
 
-type XsStyle = NonNullable<SheetData['styles']>[number];
-type XsCell = { text: string; style?: number; merge?: [number, number] };
+type XsStyle = XsCellStyle;
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLS = 26;
@@ -11,10 +10,10 @@ const MAX_COL_WIDTH_PX = 480;
 const MIN_COL_WIDTH_PX = 32;
 
 /** Load workbook bytes into x-data-spreadsheet sheet payloads. */
-export async function workbookBytesToXsSheets(bytes: ArrayBuffer): Promise<SheetData[]> {
+export async function workbookBytesToXsSheets(bytes: ArrayBuffer): Promise<XsSheetData[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(bytes);
-  const sheets: SheetData[] = [];
+  const sheets: XsSheetData[] = [];
   workbook.eachSheet((worksheet) => {
     sheets.push(worksheetToXsSheet(worksheet, workbook));
   });
@@ -22,7 +21,7 @@ export async function workbookBytesToXsSheets(bytes: ArrayBuffer): Promise<Sheet
 }
 
 /** Serialize x-data-spreadsheet payloads back to xlsx bytes. */
-export async function xsSheetsToWorkbookBytes(sheets: SheetData[]): Promise<Uint8Array> {
+export async function xsSheetsToWorkbookBytes(sheets: XsSheetData[]): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   const source = sheets.length > 0 ? sheets : [emptySheet('Sheet1')];
   for (const sheet of source) {
@@ -34,7 +33,7 @@ export async function xsSheetsToWorkbookBytes(sheets: SheetData[]): Promise<Uint
   return buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
 }
 
-function emptySheet(name: string): SheetData {
+function emptySheet(name: string): XsSheetData {
   return {
     name,
     styles: [],
@@ -44,13 +43,13 @@ function emptySheet(name: string): SheetData {
   };
 }
 
-function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: ExcelJS.Workbook): SheetData {
+function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: ExcelJS.Workbook): XsSheetData {
   const styles: XsStyle[] = [];
   const styleIndex = new Map<string, number>();
   const rowCount = Math.max(DEFAULT_ROWS, worksheet.rowCount || 0);
   const colCount = Math.max(DEFAULT_COLS, worksheet.columnCount || 0);
-  const rows: NonNullable<SheetData['rows']> = { len: rowCount };
-  const cols: NonNullable<SheetData['cols']> = { len: colCount };
+  const rows: NonNullable<XsSheetData['rows']> = { len: rowCount };
+  const cols: NonNullable<XsSheetData['cols']> = { len: colCount };
   const mergeRanges = (worksheet.model.merges || []).map(String);
   const merges: string[] = [];
   const slaveCells = new Set<string>();
@@ -106,7 +105,7 @@ function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: ExcelJS.Work
     });
 
     if (Object.keys(cells).length > 0) {
-      rows[ri] = { ...(rows[ri] || {}), cells: { ...((rows[ri] as { cells?: Record<number, XsCell> } | undefined)?.cells || {}), ...cells } };
+      rows[ri] = { ...rows[ri], cells: { ...(rows[ri] as { cells?: Record<number, XsCell> } | undefined)?.cells, ...cells } };
     }
   });
 
@@ -117,7 +116,7 @@ function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: ExcelJS.Work
     const row = (rows[sri] as { cells?: Record<number, XsCell> } | undefined) || { cells: {} };
     const cell = row.cells?.[sci] || { text: '' };
     cell.merge = [eri - sri, eci - sci];
-    row.cells = { ...(row.cells || {}), [sci]: cell };
+    row.cells = { ...row.cells, [sci]: cell };
     rows[sri] = row;
   }
 
@@ -130,12 +129,12 @@ function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: ExcelJS.Work
   };
 }
 
-function applyXsSheetToWorksheet(sheet: SheetData, worksheet: ExcelJS.Worksheet): void {
+function applyXsSheetToWorksheet(sheet: XsSheetData, worksheet: ExcelJS.Worksheet): void {
   const styles = sheet.styles || [];
-  const rows = sheet.rows || {};
-  const cols = sheet.cols || {};
-  const maxRow = typeof (rows as { len?: number }).len === 'number'
-    ? (rows as { len: number }).len
+  const rows: XsRowsData = sheet.rows ?? { len: 0 };
+  const cols: XsColumnsData = sheet.cols ?? { len: DEFAULT_COLS };
+  const maxRow = typeof rows.len === 'number'
+    ? rows.len
     : Math.max(0, ...Object.keys(rows).map(Number).filter((n) => Number.isFinite(n))) + 1;
   const colIndexes = Object.keys(cols).map(Number).filter((n) => Number.isFinite(n));
   const maxCol = typeof cols.len === 'number'
@@ -252,7 +251,7 @@ function cellToXsStyle(cell: ExcelJS.Cell, workbook: ExcelJS.Workbook): XsStyle 
 function applyXsStyleToCell(style: XsStyle, cell: ExcelJS.Cell): void {
   if (style.font || style.color || style.strike || style.underline) {
     cell.font = {
-      ...(cell.font || {}),
+      ...cell.font,
       bold: style.font?.bold,
       italic: !!(style.font as { italic?: boolean } | undefined)?.italic,
       size: style.font?.size,
@@ -264,7 +263,7 @@ function applyXsStyleToCell(style: XsStyle, cell: ExcelJS.Cell): void {
   }
   if (style.align || style.valign || style.textwrap) {
     cell.alignment = {
-      ...(cell.alignment || {}),
+      ...cell.alignment,
       horizontal: style.align,
       vertical: style.valign,
       wrapText: style.textwrap,
@@ -300,7 +299,7 @@ const OFFICE_THEME_RGB = [
 ];
 
 function colorToCss(
-  color: Partial<ExcelJS.Color> | undefined,
+  color: (Partial<ExcelJS.Color> & { tint?: number }) | undefined,
   _workbook: ExcelJS.Workbook,
 ): string | undefined {
   if (!color) return undefined;

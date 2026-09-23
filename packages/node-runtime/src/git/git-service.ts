@@ -271,6 +271,30 @@ export async function getFileDiff(
   };
 }
 
+export async function getIndexObjectId(
+  repositoryPath: string,
+  filePath: string,
+): Promise<string | null> {
+  const resolved = await resolveRepositoryFile(repositoryPath, filePath);
+  const indexEntries = await runGit(resolved.repository.rootPath, [
+    "ls-files",
+    "--stage",
+    "--",
+    resolved.relativePath,
+  ]);
+  const entry = indexEntries.split(/\r?\n/).find(Boolean);
+  if (!entry) return null;
+
+  const match = entry.match(/^\d+\s+([0-9a-f]+)\s+\d+\t/);
+  if (!match) {
+    throw new GitServiceError(
+      "COMMAND_FAILED",
+      `无法解析 Git index 条目：${resolved.relativePath}`,
+    );
+  }
+  return match[1];
+}
+
 export async function getIndexFileContent(
   repositoryPath: string,
   filePath: string,

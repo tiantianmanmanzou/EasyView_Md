@@ -28,13 +28,14 @@ import {
   stageFile as stageGitFile,
 } from '@easyview/node-runtime';
 import { isEasyViewThemeMode } from '@easyview/contracts';
+import { isDiskBackedMarkdownUri } from './markdownUri';
+import { resolveMarkdownDiskUri } from './openMarkdownEditor';
 import { broadcastProductTheme, readProductTheme, writeProductTheme } from '../../theme/productThemeBridge';
 
-const inlineSuggestOutput = vscode.window.createOutputChannel('EasyView_Md Inline Suggest');
-
-function logInlineSuggest(message: string): void {
-  inlineSuggestOutput.appendLine(`[${new Date().toISOString()}] ${message}`);
+function diskFsPath(document: vscode.TextDocument): string {
+  return resolveMarkdownDiskUri(document.uri).fsPath;
 }
+
 
 const EASYVIEW_MANAGED_KEYBINDING_START = '// EasyView_Md managed shortcuts start';
 const EASYVIEW_MANAGED_KEYBINDING_END = '// EasyView_Md managed shortcuts end';
@@ -272,11 +273,11 @@ async function resolveGitFileContext(document: vscode.TextDocument): Promise<{
   status: string;
   diff: string;
 }> {
-  const repository = await findRepository(document.uri.fsPath);
+  const repository = await findRepository(diskFsPath(document));
   if (!repository) throw new Error('Current file is not in a Git repository.');
 
-  const fileStatus = await getFileStatus(repository.rootPath, document.uri.fsPath);
-  const fileDiff = await getFileDiff(repository.rootPath, document.uri.fsPath);
+  const fileStatus = await getFileStatus(repository.rootPath, diskFsPath(document));
+  const fileDiff = await getFileDiff(repository.rootPath, diskFsPath(document));
   let diff = fileDiff.diff;
   if (!diff.trim() && fileStatus.isUntracked) {
     diff = [
@@ -359,13 +360,13 @@ async function generateCommitMessageWithScmCommand(document: vscode.TextDocument
   while (Date.now() - start < 30000) {
     const current = typeof repo.inputBox?.value === 'string' ? repo.inputBox.value.trim() : '';
     if (current && current !== previous) {
-      return ensureBilingualCommitMessageFormat(current, path.basename(document.uri.fsPath), '', '') || null;
+      return ensureBilingualCommitMessageFormat(current, path.basename(diskFsPath(document)), '', '') || null;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
   const current = typeof repo.inputBox?.value === 'string' ? repo.inputBox.value.trim() : '';
-  return current ? ensureBilingualCommitMessageFormat(current, path.basename(document.uri.fsPath), '', '') || null : null;
+  return current ? ensureBilingualCommitMessageFormat(current, path.basename(diskFsPath(document)), '', '') || null : null;
 }
 
 function heuristicCommitMessage(fileName: string, status: string, diff: string): string {
@@ -382,7 +383,7 @@ async function generateCommitMessageForCurrentFile(document: vscode.TextDocument
     throw new Error('Current file has no Git changes to commit.');
   }
 
-  const fileName = path.basename(document.uri.fsPath);
+  const fileName = path.basename(diskFsPath(document));
   try {
     const aiMessage = await generateCommitMessageWithVsCodeLm(fileName, context.status, context.diff);
     if (aiMessage) {
@@ -416,14 +417,11 @@ export interface MessageHandlerContext {
   document: vscode.TextDocument;
   extensionContext: vscode.ExtensionContext;
   getFilename: () => string;
-  getLastKnownContent: () => string;
-  setLastKnownContent: (content: string) => void;
-  getIsUpdatingWebview: () => boolean;
-  setIsUpdatingWebview: (value: boolean) => void;
-  getIsUpdatingDocument: () => boolean;
-  setIsUpdatingDocument: (value: boolean) => void;
-  getOperationQueue: () => Promise<void>;
-  setOperationQueue: (queue: Promise<void>) => void;
+  getCanonicalContent: () => string;
+  applyCanonicalContent: (content: string, settings: EditorSettings) => Promise<void>;
+  getSyncRevision: () => number;
+  postSnapshot: (reason?: 'initial' | 'visible' | 'resync' | 'reload') => void;
+  enqueueOperation: (name: string, operation: () => Promise<void>, onError?: (message: string) => void) => void;
   refreshGitChanges?: () => Promise<void>;
   getEditorSettings: () => EditorSettings;
   updateEditorSettings: (settings: EditorSettings) => Promise<void>;
@@ -436,35 +434,7 @@ async function syncWebviewContentToDocument(
   editContent: string,
   settings: EditorSettings
 ): Promise<void> {
-  const document = ctx.document;
-
-  await ctx.updateEditorSettings(settings);
-  let newContent = repairSerializedMarkdownContent(editContent.replace(SETTINGS_COMMENT_RE, ''));
-
-  const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
-  if (eol === '\r\n') {
-    newContent = newContent.replace(/\r?\n/g, '\r\n');
-  }
-
-  if (newContent === ctx.getLastKnownContent()) return;
-
-  ctx.setIsUpdatingDocument(true);
-  try {
-    const edit = new vscode.WorkspaceEdit();
-    const oldContent = document.getText();
-    const { start, oldEnd, newEnd } = computeMinimalDiff(oldContent, newContent);
-    const startPos = document.positionAt(start);
-    const endPos = document.positionAt(oldEnd);
-    const replaceText = newContent.slice(start, newEnd);
-    edit.replace(document.uri, new vscode.Range(startPos, endPos), replaceText);
-    const success = await vscode.workspace.applyEdit(edit);
-    if (success) {
-      ctx.setLastKnownContent(newContent);
-      await ctx.refreshGitChanges?.();
-    }
-  } finally {
-    ctx.setIsUpdatingDocument(false);
-  }
+  await ctx.applyCanonicalContent(repairSerializedMarkdownContent(editContent.replace(SETTINGS_COMMENT_RE, '')), settings);
 }
 
 function toErrorMessage(error: unknown): string {
@@ -477,17 +447,7 @@ function enqueueOperation(
   operation: () => Promise<void>,
   onError?: (messageText: string) => void
 ): void {
-  const queue = ctx.getOperationQueue()
-    .catch((error) => {
-      console.warn(`[EasyView_Md] Previous queued operation failed before ${operationName}: ${toErrorMessage(error)}`);
-    })
-    .then(operation)
-    .catch((error) => {
-      const messageText = toErrorMessage(error);
-      console.error(`[EasyView_Md] ${operationName} failed:`, error);
-      onError?.(messageText);
-    });
-  ctx.setOperationQueue(queue);
+  ctx.enqueueOperation(operationName, operation, onError);
 }
 
 function ensureImageResourceRoot(webview: vscode.Webview, filePath: string): void {
@@ -565,29 +525,8 @@ export async function handleWebviewMessage(
   }
 
   switch (message.type) {
-    case 'edit': {
-      if (ctx.getIsUpdatingWebview()) return;
-
-      const editContent = message.content;
-      logOpenWithDebug('providerMessage.editReceived', {
-        path: document.uri.fsPath,
-        editLength: typeof editContent === 'string' ? editContent.length : -1,
-        lastKnownLength: ctx.getLastKnownContent().length,
-      });
-      const fullWidth = message.fullWidth ?? true;
-      const tocVisible = message.tocVisible ?? true;
-      const tableWrap = message.tableWrap ?? false;
-
-      enqueueOperation(ctx, 'webview edit sync', async () => {
-        await syncWebviewContentToDocument(ctx, editContent, { fullWidth, tocVisible, tableWrap });
-      });
-      break;
-    }
-
     case 'requestTabCompletion': {
       const requestId = message.requestId;
-      logInlineSuggest(`request: custom-editor completion is unavailable for ${document.uri.toString()}`);
-
       webviewPanel.webview.postMessage({
         type: 'tabCompletionResponse',
         requestId,
@@ -605,51 +544,7 @@ export async function handleWebviewMessage(
     }
 
     case 'ready': {
-      const rawContent = ctx.getLastKnownContent();
-      logOpenWithDebug('providerMessage.ready', {
-        path: document.uri.fsPath,
-        rawLength: rawContent.length,
-        isDirty: document.isDirty,
-      });
-      const settings = ctx.getEditorSettings();
-      const pendingCursor = consumePendingCursorForUri(document.uri);
-      const activeEditor = vscode.window.activeTextEditor;
-      const fallbackEditor = activeEditor && activeEditor.document.uri.toString() === document.uri.toString()
-        ? activeEditor
-        : vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === document.uri.toString());
-      const initialCursorLine = pendingCursor?.line ?? fallbackEditor?.selection.active.line ?? 0;
-      const initialCursorCharacter = pendingCursor?.character ?? fallbackEditor?.selection.active.character ?? 0;
-
-      // Remove settings comment and normalize to LF before sending to webview
-      const contentWithoutComment = repairSerializedMarkdownContent(rawContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
-
-      // Build image path mapping
-      const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
-
-      webviewPanel.webview.postMessage({
-        type: 'init',
-        content: contentWithoutComment,
-        filename: ctx.getFilename(),
-        filePath: document.uri.fsPath,
-        fullWidth: settings.fullWidth,
-        tocVisible: settings.tocVisible,
-        tableWrap: settings.tableWrap,
-        tableFirstRowStickyDefault: ctx.getTableFirstRowStickyDefault(),
-        initialCursorLine,
-        initialCursorCharacter,
-        initialTotalLines: Math.max(1, document.lineCount),
-        terminalAppearance: readTerminalAppearance(),
-        imagePathMap: imagePathMap,
-        productTheme: readProductTheme(ctx.extensionContext),
-      });
-      webviewPanel.webview.postMessage({
-        type: 'setProductTheme',
-        mode: readProductTheme(ctx.extensionContext),
-      });
-      logOpenWithDebug('providerMessage.initPosted', {
-        path: document.uri.fsPath,
-        initLength: contentWithoutComment.length,
-      });
+      ctx.postSnapshot('initial');
       break;
     }
 
@@ -670,14 +565,14 @@ export async function handleWebviewMessage(
     }
 
     case 'openTerminal': {
-      if (document.uri.scheme !== 'file') {
+      if (!isDiskBackedMarkdownUri(document.uri)) {
         webviewPanel.webview.postMessage({
           type: 'terminalError',
           message: 'Only files on disk support the embedded terminal.',
         });
         break;
       }
-      openTerminalForPanel(webviewPanel, path.dirname(document.uri.fsPath));
+      openTerminalForPanel(webviewPanel, path.dirname(diskFsPath(document)));
       break;
     }
 
@@ -702,7 +597,7 @@ export async function handleWebviewMessage(
       const stage = typeof message.stage === 'string' ? message.stage : 'webview.unknown';
       const meta = typeof message.meta === 'object' && message.meta ? message.meta : {};
       logOpenWithDebug(`webview.${stage}`, {
-        path: document.uri.fsPath,
+        path: diskFsPath(document),
         ...(meta as Record<string, unknown>),
       });
       break;
@@ -712,7 +607,7 @@ export async function handleWebviewMessage(
       const stage = typeof message.stage === 'string' ? message.stage : 'unknown';
       const data = typeof message.data === 'object' && message.data ? message.data : {};
       const payload = {
-        path: document.uri.fsPath,
+        path: diskFsPath(document),
         ...(data as Record<string, unknown>),
       };
       console.info(`[EasyView RowResize] ${stage} ${JSON.stringify(payload)}`);
@@ -722,31 +617,8 @@ export async function handleWebviewMessage(
 
     case 'save': {
       enqueueOperation(ctx, 'save document', async () => {
-        // Guard save with isUpdatingDocument to prevent formatter-triggered
-        // onDidChangeTextDocument from being treated as external (AI) changes
-        ctx.setIsUpdatingDocument(true);
-        try {
-          await document.save();
-          // If formatters changed content during save, sync back without AI flag
-          const newContent = document.getText();
-          if (newContent !== ctx.getLastKnownContent()) {
-            ctx.setLastKnownContent(newContent);
-            const contentWithoutComment = repairSerializedMarkdownContent(newContent.replace(SETTINGS_COMMENT_RE, '').replace(/\r\n/g, '\n'));
-            const imagePathMap = buildImagePathMap(contentWithoutComment, webviewPanel.webview, document.uri);
-            ctx.setIsUpdatingWebview(true);
-            webviewPanel.webview.postMessage({
-              type: 'documentChanged',
-              content: contentWithoutComment,
-              imagePathMap,
-              isUndoRedo: true, // Not an external/AI change
-              skipAutoScroll: true,
-            });
-            setTimeout(() => { ctx.setIsUpdatingWebview(false); }, 100);
-            await ctx.refreshGitChanges?.();
-          }
-        } finally {
-          ctx.setIsUpdatingDocument(false);
-        }
+        await document.save();
+        await ctx.refreshGitChanges?.();
       });
       break;
     }
@@ -761,7 +633,7 @@ export async function handleWebviewMessage(
     }
 
     case 'stageFile': {
-      if (document.uri.scheme !== 'file') {
+      if (!isDiskBackedMarkdownUri(document.uri)) {
         webviewPanel.webview.postMessage({
           type: 'stageFileFailed',
           message: 'Only files on disk can be staged.',
@@ -770,21 +642,16 @@ export async function handleWebviewMessage(
       }
 
       enqueueOperation(ctx, 'stage markdown file', async () => {
-        ctx.setIsUpdatingDocument(true);
-        try {
-          await document.save();
-        } finally {
-          ctx.setIsUpdatingDocument(false);
-        }
+        await document.save();
 
         try {
-          const repository = await findRepository(document.uri.fsPath);
+          const repository = await findRepository(diskFsPath(document));
           if (!repository) throw new Error('Current file is not in a Git repository.');
-          await stageGitFile(repository.rootPath, document.uri.fsPath);
+          await stageGitFile(repository.rootPath, diskFsPath(document));
           await ctx.refreshGitChanges?.();
           webviewPanel.webview.postMessage({
             type: 'stageFileCompleted',
-            message: `Staged: ${path.basename(document.uri.fsPath)}`,
+            message: `Staged: ${path.basename(diskFsPath(document))}`,
           });
         } catch (error) {
           const messageText = error instanceof Error ? error.message : String(error);
@@ -798,7 +665,7 @@ export async function handleWebviewMessage(
     }
 
     case 'generateCommitMessage': {
-      if (document.uri.scheme !== 'file') {
+      if (!isDiskBackedMarkdownUri(document.uri)) {
         webviewPanel.webview.postMessage({
           type: 'commitMessageGenerationFailed',
           message: 'Only files on disk can be committed.',
@@ -807,12 +674,7 @@ export async function handleWebviewMessage(
       }
 
       enqueueOperation(ctx, 'generate commit message', async () => {
-        ctx.setIsUpdatingDocument(true);
-        try {
-          await document.save();
-        } finally {
-          ctx.setIsUpdatingDocument(false);
-        }
+        await document.save();
 
         try {
           const result = await generateCommitMessageForCurrentFile(document);
@@ -834,7 +696,7 @@ export async function handleWebviewMessage(
     }
 
     case 'commitFile': {
-      if (document.uri.scheme !== 'file') {
+      if (!isDiskBackedMarkdownUri(document.uri)) {
         webviewPanel.webview.postMessage({
           type: 'commitFileFailed',
           message: 'Only files on disk can be committed.',
@@ -852,12 +714,7 @@ export async function handleWebviewMessage(
       }
 
       enqueueOperation(ctx, 'commit current markdown file', async () => {
-        ctx.setIsUpdatingDocument(true);
-        try {
-          await document.save();
-        } finally {
-          ctx.setIsUpdatingDocument(false);
-        }
+        await document.save();
 
         try {
           const gitContext = await resolveGitFileContext(document);
@@ -869,9 +726,9 @@ export async function handleWebviewMessage(
             return;
           }
 
-          await commitGitFile(gitContext.root, document.uri.fsPath, commitMessage);
+          await commitGitFile(gitContext.root, diskFsPath(document), commitMessage);
           await ctx.refreshGitChanges?.();
-          const successText = `Committed: ${path.basename(document.uri.fsPath)}`;
+          const successText = `Committed: ${path.basename(diskFsPath(document))}`;
           webviewPanel.webview.postMessage({
             type: 'commitFileCompleted',
             message: successText,
@@ -888,7 +745,7 @@ export async function handleWebviewMessage(
     }
 
     case 'syncFile': {
-      if (document.uri.scheme !== 'file') {
+      if (!isDiskBackedMarkdownUri(document.uri)) {
         webviewPanel.webview.postMessage({
           type: 'syncFileFailed',
           message: 'Only files on disk can be synced.',
@@ -906,19 +763,14 @@ export async function handleWebviewMessage(
       }
 
       enqueueOperation(ctx, 'sync current markdown file', async () => {
-        ctx.setIsUpdatingDocument(true);
-        try {
-          await document.save();
-        } finally {
-          ctx.setIsUpdatingDocument(false);
-        }
+        await document.save();
 
         try {
           const gitContext = await resolveGitFileContext(document);
-          let successText = `Synced: ${path.basename(document.uri.fsPath)}`;
+          let successText = `Synced: ${path.basename(diskFsPath(document))}`;
 
           if (gitContext.status) {
-            await commitGitFile(gitContext.root, document.uri.fsPath, commitMessage);
+            await commitGitFile(gitContext.root, diskFsPath(document), commitMessage);
           }
 
           const pushState = await getUpstreamStatus(gitContext.root);
@@ -938,7 +790,7 @@ export async function handleWebviewMessage(
           }
           await pushGitRepository(gitContext.root);
           if (!gitContext.status) {
-            successText = `Pushed current branch: ${path.basename(document.uri.fsPath)}`;
+            successText = `Pushed current branch: ${path.basename(diskFsPath(document))}`;
           }
 
           await ctx.refreshGitChanges?.();
@@ -990,7 +842,7 @@ export async function handleWebviewMessage(
       const { requestId, originalSrc } = message;
       try {
         const base64 = await readImageAsDataUrl({
-          documentPath: document.uri.fsPath,
+          documentPath: diskFsPath(document),
           source: originalSrc,
         });
         webviewPanel.webview.postMessage({ type: 'imageBase64Response', requestId, base64 });
@@ -1020,14 +872,14 @@ export async function handleWebviewMessage(
         canSelectFolders: false,
         canSelectMany: false,
         filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'] },
-        defaultUri: vscode.Uri.file(path.dirname(document.uri.fsPath)),
+        defaultUri: vscode.Uri.file(path.dirname(diskFsPath(document))),
       });
       const selectedPath = result?.[0]?.fsPath;
       if (!selectedPath) break;
 
       try {
         const selected = await pickImageFile({
-          documentPath: document.uri.fsPath,
+          documentPath: diskFsPath(document),
           selectPath: async () => selectedPath,
         });
         ensureImageResourceRoot(webviewPanel.webview, selected.sourcePath);
@@ -1049,7 +901,7 @@ export async function handleWebviewMessage(
       for (const filePath of message.paths) {
         try {
           const selected = await pickImageFile({
-            documentPath: document.uri.fsPath,
+            documentPath: diskFsPath(document),
             selectPath: async () => filePath,
           });
           ensureImageResourceRoot(webviewPanel.webview, selected.sourcePath);
@@ -1070,7 +922,7 @@ export async function handleWebviewMessage(
     case 'pasteImage': {
       try {
         const saved = await savePastedImage({
-          documentPath: document.uri.fsPath,
+          documentPath: diskFsPath(document),
           dataUrl: message.dataUrl,
           preferredName: message.name,
         });
@@ -1092,7 +944,7 @@ export async function handleWebviewMessage(
       const base64 = message.data;
       if (!base64 || typeof base64 !== 'string') break;
 
-      const docDir = path.dirname(document.uri.fsPath);
+      const docDir = path.dirname(diskFsPath(document));
       const defaultName = ctx.getFilename();
 
       const saveUri = await vscode.window.showSaveDialog({
@@ -1132,7 +984,7 @@ export async function handleWebviewMessage(
         break;
       }
 
-      const docxDocDir = path.dirname(document.uri.fsPath);
+      const docxDocDir = path.dirname(diskFsPath(document));
       const defaultName = ctx.getFilename();
       const title = typeof message.title === 'string' && message.title.trim()
         ? message.title.trim()

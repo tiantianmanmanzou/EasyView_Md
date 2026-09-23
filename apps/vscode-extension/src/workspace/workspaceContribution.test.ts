@@ -14,20 +14,20 @@ const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.js
     customEditors?: Array<{ viewType: string }>;
     keybindings?: Array<{ command: string; when?: string; key?: string }>;
     menus?: Record<string, Array<{ command: string; when?: string }>>;
-    views?: Record<string, Array<{ id: string }>>;
+    views?: Record<string, Array<{ id: string; type?: string }>>;
     viewsContainers?: { activitybar?: Array<{ id: string }> };
   };
 };
 
 describe('workspace explorer contribution', () => {
-  it('registers the Activity Bar container, TreeView, commands, and scoped delete keys', () => {
+  it('registers the Activity Bar container, WebviewView, commands, and scoped delete keys', () => {
     expect(manifest.activationEvents).toContain('onStartupFinished');
     expect(manifest.activationEvents).toContain('onView:easyviewMd.workspaceFiles');
     expect(manifest.contributes.viewsContainers?.activitybar).toContainEqual(
       expect.objectContaining({ id: 'easyviewMd-workspacePanel' }),
     );
     expect(manifest.contributes.views?.['easyviewMd-workspacePanel']).toContainEqual(
-      expect.objectContaining({ id: 'easyviewMd.workspaceFiles' }),
+      expect.objectContaining({ id: 'easyviewMd.workspaceFiles', type: 'webview' }),
     );
     expect(manifest.contributes.configuration?.properties?.['easyviewMd.workspace.focusFilesOnStartup']).toEqual(
       expect.objectContaining({ type: 'boolean', default: true }),
@@ -40,12 +40,14 @@ describe('workspace explorer contribution', () => {
       'easyviewMd.workspace.newFile',
       'easyviewMd.workspace.newFolder',
       'easyviewMd.workspace.refresh',
+      'easyviewMd.workspace.configureSort',
       'easyviewMd.workspace.copyResourceUri',
       'easyviewMd.workspace.paste',
       'easyviewMd.workspace.copyPath',
       'easyviewMd.workspace.copyRelativePath',
       'easyviewMd.workspace.rename',
       'easyviewMd.workspace.delete',
+      'easyviewMd.workspace.collapseAll',
     ]) {
       expect(commandIds.has(command)).toBe(true);
     }
@@ -53,9 +55,11 @@ describe('workspace explorer contribution', () => {
 
     const titleMenus = manifest.contributes.menus?.['view/title'] ?? [];
     expect(titleMenus.map(({ command }) => command)).toEqual([
+      'easyviewMd.workspace.configureSort',
       'easyviewMd.workspace.newFile',
       'easyviewMd.workspace.newFolder',
       'easyviewMd.workspace.refresh',
+      'easyviewMd.workspace.collapseAll',
     ]);
     expect(titleMenus.every(({ when }) => when?.includes('view == easyviewMd.workspaceFiles'))).toBe(true);
 
@@ -73,20 +77,13 @@ describe('workspace explorer contribution', () => {
     expect(renameBindings.every(({ when }) => when?.includes('focusedView == easyviewMd.workspaceFiles'))).toBe(true);
     expect(renameBindings.every(({ when }) => when?.includes('easyviewMd.workspaceFiles.entrySelected'))).toBe(true);
     expect(renameBindings.every(({ when }) => when?.includes('!inputFocus'))).toBe(true);
+    expect(renameBindings.every(({ when }) => when?.includes('!easyviewMd.workspaceFiles.inputFocus'))).toBe(true);
+    expect(deleteBindings.every(({ when }) => when?.includes('!easyviewMd.workspaceFiles.inputFocus'))).toBe(true);
   });
 
-  it('contributes file and folder actions only to the custom view and no custom editor-tab context menu', () => {
+  it('drops TreeView item context menus; file actions live in the webview context menu', () => {
     const fileMenus = manifest.contributes.menus?.['view/item/context'] ?? [];
-    expect(fileMenus.length).toBeGreaterThan(0);
-    expect(fileMenus.every(({ when }) => when?.includes('view == easyviewMd.workspaceFiles'))).toBe(true);
-    const folderMenus = fileMenus.filter(({ when }) => when?.includes('easyviewMd.workspaceDirectory'));
-    expect(folderMenus.length).toBeGreaterThan(0);
-    expect(folderMenus.some(({ command }) => command === 'easyviewMd.workspace.rename')).toBe(true);
-    expect(folderMenus.some(({ command }) => command === 'easyviewMd.workspace.delete')).toBe(true);
-    expect(folderMenus.some(({ command }) => command === 'easyviewMd.workspace.paste')).toBe(true);
-    expect(folderMenus.every(({ command }) => command !== 'easyviewMd.workspace.openPreview')).toBe(true);
-    expect(folderMenus.every(({ command }) => command !== 'easyviewMd.workspace.openWith')).toBe(true);
-    expect(fileMenus.every(({ command }) => command !== 'easyviewMd.workspace.openWith')).toBe(true);
+    expect(fileMenus).toEqual([]);
     expect(manifest.contributes.customEditors?.some(({ viewType }) => viewType === 'easyviewMd.filePreview')).toBe(true);
     expect(manifest.contributes.menus?.['editor/title/context']).toBeUndefined();
   });
@@ -96,6 +93,6 @@ describe('workspace explorer contribution', () => {
       path.join(extensionRoot, 'src/adapters/vscode/provider.ts'),
       'utf8',
     );
-    expect(providerSource).toContain('supportsMultipleEditorsPerDocument: true');
+    expect(providerSource).toContain('supportsMultipleEditorsPerDocument: false');
   });
 });

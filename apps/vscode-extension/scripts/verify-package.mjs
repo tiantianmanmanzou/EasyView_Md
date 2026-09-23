@@ -16,7 +16,9 @@ const required = [
   'extension/readme.md',
   'extension/LICENSE.txt',
   'extension/dist/extension.js',
+  'extension/dist/webview.js',
   'extension/dist/preview-webview.js',
+  'extension/dist/workspace-webview.js',
   'extension/dist/preview/preview.css',
   'extension/dist/preview/workers/doc-worker.js',
   'extension/dist/preview/vendor/file-viewer/flyfish-viewer-manifest.json',
@@ -30,6 +32,9 @@ const required = [
   'extension/dist/media/SourceHanSansCN-Normal.otf',
   'extension/dist/media/SourceHanSansCN-Heavy.otf',
   'extension/dist/media/NotoSansSymbols2-Regular.ttf',
+  'extension/dist/fonts/Inter.var.woff2',
+  'extension/dist/fonts/Inter-italic.var.woff2',
+  'extension/dist/fonts/KaTeX_Main-Regular.woff2',
   'extension/dist/runtime/node-pty/package.json',
   'extension/dist/runtime/node-pty/lib/index.js',
   'extension/dist/runtime/node-pty/prebuilds/darwin-arm64/pty.node',
@@ -41,6 +46,9 @@ const required = [
 ];
 for (const file of required) {
   if (!fileSet.has(file)) throw new Error(`Missing VSIX runtime file: ${file}`);
+}
+if (!files.some((file) => file.startsWith('extension/dist/editor/chunks/') && file.endsWith('.js'))) {
+  throw new Error('Missing split editor runtime chunks');
 }
 
 const forbidden = files.filter((file) =>

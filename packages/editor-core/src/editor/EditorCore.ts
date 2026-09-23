@@ -21,15 +21,37 @@ import {
   type Transaction,
 } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
-import { history, undo, redo, undoDepth, isHistoryTransaction } from 'prosemirror-history';
+import {
+  history,
+  undo,
+  redo,
+  undoDepth,
+  isHistoryTransaction,
+} from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
 import { dropCursor } from 'prosemirror-dropcursor';
 
 import { ExtensionManager } from './EditorExtensionManager';
 import type { EditorCoreConfig } from './EditorCoreTypes';
 import { schema } from './EditorSchema';
-import { createParser, createPasteParser, parseMarkdown } from './lib/MarkdownParser';
+import {
+  createParser,
+  createPasteParser,
+  parseMarkdown,
+} from './lib/MarkdownParser';
 import { docToMarkdown } from './lib/MarkdownSerializer';
+import {
+  applyTextPatches,
+  validatePatches,
+  type TextOffsetPatch,
+} from '@easyview/editor-sync';
+import {
+  analyzePatchImpact,
+  buildMarkdownDocumentIndex,
+  type MarkdownBlockRange,
+  type MarkdownBlockType,
+} from '@easyview/markdown-core/document';
+import type { Node as ProsemirrorNode } from 'prosemirror-model';
 
 import { EditorImageManager } from './EditorImageManager';
 import {
@@ -74,18 +96,26 @@ export class EditorCore {
 
     const t1 = performance.now();
     this.manager = new ExtensionManager(config.extensions);
-    console.log(`[EasyView_Md perf]   ExtensionManager: ${(performance.now() - t1).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   ExtensionManager: ${(performance.now() - t1).toFixed(1)}ms`,
+    );
 
     const t2 = performance.now();
     this.parser = createParser();
-    console.log(`[EasyView_Md perf]   createParser: ${(performance.now() - t2).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   createParser: ${(performance.now() - t2).toFixed(1)}ms`,
+    );
 
     const t3 = performance.now();
     this.pasteParser = createPasteParser();
-    console.log(`[EasyView_Md perf]   createPasteParser: ${(performance.now() - t3).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   createPasteParser: ${(performance.now() - t3).toFixed(1)}ms`,
+    );
 
     this.imageManager = new EditorImageManager();
-    console.log(`[EasyView_Md perf]   EditorCore constructor TOTAL: ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   EditorCore constructor TOTAL: ${(performance.now() - t0).toFixed(1)}ms`,
+    );
   }
 
   // ── Accessors ──
@@ -119,11 +149,15 @@ export class EditorCore {
   init(element: HTMLElement): void {
     const t0 = performance.now();
     const state = this.createState('');
-    console.log(`[EasyView_Md perf]   createState(empty): ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   createState(empty): ${(performance.now() - t0).toFixed(1)}ms`,
+    );
 
     const t1 = performance.now();
     const nodeViews = this.manager.buildNodeViews();
-    console.log(`[EasyView_Md perf]   buildNodeViews: ${(performance.now() - t1).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   buildNodeViews: ${(performance.now() - t1).toFixed(1)}ms`,
+    );
 
     const t2 = performance.now();
     this._view = new EditorView(element, {
@@ -131,7 +165,15 @@ export class EditorCore {
       nodeViews,
       dispatchTransaction: (tr) => this.dispatch(tr),
       handleClickOn: (view, pos, node, nodePos, event, direct) =>
-        handleClickOn(view, pos, node, nodePos, event as MouseEvent, direct, this.config),
+        handleClickOn(
+          view,
+          pos,
+          node,
+          nodePos,
+          event as MouseEvent,
+          direct,
+          this.config,
+        ),
       createSelectionBetween: (view, $anchor, _$head) =>
         preserveImageSelection(view, $anchor),
       handleClick: (view, pos, event) =>
@@ -140,11 +182,15 @@ export class EditorCore {
         handlePaste(view, event as ClipboardEvent, this.pasteParser),
     });
 
-    console.log(`[EasyView_Md perf]   new EditorView: ${(performance.now() - t2).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   new EditorView: ${(performance.now() - t2).toFixed(1)}ms`,
+    );
 
     const t3 = performance.now();
     this.manager.initAll(this._view);
-    console.log(`[EasyView_Md perf]   extensions.initAll: ${(performance.now() - t3).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   extensions.initAll: ${(performance.now() - t3).toFixed(1)}ms`,
+    );
 
     // Disable native text/node drag — we use our own block drag handles (6-dot grip).
     // External file drops still work (they use 'drop' event, not 'dragstart').
@@ -153,8 +199,20 @@ export class EditorCore {
     });
 
     // Track actual mouse movement to distinguish clicks from drags.
-    element.addEventListener('mousedown', () => { _mouseHasMoved = false; }, true);
-    element.addEventListener('mousemove', () => { _mouseHasMoved = true; }, true);
+    element.addEventListener(
+      'mousedown',
+      () => {
+        _mouseHasMoved = false;
+      },
+      true,
+    );
+    element.addEventListener(
+      'mousemove',
+      () => {
+        _mouseHasMoved = true;
+      },
+      true,
+    );
 
     // Direct DOM listener for footnote-label clicks (backup for ProseMirror handleClick
     // which may not fire for contenteditable="false" elements in some browsers)
@@ -176,8 +234,8 @@ export class EditorCore {
           if (refPos !== null) {
             this._view.dispatch(
               this._view.state.tr.setSelection(
-                NodeSelection.create(this._view.state.doc, refPos)
-              )
+                NodeSelection.create(this._view.state.doc, refPos),
+              ),
             );
             const refDom = this._view.nodeDOM(refPos) as HTMLElement;
             if (refDom) {
@@ -206,7 +264,11 @@ export class EditorCore {
    * Set content from markdown string.
    * @param isInit - true for initial load (recreates full state with plugins)
    */
-  setContent(markdown: string, isInit = false, meta?: Record<string, unknown>): void {
+  setContent(
+    markdown: string,
+    isInit = false,
+    meta?: Record<string, unknown>,
+  ): void {
     if (!this._view) return;
     if (markdown === this._currentContent && !isInit) {
       return;
@@ -224,30 +286,44 @@ export class EditorCore {
       const tParse = performance.now();
       const doc = parseMarkdown(markdown, this.parser);
       if (!doc) return;
-      if (isInit) console.log(`[EasyView_Md perf]   parseMarkdown: ${(performance.now() - tParse).toFixed(1)}ms (${markdown.length} chars)`);
+      if (isInit)
+        console.log(
+          `[EasyView_Md perf]   parseMarkdown: ${(performance.now() - tParse).toFixed(1)}ms (${markdown.length} chars)`,
+        );
 
       const tImg = performance.now();
       const converted = this.imageManager.convertImagePaths(doc);
-      if (isInit) console.log(`[EasyView_Md perf]   convertImagePaths: ${(performance.now() - tImg).toFixed(1)}ms`);
+      if (isInit)
+        console.log(
+          `[EasyView_Md perf]   convertImagePaths: ${(performance.now() - tImg).toFixed(1)}ms`,
+        );
 
       if (isInit) {
         // Fresh state — ensures NodeViews are properly instantiated.
         // Use TextSelection to avoid NodeSelection highlighting non-text nodes (e.g. hr).
         const tState = performance.now();
         let initSelection;
-        try { initSelection = TextSelection.atStart(converted); } catch { /* fallback to default */ }
+        try {
+          initSelection = TextSelection.atStart(converted);
+        } catch {
+          /* fallback to default */
+        }
         const newState = EditorState.create({
           doc: converted,
           plugins: this._view.state.plugins,
           ...(initSelection ? { selection: initSelection } : {}),
         });
-        console.log(`[EasyView_Md perf]   EditorState.create: ${(performance.now() - tState).toFixed(1)}ms`);
+        console.log(
+          `[EasyView_Md perf]   EditorState.create: ${(performance.now() - tState).toFixed(1)}ms`,
+        );
 
         const tUpdate = performance.now();
         // Suppress history for any DOM-correction transactions that fire after state update
         this._suppressHistory = true;
         this._view.updateState(newState);
-        console.log(`[EasyView_Md perf]   view.updateState: ${(performance.now() - tUpdate).toFixed(1)}ms`);
+        console.log(
+          `[EasyView_Md perf]   view.updateState: ${(performance.now() - tUpdate).toFixed(1)}ms`,
+        );
         // Defer cleanup — keep _isUpdatingFromExtension and _suppressHistory true
         // until DOM fully settles. Double-RAF covers MutationObserver microtasks
         // that fire async DOM-correction transactions after updateState().
@@ -260,7 +336,9 @@ export class EditorCore {
             // Safety: if DOM corrections somehow leaked undo entries despite
             // _suppressHistory, recreate clean state to prevent phantom undo
             if (view && undoDepth(view.state) > 0) {
-              console.warn('[EditorCore] Phantom undo entries after init, recreating clean state');
+              console.warn(
+                '[EditorCore] Phantom undo entries after init, recreating clean state',
+              );
               const cleanState = EditorState.create({
                 doc: view.state.doc,
                 plugins: view.state.plugins,
@@ -294,10 +372,16 @@ export class EditorCore {
           try {
             tr.setSelection(this._view.state.selection.map(tr.doc, tr.mapping));
             selectionSet = true;
-          } catch { /* selection mapping failed */ }
+          } catch {
+            /* selection mapping failed */
+          }
         }
         if (!selectionSet) {
-          try { tr.setSelection(TextSelection.atStart(tr.doc)); } catch { /* ignore */ }
+          try {
+            tr.setSelection(TextSelection.atStart(tr.doc));
+          } catch {
+            /* ignore */
+          }
         }
         const shouldScrollIntoView = meta?.scrollIntoView !== false;
         if (shouldScrollIntoView) {
@@ -312,6 +396,107 @@ export class EditorCore {
 
     if (!deferCleanup) {
       this._isUpdatingFromExtension = false;
+    }
+  }
+
+  /**
+   * Applies a host patch through the Markdown source-map PoC.
+   *
+   * Only a stable, single top-level block may be replaced locally. We still
+   * parse the candidate document completely as the semantic gate, then commit
+   * only the affected ProseMirror nodes. This keeps Markdown constructs and
+   * table metadata conservative while avoiding a full-tree replacement for
+   * ordinary text edits.
+   */
+  applyTextPatches(
+    patches: readonly TextOffsetPatch[],
+    meta?: Record<string, unknown>,
+  ): boolean {
+    if (!this._view) return false;
+
+    const current = this._currentContent || this.getMarkdown();
+    try {
+      const valid = validatePatches(patches, current.length);
+      if (valid.length === 0) return true;
+
+      const index = buildMarkdownDocumentIndex(current);
+      const impact = analyzePatchImpact(index, valid);
+      const unsupported = new Set<MarkdownBlockType>([
+        'frontmatter',
+        'referenceDefinition',
+        'footnote',
+        'chartFence',
+        'fencedCode',
+        'tableMetadata',
+      ]);
+
+      // The PoC deliberately refuses newline/structure edits. Those edits can
+      // create or merge blocks and require a snapshot/resync at this boundary.
+      if (
+        impact.requiresDocumentRebuild ||
+        impact.affectedBlocks.some((block) => unsupported.has(block.type)) ||
+        valid.some(
+          (patch) =>
+            current.slice(patch.from, patch.to).includes('\n') ||
+            patch.insert.includes('\n'),
+        )
+      ) {
+        return false;
+      }
+
+      const next = applyTextPatches(current, valid);
+      const nextIndex = buildMarkdownDocumentIndex(next);
+      if (!hasStableLocalBlockShape(index, nextIndex, impact.affectedBlocks))
+        return false;
+
+      const nextDoc = parseMarkdown(next, this.parser);
+      if (!nextDoc) return false;
+      const converted = this.imageManager.convertImagePaths(nextDoc);
+      const oldBlocks = localBlocks(index.blocks);
+      const newBlocks = localBlocks(nextIndex.blocks);
+      const oldNodes = mapTopLevelBlocks(index.blocks, this._view.state.doc);
+      const newNodes = mapTopLevelBlocks(nextIndex.blocks, converted);
+      if (!oldNodes || !newNodes || oldNodes.length !== newNodes.length)
+        return false;
+
+      const affectedIndexes = new Set(
+        impact.affectedBlocks
+          .filter((block) => block.type !== 'tableMetadata')
+          .map((block) => oldBlocks.indexOf(block)),
+      );
+      if (affectedIndexes.has(-1) || affectedIndexes.size === 0) {
+        console.error(
+          'reject indexes',
+          [...affectedIndexes],
+          oldBlocks,
+          impact.affectedBlocks,
+        );
+        return false;
+      }
+      for (const blockIndex of affectedIndexes) {
+        if (!sameNodeStructure(oldNodes[blockIndex], newNodes[blockIndex])) {
+          return false;
+        }
+      }
+
+      const tr = this._view.state.tr;
+      const positions = topLevelNodePositions(this._view.state.doc);
+      for (const blockIndex of [...affectedIndexes].sort((a, b) => b - a)) {
+        const position = positions[blockIndex];
+        tr.replaceWith(position.from, position.to, newNodes[blockIndex]);
+      }
+      tr.setMeta('addToHistory', false);
+      tr.setMeta('externalChange', true);
+      tr.setMeta('scrollIntoView', false);
+      for (const [key, value] of Object.entries(meta ?? {}))
+        tr.setMeta(key, value);
+      this._currentContent = next;
+      this._isUpdatingFromExtension = true;
+      this._view.dispatch(tr);
+      this._isUpdatingFromExtension = false;
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -333,7 +518,10 @@ export class EditorCore {
   /**
    * Insert one or more images at a specific document position (e.g. from drag & drop).
    */
-  insertImagesAtPos(images: Array<{ src: string; originalSrc: string }>, pos: number): void {
+  insertImagesAtPos(
+    images: Array<{ src: string; originalSrc: string }>,
+    pos: number,
+  ): void {
     if (!this._view) return;
     this.imageManager.insertImagesAtPos(this._view, images, pos);
   }
@@ -368,7 +556,11 @@ export class EditorCore {
   private createState(content: string): EditorState {
     const doc = parseMarkdown(content || '', this.parser);
     let initSelection;
-    try { initSelection = TextSelection.atStart(doc!); } catch { /* fallback */ }
+    try {
+      initSelection = TextSelection.atStart(doc!);
+    } catch {
+      /* fallback */
+    }
     return EditorState.create({
       doc: doc!,
       plugins: this.buildPlugins(),
@@ -380,7 +572,9 @@ export class EditorCore {
     const t0 = performance.now();
     // Extension plugins first — feature keymaps have priority
     const extension = this.manager.buildPlugins(schema);
-    console.log(`[EasyView_Md perf]   buildPlugins (extensions): ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(
+      `[EasyView_Md perf]   buildPlugins (extensions): ${(performance.now() - t0).toFixed(1)}ms`,
+    );
 
     // Core plugins — history (with undo/redo keymaps), drop cursor
     // Note: gap cursor is now handled by BlockEdgeCursorExtension
@@ -401,8 +595,11 @@ export class EditorCore {
     const core = [
       history(),
       keymap({
-        'Mod-z': wrappedUndo, 'Mod-y': wrappedRedo, 'Mod-Shift-z': wrappedRedo,
-        'Mod-Shift-v': (_state, _dispatch, view) => view ? handlePastePlainText(view) : false,
+        'Mod-z': wrappedUndo,
+        'Mod-y': wrappedRedo,
+        'Mod-Shift-z': wrappedRedo,
+        'Mod-Shift-v': (_state, _dispatch, view) =>
+          view ? handlePastePlainText(view) : false,
       }),
       dropCursor(),
     ];
@@ -433,7 +630,10 @@ export class EditorCore {
     // MutationObserver → flush → readDOMChange → dispatch recursion.
     this._dispatchDepth++;
     if (this._dispatchDepth > 3) {
-      console.warn('[EasyView_Md] Re-entrant dispatch loop detected, depth:', this._dispatchDepth);
+      console.warn(
+        '[EasyView_Md] Re-entrant dispatch loop detected, depth:',
+        this._dispatchDepth,
+      );
       this._dispatchDepth--;
       return;
     }
@@ -471,7 +671,11 @@ export class EditorCore {
         const view = this._view;
         if (!view) return;
         // Layer 2: proxy for actual drag ranges (mouse moved + range selection)
-        const isDragRange = !!(isMouseActive && _mouseHasMoved && !newState.selection.empty);
+        const isDragRange = !!(
+          isMouseActive &&
+          _mouseHasMoved &&
+          !newState.selection.empty
+        );
 
         if (isDragRange && !this._inProxyDispatch) {
           const domObserver = (this._view as any).domObserver;
@@ -479,13 +683,27 @@ export class EditorCore {
             const origCurSel = domObserver.currentSelection;
             const liveSel = window.getSelection()!;
             domObserver.currentSelection = {
-              get anchorNode() { return liveSel.anchorNode; },
-              get anchorOffset() { return liveSel.anchorOffset; },
-              get focusNode() { return liveSel.focusNode; },
-              get focusOffset() { return liveSel.focusOffset; },
-              set(s: any) { origCurSel.set(s); },
-              clear() { origCurSel.clear(); },
-              eq(s: any) { return origCurSel.eq(s); },
+              get anchorNode() {
+                return liveSel.anchorNode;
+              },
+              get anchorOffset() {
+                return liveSel.anchorOffset;
+              },
+              get focusNode() {
+                return liveSel.focusNode;
+              },
+              get focusOffset() {
+                return liveSel.focusOffset;
+              },
+              set(s: any) {
+                origCurSel.set(s);
+              },
+              clear() {
+                origCurSel.clear();
+              },
+              eq(s: any) {
+                return origCurSel.eq(s);
+              },
             };
             this._inProxyDispatch = true;
             view.updateState(newState);
@@ -528,7 +746,10 @@ export class EditorCore {
             this._currentContent = md;
             this.config.onContentChange?.(md);
           } catch (err) {
-            console.warn('[EasyView_Md] Serialization error in dispatch (history):', err);
+            console.warn(
+              '[EasyView_Md] Serialization error in dispatch (history):',
+              err,
+            );
           }
         } else {
           if (this._syncTimer) clearTimeout(this._syncTimer);
@@ -542,7 +763,10 @@ export class EditorCore {
                 this.config.onContentChange?.(md);
               }
             } catch (err) {
-              console.warn('[EasyView_Md] Serialization error in dispatch:', err);
+              console.warn(
+                '[EasyView_Md] Serialization error in dispatch:',
+                err,
+              );
             }
           }, 100);
         }
@@ -551,4 +775,141 @@ export class EditorCore {
       this._dispatchDepth--;
     }
   }
+}
+
+const LOCAL_BLOCK_TYPES = new Set<MarkdownBlockType>([
+  'paragraph',
+  'heading',
+  'blockquote',
+  'list',
+  'table',
+  'htmlTable',
+]);
+
+function touchesTableStyleMetadata(
+  content: string,
+  patches: readonly TextOffsetPatch[],
+): boolean {
+  const metadataRe = /<!--\s*easyview:table-meta\b[\s\S]*?-->/gi;
+  for (const match of content.matchAll(metadataRe)) {
+    const start = match.index ?? -1;
+    const end = start + match[0].length;
+    if (
+      patches.some(
+        (patch) =>
+          (patch.from < end && start < patch.to) ||
+          (patch.from === patch.to && patch.from >= start && patch.from <= end),
+      )
+    )
+      return true;
+  }
+  return false;
+}
+
+function localBlocks(
+  blocks: readonly MarkdownBlockRange[],
+): MarkdownBlockRange[] {
+  return blocks.filter(
+    (block) =>
+      block.type !== 'tableMetadata' &&
+      !/^\s*<!--\s*easyview:table-meta\b/i.test(block.text),
+  );
+}
+
+function hasStableLocalBlockShape(
+  before: ReturnType<typeof buildMarkdownDocumentIndex>,
+  after: ReturnType<typeof buildMarkdownDocumentIndex>,
+  affected: readonly MarkdownBlockRange[],
+): boolean {
+  const oldBlocks = localBlocks(before.blocks);
+  const newBlocks = localBlocks(after.blocks);
+  if (oldBlocks.length !== newBlocks.length) return false;
+  const affectedIds = new Set(affected.map((block) => block.id));
+  return oldBlocks.every((block, index) => {
+    const candidate = newBlocks[index];
+    if (
+      !candidate ||
+      !LOCAL_BLOCK_TYPES.has(block.type) ||
+      block.type !== candidate.type
+    )
+      return false;
+    return affectedIds.has(block.id) || block.key === candidate.key;
+  });
+}
+
+function expectedNodeType(block: MarkdownBlockType): string | null {
+  switch (block) {
+    case 'paragraph':
+      return 'paragraph';
+    case 'heading':
+      return 'heading';
+    case 'blockquote':
+      return 'blockquote';
+    case 'list':
+      return null; // bullet_list or ordered_list
+    case 'table':
+    case 'htmlTable':
+      return 'table';
+    default:
+      return null;
+  }
+}
+
+function mapTopLevelBlocks(
+  blocks: readonly MarkdownBlockRange[],
+  doc: ProsemirrorNode,
+): ProsemirrorNode[] | null {
+  const result: ProsemirrorNode[] = [];
+  let nodeIndex = 0;
+  for (const block of localBlocks(blocks)) {
+    const expected = expectedNodeType(block.type);
+    const node = doc.child(nodeIndex++);
+    if (!node) return null;
+    if (block.type === 'list') {
+      if (node.type.name !== 'bullet_list' && node.type.name !== 'ordered_list')
+        return null;
+    } else if (node.type.name !== expected) {
+      return null;
+    }
+    result.push(node);
+  }
+  return nodeIndex === doc.childCount ? result : null;
+}
+
+function sameNodeStructure(
+  before: ProsemirrorNode,
+  after: ProsemirrorNode,
+): boolean {
+  const normalize = (node: ProsemirrorNode): unknown => ({
+    type: node.type.name,
+    attrs: node.attrs,
+    marks: node.marks.map((mark) => ({
+      type: mark.type.name,
+      attrs: mark.attrs,
+    })),
+    content: node.content.content.map((child) =>
+      child.isText
+        ? {
+            type: child.type.name,
+            marks: child.marks.map((mark) => ({
+              type: mark.type.name,
+              attrs: mark.attrs,
+            })),
+          }
+        : normalize(child),
+    ),
+  });
+  return JSON.stringify(normalize(before)) === JSON.stringify(normalize(after));
+}
+
+function topLevelNodePositions(
+  doc: ProsemirrorNode,
+): Array<{ from: number; to: number }> {
+  const positions: Array<{ from: number; to: number }> = [];
+  let offset = 0;
+  doc.forEach((node) => {
+    positions.push({ from: offset, to: offset + node.nodeSize });
+    offset += node.nodeSize;
+  });
+  return positions;
 }

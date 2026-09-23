@@ -37,10 +37,23 @@ interface BlockChange {
   overviewRatio?: number;
 }
 
-interface GitLineRange {
+export interface GitLineRange {
   startLine: number;
   endLine: number;
   kind: ChangeKind;
+}
+
+interface DocumentBlockRange {
+  startLine: number;
+  endLine: number;
+  pos: number;
+  size: number;
+}
+
+interface DocumentLineBlockIndex {
+  totalLines: number;
+  blocks: DocumentBlockRange[];
+  structureKey: string;
 }
 
 interface AiChangesState {
@@ -54,6 +67,12 @@ interface AiChangesState {
   baseFingerprints: BlockFingerprint[];
   /** Detected changes after debounce */
   changes: BlockChange[];
+  /** Latest accepted Git revision */
+  gitRevision: number;
+  /** Git ranges used to build the current decorations */
+  gitLineRanges: GitLineRange[];
+  /** Structure identity for the cached block index */
+  gitStructureKey: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -159,74 +178,55 @@ function computeBlockChanges(
   return changes;
 }
 
-function buildMarkdownBlockRanges(content: string): Array<{ startLine: number; endLine: number }> {
-  const lines = content.split('\n');
-  const ranges: Array<{ startLine: number; endLine: number }> = [];
-  let idx = 0;
+const documentBlockIndexCache = new WeakMap<ProsemirrorNode, DocumentLineBlockIndex>();
 
-  const isBlank = (line: string) => line.trim() === '';
-  const isFence = (line: string) => /^\s*(```|~~~)/.test(line);
-  const isHeading = (line: string) => /^\s{0,3}#{1,6}\s+/.test(line);
-  const isListItem = (line: string) => /^\s{0,3}(?:[-*+]|\d+[.)])\s+/.test(line);
-  const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line);
-  const isTableSeparator = (line: string) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+function getDocumentBlockIndex(doc: ProsemirrorNode): DocumentLineBlockIndex {
+  const cached = documentBlockIndexCache.get(doc);
+  if (cached) return cached;
 
-  while (idx < lines.length) {
-    if (isBlank(lines[idx])) {
-      idx++;
-      continue;
-    }
+  const blocks: DocumentBlockRange[] = [];
+  let nextLine = 1;
+  const structureParts: string[] = [];
 
-    const startLine = idx + 1;
+  doc.forEach((node, pos) => {
+    const lineCount = Math.max(1, (node.textContent.match(/\n/g)?.length ?? 0) + 1);
+    const startLine = nextLine;
+    const endLine = startLine + lineCount - 1;
+    blocks.push({ startLine, endLine, pos, size: node.nodeSize });
+    structureParts.push(`${node.type.name}:${node.nodeSize}:${startLine}-${endLine}`);
+    nextLine = endLine + 1;
+  });
 
-    if (isFence(lines[idx])) {
-      idx++;
-      while (idx < lines.length && !isFence(lines[idx])) idx++;
-      if (idx < lines.length) idx++;
-      ranges.push({ startLine, endLine: Math.max(startLine, idx) });
-      continue;
-    }
-
-    if (isHeading(lines[idx])) {
-      ranges.push({ startLine, endLine: startLine });
-      idx++;
-      continue;
-    }
-
-    if (idx + 1 < lines.length && isTableRow(lines[idx]) && isTableSeparator(lines[idx + 1])) {
-      idx += 2;
-      while (idx < lines.length && isTableRow(lines[idx])) idx++;
-      ranges.push({ startLine, endLine: Math.max(startLine, idx) });
-      continue;
-    }
-
-    if (isListItem(lines[idx])) {
-      idx++;
-      while (idx < lines.length && (isBlank(lines[idx]) || /^\s{2,}\S/.test(lines[idx]) || isListItem(lines[idx]))) {
-        idx++;
-      }
-      ranges.push({ startLine, endLine: Math.max(startLine, idx) });
-      continue;
-    }
-
-    idx++;
-    while (
-      idx < lines.length &&
-      !isBlank(lines[idx]) &&
-      !isFence(lines[idx]) &&
-      !isHeading(lines[idx]) &&
-      !(idx + 1 < lines.length && isTableRow(lines[idx]) && isTableSeparator(lines[idx + 1])) &&
-      !isListItem(lines[idx])
-    ) {
-      idx++;
-    }
-    ranges.push({ startLine, endLine: Math.max(startLine, idx) });
-  }
-
-  return ranges.length ? ranges : [{ startLine: 1, endLine: 1 }];
+  const index = {
+    totalLines: Math.max(1, nextLine - 1),
+    blocks,
+    structureKey: structureParts.join('|'),
+  };
+  documentBlockIndexCache.set(doc, index);
+  return index;
 }
 
-function intersects(a: { startLine: number; endLine: number }, b: { startLine: number; endLine: number }) {
+function normalizeGitRanges(lineRanges: GitLineRange[]): GitLineRange[] {
+  return lineRanges
+    .filter((range) => Number.isFinite(range.startLine) && Number.isFinite(range.endLine))
+    .map((range) => ({
+      startLine: Math.max(1, Math.floor(range.startLine)),
+      endLine: Math.max(1, Math.floor(range.endLine)),
+      kind: range.kind === 'added' ? ('added' as const) : ('modified' as const),
+    }))
+    .map((range) => ({ ...range, endLine: Math.max(range.startLine, range.endLine) }))
+    .sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+}
+
+function gitRangesKey(lineRanges: GitLineRange[]): string {
+  return lineRanges.map((range) => `${range.startLine}-${range.endLine}-${range.kind}`).join('|');
+}
+
+export function shouldAcceptGitRevision(currentRevision: number, nextRevision: number): boolean {
+  return Number.isFinite(nextRevision) && nextRevision >= currentRevision;
+}
+
+function intersects(a: { startLine: number; endLine: number }, b: { startLine: number; endLine: number }): boolean {
   return a.startLine <= b.endLine && b.startLine <= a.endLine;
 }
 
@@ -246,62 +246,58 @@ function getOverviewRatio(range: GitLineRange, totalLines: number): number {
   return (Math.max(1, range.startLine) - 1) / Math.max(1, totalLines - 1);
 }
 
-function computeGitBlockChanges(
+export function computeGitBlockChanges(
   lineRanges: GitLineRange[],
-  content: string,
   doc: ProsemirrorNode
 ): BlockChange[] {
-  if (!lineRanges.length) return [];
+  const normalizedRanges = normalizeGitRanges(lineRanges);
+  if (!normalizedRanges.length) return [];
 
-  const totalLines = Math.max(1, content.split('\n').length);
-  const blockRanges = buildMarkdownBlockRanges(content);
-  const docBlocks: Array<{ pos: number; size: number; index: number }> = [];
-  doc.forEach((node, offset, index) => {
-    docBlocks.push({ pos: offset, size: node.nodeSize, index });
-  });
-
+  const index = getDocumentBlockIndex(doc);
   const changes: BlockChange[] = [];
-  for (const block of docBlocks) {
-    const blockRange = blockRanges[Math.min(block.index, blockRanges.length - 1)];
-    const matched = lineRanges.filter((range) => intersects(blockRange, range));
-    if (!matched.length) continue;
-    const overviewRange = matched.find((range) => isPreciseOverviewRange(range, totalLines));
+  let rangeIndex = 0;
+
+  // Both inputs are sorted. Advance the range pointer once per range instead
+  // of filtering every range for every block.
+  for (const block of index.blocks) {
+    while (rangeIndex < normalizedRanges.length && normalizedRanges[rangeIndex].endLine < block.startLine) {
+      rangeIndex += 1;
+    }
+    let probe = rangeIndex;
+    let hasMatch = false;
+    let allAdded = true;
+    let overviewRange: GitLineRange | undefined;
+    while (probe < normalizedRanges.length && normalizedRanges[probe].startLine <= block.endLine) {
+      const range = normalizedRanges[probe];
+      if (intersects(block, range)) {
+        hasMatch = true;
+        allAdded = allAdded && range.kind === 'added';
+        if (!overviewRange && isPreciseOverviewRange(range, index.totalLines)) overviewRange = range;
+      }
+      probe += 1;
+    }
+    if (!hasMatch) continue;
     changes.push({
       pos: block.pos,
       size: block.size,
-      kind: matched.every((range) => range.kind === 'added') ? 'added' : 'modified',
+      kind: allAdded ? 'added' : 'modified',
       showOverview: Boolean(overviewRange),
-      overviewRatio: overviewRange ? getOverviewRatio(overviewRange, totalLines) : undefined,
+      overviewRatio: overviewRange ? getOverviewRatio(overviewRange, index.totalLines) : undefined,
     });
   }
 
   if (!changes.length) {
-    const childCount = Math.max(1, doc.childCount);
-    const seen = new Set<number>();
-
-    for (const range of lineRanges) {
-      const index = Math.max(
-        0,
-        Math.min(childCount - 1, Math.floor(((range.startLine - 1) / totalLines) * childCount))
-      );
-      if (seen.has(index)) continue;
-      seen.add(index);
-
-      let offset = 0;
-      for (let i = 0; i < doc.childCount; i++) {
-        const node = doc.child(i);
-        if (i === index) {
-          changes.push({
-            pos: offset,
-            size: node.nodeSize,
-            kind: range.kind,
-            showOverview: isPreciseOverviewRange(range, totalLines),
-            overviewRatio: getOverviewRatio(range, totalLines),
-          });
-          break;
-        }
-        offset += node.nodeSize;
-      }
+    for (const range of normalizedRanges) {
+      const block = index.blocks.find((candidate) => candidate.endLine >= range.startLine) ?? index.blocks[index.blocks.length - 1];
+      if (!block) continue;
+      if (changes.some((change) => change.pos === block.pos)) continue;
+      changes.push({
+        pos: block.pos,
+        size: block.size,
+        kind: range.kind,
+        showOverview: isPreciseOverviewRange(range, index.totalLines),
+        overviewRatio: getOverviewRatio(range, index.totalLines),
+      });
     }
   }
 
@@ -550,14 +546,26 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
           lastChangeTime: 0,
           baseFingerprints: [],
           changes: [],
+          gitRevision: -1,
+          gitLineRanges: [],
+          gitStructureKey: '',
         };
       },
 
       apply(tr: Transaction, prev: AiChangesState, _oldState: EditorState, newState: EditorState): AiChangesState {
         const gitMeta = tr.getMeta(GIT_CHANGES_META);
         if (gitMeta) {
-          const { lineRanges, content } = gitMeta as { lineRanges: GitLineRange[]; content: string };
-          const changes = computeGitBlockChanges(lineRanges || [], content || '', newState.doc);
+          const { lineRanges, revision } = gitMeta as { lineRanges: GitLineRange[]; revision: number };
+          if (!shouldAcceptGitRevision(prev.gitRevision, revision)) return prev;
+          const normalizedRanges = normalizeGitRanges(lineRanges || []);
+          const nextStructureKey = getDocumentBlockIndex(newState.doc).structureKey;
+          if (revision === prev.gitRevision && gitRangesKey(normalizedRanges) === gitRangesKey(prev.gitLineRanges) &&
+              nextStructureKey === prev.gitStructureKey) {
+            return tr.docChanged
+              ? { ...prev, decorations: prev.decorations.map(tr.mapping, newState.doc) }
+              : prev;
+          }
+          const changes = computeGitBlockChanges(normalizedRanges, newState.doc);
           hideIndicator();
           if (debounceTimeoutId) clearTimeout(debounceTimeoutId);
           if (fadeTimeoutId) clearTimeout(fadeTimeoutId);
@@ -571,6 +579,9 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
               lastChangeTime: 0,
               baseFingerprints: [],
               changes: [],
+              gitRevision: revision,
+              gitLineRanges: normalizedRanges,
+              gitStructureKey: nextStructureKey,
             };
           }
 
@@ -595,6 +606,9 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             lastChangeTime: Date.now(),
             baseFingerprints: [],
             changes,
+            gitRevision: revision,
+            gitLineRanges: normalizedRanges,
+            gitStructureKey: nextStructureKey,
           };
         }
 
@@ -637,6 +651,9 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             lastChangeTime: now,
             baseFingerprints: baseFp,
             changes: [],
+            gitRevision: prev.gitRevision,
+            gitLineRanges: prev.gitLineRanges,
+            gitStructureKey: prev.gitStructureKey,
           };
         }
 
@@ -654,6 +671,9 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
               lastChangeTime: 0,
               baseFingerprints: [],
               changes: [],
+              gitRevision: prev.gitRevision,
+              gitLineRanges: prev.gitLineRanges,
+              gitStructureKey: prev.gitStructureKey,
             };
           }
 
@@ -698,6 +718,9 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             lastChangeTime: prev.lastChangeTime,
             baseFingerprints: [],
             changes,
+            gitRevision: prev.gitRevision,
+            gitLineRanges: prev.gitLineRanges,
+            gitStructureKey: prev.gitStructureKey,
           };
         }
 
@@ -739,7 +762,25 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             lastChangeTime: 0,
             baseFingerprints: [],
             changes: [],
+            gitRevision: prev.gitRevision,
+            gitLineRanges: [],
+            gitStructureKey: '',
           };
+        }
+
+        // Rebuild Git decorations only when document structure changed.
+        if (tr.docChanged && prev.gitLineRanges.length > 0) {
+          const nextIndex = getDocumentBlockIndex(newState.doc);
+          if (nextIndex.structureKey !== prev.gitStructureKey) {
+            const changes = computeGitBlockChanges(prev.gitLineRanges, newState.doc);
+            const decos = changes.flatMap((change) => {
+              const node = newState.doc.nodeAt(change.pos);
+              return node ? [Decoration.node(change.pos, change.pos + change.size, {
+                class: change.kind === 'modified' ? 'block-ai-modified' : 'block-ai-added',
+              })] : [];
+            });
+            return { ...prev, decorations: DecorationSet.create(newState.doc, decos), changes, gitStructureKey: nextIndex.structureKey };
+          }
         }
 
         // Map existing decorations through document changes

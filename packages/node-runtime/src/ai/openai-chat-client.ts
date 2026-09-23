@@ -1,12 +1,17 @@
 /**
- * OpenAI-compatible chat completions client (used for Deepseek and any
- * OpenAI-compatible endpoint). Runs in Node hosts (VS Code extension /
- * Electron main); SSE is parsed from the fetch response body stream.
+ * OpenAI-compatible chat client backed by Vercel AI SDK.
+ *
+ * Both VS Code and Electron call this service from Node. The public request
+ * shape intentionally remains small while the implementation now uses the
+ * AI SDK provider abstraction and supports standard tool loops.
  */
+
+import { APICallError, generateText, stepCountIs, streamText, type ModelMessage, type ToolSet } from 'ai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 export interface OpenAiChatMessage {
   role: 'system' | 'user' | 'assistant';
-  /** Plain text content, or multimodal parts for image messages. */
+  /** Plain text content, or multimodal parts for user messages. */
   content: string | Array<OpenAiChatContentPart>;
 }
 
@@ -46,19 +51,22 @@ export interface OpenAiChatRequestOptions {
   maxTokens?: number;
   stream?: boolean;
   signal?: AbortSignal;
-  /** Inactivity timeout between chunks. Default 60s. */
+  /** Inactivity timeout between streamed events. Default 60s. */
   inactivityTimeoutMs?: number;
   /** Total request timeout. Default 300s. */
   totalTimeoutMs?: number;
+  /** Vercel AI SDK tools available to this model invocation. */
+  tools?: ToolSet;
+  /** Maximum LLM steps for a request that invokes tools. Default 8. */
+  maxToolSteps?: number;
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
 }
 
-export interface OpenAiChatStreamEvent {
-  type: 'delta';
-  text?: string;
-  reasoning?: string;
-}
+export type OpenAiChatStreamEvent =
+  | { type: 'delta'; text?: string; reasoning?: string }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
+  | { type: 'tool-result'; toolCallId: string; toolName: string; input: unknown; output: unknown };
 
 export interface OpenAiChatResult {
   content: string;
@@ -69,152 +77,81 @@ export interface OpenAiChatResult {
 const DEFAULT_INACTIVITY_TIMEOUT_MS = 60_000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 300_000;
 
-type FetchLike = typeof fetch;
-
-/**
- * Incremental SSE line parser. Feed decoded text chunks; emits complete
- * `data:` payload strings (CRLF/LF tolerant, comment lines skipped).
- */
-export function createSseDataParser(): (chunk: string) => string[] {
-  let buffer = '';
-  return (chunk: string) => {
-    buffer += chunk;
-    const lines: string[] = [];
-    let newlineIndex: number;
-    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
-      buffer = buffer.slice(newlineIndex + 1);
-      if (line.startsWith(':')) continue; // comment / keepalive
-      if (line.startsWith('data:')) {
-        lines.push(line.slice(5).replace(/^ /, ''));
-      }
+function toAiSdkMessages(messages: readonly OpenAiChatMessage[]): ModelMessage[] {
+  return messages.map((message): ModelMessage => {
+    if (typeof message.content === 'string') {
+      return { role: message.role, content: message.content };
     }
-    return lines;
-  };
+
+    if (message.role !== 'user') {
+      throw new OpenAiChatError('PROTOCOL', '仅用户消息支持多模态内容');
+    }
+
+    return {
+      role: 'user',
+      content: message.content.map((part) => {
+        if (part.type === 'text') return { type: 'text', text: part.text ?? '' };
+        const url = part.image_url?.url;
+        if (!url) throw new OpenAiChatError('PROTOCOL', '图片消息缺少 URL');
+        return {
+          type: 'file',
+          mediaType: imageMediaType(url),
+          data: { type: 'url', url: new URL(url) },
+        };
+      }),
+    };
+  });
 }
 
-interface ChatCompletionChunk {
-  choices?: Array<{
-    delta?: { content?: string | null; reasoning_content?: string | null };
-    message?: { content?: string | null; reasoning_content?: string | null };
-    finish_reason?: string | null;
-  }>;
-  error?: { message?: string; code?: string | number } | string;
+function imageMediaType(url: string): string {
+  const match = /^data:(image\/[a-z0-9.+-]+);/i.exec(url);
+  return match?.[1]?.toLowerCase() ?? 'image/*';
 }
 
-/** Parses a non-streaming chat/completions JSON body. */
-export function parseChatCompletionResponse(body: string): OpenAiChatResult {
-  let parsed: ChatCompletionChunk;
-  try {
-    parsed = JSON.parse(body) as ChatCompletionChunk;
-  } catch {
-    throw new OpenAiChatError('PROTOCOL', `无法解析模型返回: ${body.slice(0, 120)}`);
-  }
-  if (parsed.error) {
-    const message =
-      typeof parsed.error === 'string' ? parsed.error : (parsed.error.message ?? '未知模型错误');
-    throw new OpenAiChatError('PROTOCOL', message);
-  }
-  const choice = parsed.choices?.[0];
-  const message = choice?.message ?? choice?.delta;
-  return {
-    content: message?.content ?? '',
-    reasoning: message?.reasoning_content ?? undefined,
-    finishReason: choice?.finish_reason ?? undefined,
-  };
+function toFinishReason(reason: string): string {
+  return reason === 'tool-calls' ? 'tool_calls' : reason;
 }
 
-/** Parses one SSE `data:` payload (JSON string or `[DONE]`). */
-export function parseChatCompletionChunk(
-  data: string,
-): { done: false; text?: string; reasoning?: string; finishReason?: string } | { done: true } {
-  if (data === '[DONE]') return { done: true };
-  let parsed: ChatCompletionChunk;
-  try {
-    parsed = JSON.parse(data) as ChatCompletionChunk;
-  } catch {
-    throw new OpenAiChatError('PROTOCOL', `无法解析模型返回的数据片段: ${data.slice(0, 120)}`);
+function errorDetail(error: APICallError): string {
+  if (typeof error.data === 'object' && error.data !== null) {
+    const candidate = (error.data as { error?: { message?: unknown } }).error?.message;
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
   }
-  if (parsed.error) {
-    const message =
-      typeof parsed.error === 'string' ? parsed.error : (parsed.error.message ?? '未知模型错误');
-    throw new OpenAiChatError('PROTOCOL', message);
-  }
-  const choice = parsed.choices?.[0];
-  if (!choice) return { done: false };
-  const delta = choice.delta ?? choice.message;
-  return {
-    done: false,
-    text: delta?.content ?? undefined,
-    reasoning: delta?.reasoning_content ?? undefined,
-    finishReason: choice.finish_reason ?? undefined,
-  };
+  return error.message;
 }
 
-function httpError(status: number, body: string): OpenAiChatError {
-  let detail = body.slice(0, 500);
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } };
-    if (parsed.error?.message) detail = parsed.error.message;
-  } catch {
-    // keep raw body
+function classifyError(error: unknown, aborted: boolean, timedOut: boolean, totalTimeoutMs: number): OpenAiChatError {
+  if (timedOut) {
+    return new OpenAiChatError('TIMEOUT', `请求超时（总时长超过 ${Math.round(totalTimeoutMs / 1000)}s）`);
   }
-  if (status === 401 || status === 403) {
-    return new OpenAiChatError('AUTH', `API Key 无效或无权限 (HTTP ${status}): ${detail}`, status);
-  }
-  if (status === 429) {
-    return new OpenAiChatError('RATE_LIMIT', `请求过于频繁或额度不足 (HTTP 429): ${detail}`, status);
-  }
-  return new OpenAiChatError('HTTP', `请求失败 (HTTP ${status}): ${detail}`, status);
-}
-
-function classifyNetworkError(error: unknown, abortedByUser: boolean): OpenAiChatError {
-  if (abortedByUser || (error instanceof Error && error.name === 'AbortError')) {
+  if (aborted || (error instanceof DOMException && error.name === 'AbortError')) {
     return new OpenAiChatError('ABORTED', '已停止生成');
   }
+  if (APICallError.isInstance(error)) {
+    const detail = errorDetail(error);
+    if (error.statusCode === 401 || error.statusCode === 403) {
+      return new OpenAiChatError('AUTH', `API Key 无效或无权限 (HTTP ${error.statusCode}): ${detail}`, error.statusCode);
+    }
+    if (error.statusCode === 429) {
+      return new OpenAiChatError('RATE_LIMIT', `请求过于频繁或额度不足 (HTTP 429): ${detail}`, error.statusCode);
+    }
+    return new OpenAiChatError('HTTP', `请求失败 (HTTP ${error.statusCode}): ${detail}`, error.statusCode);
+  }
+  if (error instanceof OpenAiChatError) return error;
   const message = error instanceof Error ? error.message : String(error);
   return new OpenAiChatError('NETWORK', `网络请求失败: ${message}`);
 }
 
-async function readErrorBody(response: Response): Promise<string> {
-  try {
-    return await response.text();
-  } catch {
-    return '';
-  }
-}
-
-/** Races a promise against an abort signal so hangs cannot outlive the abort. */
-function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
-    signal.addEventListener('abort', onAbort);
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
-/**
- * Sends a chat completion request. Streaming responses invoke `onEvent` per
- * delta; resolves with the full result when finished.
- */
-export async function streamOpenAiChat(
-  options: OpenAiChatRequestOptions,
-  onEvent: (event: OpenAiChatStreamEvent) => void,
-): Promise<OpenAiChatResult> {
-  const fetchImpl: FetchLike = options.fetchImpl ?? fetch;
-  const inactivityTimeoutMs = options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
-  const totalTimeoutMs = options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
-
+function createRequestAbortController(
+  signal: AbortSignal | undefined,
+  inactivityTimeoutMs: number,
+  totalTimeoutMs: number,
+): {
+  controller: AbortController;
+  resetInactivityTimer: () => void;
+  cleanup: () => void;
+  didTimeOut: () => boolean;
+} {
   const controller = new AbortController();
   let timedOut = false;
   let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -230,114 +167,122 @@ export async function streamOpenAiChat(
     }, inactivityTimeoutMs);
   };
   const onUserAbort = () => controller.abort();
-  options.signal?.addEventListener('abort', onUserAbort);
+  signal?.addEventListener('abort', onUserAbort);
+  if (signal?.aborted) controller.abort();
 
-  const cleanup = () => {
-    clearTimeout(totalTimer);
-    if (inactivityTimer) clearTimeout(inactivityTimer);
-    options.signal?.removeEventListener('abort', onUserAbort);
+  return {
+    controller,
+    resetInactivityTimer,
+    cleanup: () => {
+      clearTimeout(totalTimer);
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      signal?.removeEventListener('abort', onUserAbort);
+    },
+    didTimeOut: () => timedOut,
   };
+}
 
-  const stream = options.stream !== false;
-  const url = `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`;
-  const body: Record<string, unknown> = {
-    model: options.model,
-    messages: options.messages,
-    stream,
+function buildAiSdkRequest(options: OpenAiChatRequestOptions, signal: AbortSignal) {
+  const systemMessages = options.messages.filter((message) => message.role === 'system');
+  if (systemMessages.length > 1) {
+    throw new OpenAiChatError('PROTOCOL', '每次请求最多允许一条系统消息');
+  }
+  const system = systemMessages[0]?.content;
+  if (system !== undefined && typeof system !== 'string') {
+    throw new OpenAiChatError('PROTOCOL', '系统消息必须是纯文本');
+  }
+  const provider = createOpenAICompatible({
+    name: 'easyview',
+    baseURL: options.baseUrl.replace(/\/+$/, ''),
+    apiKey: options.apiKey,
+    fetch: options.fetchImpl,
+  });
+  const tools = options.tools && Object.keys(options.tools).length > 0 ? options.tools : undefined;
+  return {
+    model: provider.chatModel(options.model),
+    ...(system ? { system } : {}),
+    messages: toAiSdkMessages(options.messages.filter((message) => message.role !== 'system')),
+    temperature: options.temperature,
+    topP: options.topP,
+    maxOutputTokens: options.maxTokens,
+    abortSignal: signal,
+    maxRetries: 0,
+    ...(tools ? { tools, stopWhen: stepCountIs(options.maxToolSteps ?? 8) } : {}),
   };
-  if (options.temperature !== undefined) body.temperature = options.temperature;
-  if (options.topP !== undefined) body.top_p = options.topP;
-  if (options.maxTokens !== undefined) body.max_tokens = options.maxTokens;
+}
+
+/**
+ * Sends an OpenAI-compatible request through Vercel AI SDK. Streaming emits
+ * text, reasoning, and tool events; tool-enabled requests continue until the
+ * configured tool-step limit or a normal model completion.
+ */
+export async function streamOpenAiChat(
+  options: OpenAiChatRequestOptions,
+  onEvent: (event: OpenAiChatStreamEvent) => void,
+): Promise<OpenAiChatResult> {
+  const inactivityTimeoutMs = options.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
+  const totalTimeoutMs = options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
+  const request = createRequestAbortController(options.signal, inactivityTimeoutMs, totalTimeoutMs);
 
   try {
-    let response: Response;
-    try {
-      resetInactivityTimer();
-      response = await raceAbort(
-        fetchImpl(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${options.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        }),
-        controller.signal,
-      );
-    } catch (error) {
-      if (timedOut) {
-        throw new OpenAiChatError('TIMEOUT', `请求超时（总时长超过 ${Math.round(totalTimeoutMs / 1000)}s）`);
-      }
-      throw classifyNetworkError(error, options.signal?.aborted === true);
+    if (options.signal?.aborted) {
+      throw new OpenAiChatError('ABORTED', '已停止生成');
+    }
+    if (options.stream === false) {
+      const result = await generateText(buildAiSdkRequest(options, request.controller.signal));
+      return {
+        content: result.text,
+        reasoning: result.reasoningText,
+        finishReason: toFinishReason(result.finishReason),
+      };
     }
 
-    if (!response.ok) {
-      throw httpError(response.status, await readErrorBody(response));
-    }
-
+    const result = streamText(buildAiSdkRequest(options, request.controller.signal));
     let content = '';
     let reasoning = '';
-    let finishReason: string | undefined;
+    request.resetInactivityTimer();
 
-    if (!stream) {
-      resetInactivityTimer();
-      const text = await response.text();
-      const parsed = parseChatCompletionResponse(text);
-      content = parsed.content;
-      reasoning = parsed.reasoning ?? '';
-      finishReason = parsed.finishReason;
-    } else {
-      if (!response.body) {
-        throw new OpenAiChatError('PROTOCOL', '响应缺少可读流');
-      }
-      const parseData = createSseDataParser();
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          resetInactivityTimer();
-          for (const data of parseData(decoder.decode(value, { stream: true }))) {
-            const parsed = parseChatCompletionChunk(data);
-            if (parsed.done) {
-              await reader.cancel().catch(() => undefined);
-              return {
-                content,
-                reasoning: reasoning || undefined,
-                finishReason,
-              };
-            }
-            if (parsed.text) {
-              content += parsed.text;
-              onEvent({ type: 'delta', text: parsed.text });
-            }
-            if (parsed.reasoning) {
-              reasoning += parsed.reasoning;
-              onEvent({ type: 'delta', reasoning: parsed.reasoning });
-            }
-            if (parsed.finishReason) finishReason = parsed.finishReason;
-          }
-        }
-      } catch (error) {
-        if (timedOut) {
-          throw new OpenAiChatError(
-            'TIMEOUT',
-            `响应超时（超过 ${Math.round(inactivityTimeoutMs / 1000)}s 未收到数据）`,
-          );
-        }
-        if (error instanceof OpenAiChatError) throw error;
-        throw classifyNetworkError(error, options.signal?.aborted === true);
+    for await (const part of result.fullStream) {
+      request.resetInactivityTimer();
+      switch (part.type) {
+        case 'text-delta':
+          content += part.text;
+          onEvent({ type: 'delta', text: part.text });
+          break;
+        case 'reasoning-delta':
+          reasoning += part.text;
+          onEvent({ type: 'delta', reasoning: part.text });
+          break;
+        case 'tool-call':
+          onEvent({
+            type: 'tool-call',
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+          });
+          break;
+        case 'tool-result':
+          onEvent({
+            type: 'tool-result',
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+            output: part.output,
+          });
+          break;
+        case 'error':
+          throw part.error;
       }
     }
 
     return {
       content,
       reasoning: reasoning || undefined,
-      finishReason,
+      finishReason: toFinishReason(await result.finishReason),
     };
+  } catch (error) {
+    throw classifyError(error, options.signal?.aborted === true, request.didTimeOut(), totalTimeoutMs);
   } finally {
-    cleanup();
+    request.cleanup();
   }
 }

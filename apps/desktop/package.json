@@ -21,6 +21,7 @@
   "devDependencies": {
     "@easyview/contracts": "0.1.0",
     "@easyview/editor-core": "*",
+    "@easyview/editor-sync": "*",
     "@easyview/node-runtime": "*",
     "@easyview/preview-ui": "*",
     "@electron-forge/cli": "^7.8.3",

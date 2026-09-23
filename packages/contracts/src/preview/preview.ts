@@ -89,6 +89,8 @@ export interface ArchiveEntry {
   directory: boolean;
   compressedSize: number;
   uncompressedSize: number;
+  /** ISO 8601 timestamp when the archive format exposes one. */
+  lastModified?: string;
 }
 
 export interface ArchiveEntryPreview extends ArchiveEntry {

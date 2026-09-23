@@ -11,6 +11,7 @@ import {
   findRepository,
   getFileDiff,
   getIndexFileContent,
+  getIndexObjectId,
   getFileStatus,
   getUpstreamStatus,
   push,
@@ -97,13 +98,15 @@ describe("git service", () => {
     });
   });
 
-  it("returns the indexed file content and null for untracked files", async () => {
+  it("returns the indexed file content, index object id, and null for untracked files", async () => {
     const { root, filePath } = await createRepository();
     expect(await getIndexFileContent(root, filePath)).toBe("# initial\n");
+    expect(await getIndexObjectId(root, filePath)).toMatch(/^[0-9a-f]{40}$/);
 
     const untracked = path.join(root, "untracked.md");
     await writeFile(untracked, "new\n", "utf8");
     expect(await getIndexFileContent(root, untracked)).toBeNull();
+    expect(await getIndexObjectId(root, untracked)).toBeNull();
   });
 
   it("stages and commits only the requested file", async () => {

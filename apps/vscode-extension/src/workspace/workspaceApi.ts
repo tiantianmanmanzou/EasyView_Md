@@ -8,13 +8,18 @@ import {
   type WorkspaceEntry,
   type WorkspaceEntryKind,
   type WorkspaceGateway,
+  type WorkspaceMoveRequest,
   type WorkspaceRenameRequest,
+  type WorkspaceTreeSortMode,
 } from '@easyview/contracts';
 import {
   joinWorkspaceRelativePath,
+  parentWorkspaceRelativePath,
   validateWorkspaceEntryName as validateSharedWorkspaceEntryName,
+  WORKSPACE_TREE_ORDER_RELATIVE_PATH,
   WorkspaceFileOperationService,
   WorkspaceTreeModel,
+  WorkspaceTreeOrderState,
 } from '@easyview/node-runtime';
 
 export type { WorkspaceCreateRequest, WorkspaceEntry, WorkspaceEntryKind };
@@ -52,16 +57,29 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
   async listChildren(rootId: string, relativePath: string): Promise<WorkspaceEntry[]> {
     const directory = this.uriFor(rootId, relativePath);
     const entries = await vscode.workspace.fs.readDirectory(directory);
-    return entries.map(([name, fileType]) => {
+    return Promise.all(entries.map(async ([name, fileType]) => {
       const childRelativePath = joinWorkspaceRelativePath(relativePath, name);
+      const childUri = this.uriFor(rootId, childRelativePath);
+      let createdAt: number | undefined;
+      let updatedAt: number | undefined;
+      try {
+        const stat = await vscode.workspace.fs.stat(childUri);
+        createdAt = Number.isFinite(stat.ctime) ? Math.trunc(stat.ctime) : undefined;
+        updatedAt = Number.isFinite(stat.mtime) ? Math.trunc(stat.mtime) : undefined;
+      } catch {
+        createdAt = undefined;
+        updatedAt = undefined;
+      }
       return {
         id: createWorkspaceNodeId(rootId, childRelativePath),
         rootId,
         name,
         relativePath: childRelativePath,
         kind: fileTypeToEntryKind(fileType),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+        ...(updatedAt !== undefined ? { updatedAt } : {}),
       };
-    });
+    }));
   }
 
   async create(rootId: string, request: WorkspaceCreateRequest): Promise<WorkspaceEntry> {
@@ -89,9 +107,7 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
   async rename(rootId: string, request: WorkspaceRenameRequest): Promise<WorkspaceEntry> {
     validateSharedWorkspaceEntryName(request.newName);
     const source = this.uriFor(rootId, request.relativePath);
-    const parentRelativePath = request.relativePath.includes('/')
-      ? request.relativePath.slice(0, request.relativePath.lastIndexOf('/'))
-      : '';
+    const parentRelativePath = parentWorkspaceRelativePath(request.relativePath);
     const relativePath = joinWorkspaceRelativePath(parentRelativePath, request.newName);
     const target = this.uriFor(rootId, relativePath);
     const sourceStat = await vscode.workspace.fs.stat(source);
@@ -106,6 +122,41 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
       name: request.newName,
       relativePath,
       kind: fileTypeToEntryKind(sourceStat.type),
+      createdAt: Number.isFinite(sourceStat.ctime) ? Math.trunc(sourceStat.ctime) : undefined,
+      updatedAt: Number.isFinite(sourceStat.mtime) ? Math.trunc(sourceStat.mtime) : undefined,
+    };
+  }
+
+  async move(rootId: string, request: WorkspaceMoveRequest): Promise<WorkspaceEntry> {
+    const source = this.uriFor(rootId, request.relativePath);
+    const sourceName = workspaceBasename(source);
+    const nextName = request.newName ?? sourceName;
+    validateSharedWorkspaceEntryName(nextName);
+    const targetParentRelativePath = request.targetParentRelativePath;
+    const relativePath = joinWorkspaceRelativePath(targetParentRelativePath, nextName);
+    const target = this.uriFor(rootId, relativePath);
+    const sourceStat = await vscode.workspace.fs.stat(source);
+    const isDirectory = (sourceStat.type & vscode.FileType.Directory) !== 0;
+    if (isDirectory) {
+      const sourcePath = normalizeUriPath(source.path);
+      const parentPath = normalizeUriPath(this.uriFor(rootId, targetParentRelativePath).path);
+      if (parentPath === sourcePath || parentPath.startsWith(`${sourcePath}/`)) {
+        throw new WorkspaceOperationError('INVALID_PATH', 'Cannot move a folder into itself or its descendants.');
+      }
+    }
+    const edit = new vscode.WorkspaceEdit();
+    edit.renameFile(source, target, { overwrite: false, ignoreIfExists: false });
+    if (!await vscode.workspace.applyEdit(edit)) {
+      throw new WorkspaceOperationError('IO_ERROR', `Unable to move ${workspaceBasename(source)}.`);
+    }
+    return {
+      id: createWorkspaceNodeId(rootId, relativePath),
+      rootId,
+      name: nextName,
+      relativePath,
+      kind: fileTypeToEntryKind(sourceStat.type),
+      createdAt: Number.isFinite(sourceStat.ctime) ? Math.trunc(sourceStat.ctime) : undefined,
+      updatedAt: Number.isFinite(sourceStat.mtime) ? Math.trunc(sourceStat.mtime) : undefined,
     };
   }
 
@@ -169,13 +220,96 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
 
 export class WorkspaceTreeService {
   private readonly gateway = new VscodeWorkspaceGateway();
-  private readonly model = new WorkspaceTreeModel(this.gateway);
-  private readonly operations = new WorkspaceFileOperationService(this.gateway, this.model);
+  private readonly orderState = new WorkspaceTreeOrderState();
+  private readonly model = new WorkspaceTreeModel(this.gateway, { sortProvider: this.orderState });
+  private readonly operations = new WorkspaceFileOperationService(
+    this.gateway,
+    this.model,
+    this.orderState,
+  );
+  private rootUri: vscode.Uri | undefined;
+  private persistTimer: NodeJS.Timeout | undefined;
 
-  setRoot(root: vscode.Uri | undefined): void {
+  setRoot(root: vscode.Uri | undefined, onOrderLoaded?: () => void): void {
     this.gateway.clearRoots();
     this.model.clear();
-    if (root) this.gateway.registerRoot(root);
+    this.rootUri = root;
+    this.orderState.replaceConfig({
+      version: 1,
+      sortMode: 'name',
+      showCreatedAt: false,
+      showUpdatedAt: false,
+      showDotEntries: true,
+      showTimestampHover: true,
+      orders: {},
+    });
+    if (root) {
+      this.gateway.registerRoot(root);
+      void this.loadOrderConfig().then(() => onOrderLoaded?.());
+    }
+  }
+
+  getSortMode(): WorkspaceTreeSortMode {
+    return this.orderState.getSortMode();
+  }
+
+  getShowCreatedAt(): boolean {
+    return this.orderState.getShowCreatedAt();
+  }
+
+  getShowUpdatedAt(): boolean {
+    return this.orderState.getShowUpdatedAt();
+  }
+
+  getShowDotEntries(): boolean {
+    return this.orderState.getShowDotEntries();
+  }
+
+  getShowTimestampHover(): boolean {
+    return this.orderState.getShowTimestampHover();
+  }
+
+  getShowTimestamps(): boolean {
+    return this.orderState.getShowTimestamps();
+  }
+
+  async setSortMode(sortMode: WorkspaceTreeSortMode): Promise<void> {
+    this.orderState.setSortMode(sortMode);
+    this.model.invalidateAll(this.rootUri ? this.gateway.registerRoot(this.rootUri) : undefined);
+    await this.persistOrderConfig();
+  }
+
+  async setShowCreatedAt(showCreatedAt: boolean): Promise<void> {
+    this.orderState.setShowCreatedAt(showCreatedAt);
+    await this.persistOrderConfig();
+  }
+
+  async setShowUpdatedAt(showUpdatedAt: boolean): Promise<void> {
+    this.orderState.setShowUpdatedAt(showUpdatedAt);
+    await this.persistOrderConfig();
+  }
+
+  async setShowDotEntries(showDotEntries: boolean): Promise<void> {
+    this.orderState.setShowDotEntries(showDotEntries);
+    await this.persistOrderConfig();
+  }
+
+  async setShowTimestampHover(showTimestampHover: boolean): Promise<void> {
+    this.orderState.setShowTimestampHover(showTimestampHover);
+    await this.persistOrderConfig();
+  }
+
+  async reorder(
+    parentRelativePath: string,
+    movedName: string,
+    siblingNames: readonly string[],
+    beforeName?: string,
+  ): Promise<void> {
+    this.orderState.reorder(parentRelativePath, movedName, siblingNames, beforeName);
+    if (this.rootUri) {
+      this.model.invalidateDirectory(this.gateway.registerRoot(this.rootUri), parentRelativePath);
+    }
+    await this.persistOrderConfig();
   }
 
   async readChildren(root: vscode.Uri, relativePath: string): Promise<VscodeWorkspaceEntry[]> {
@@ -200,6 +334,22 @@ export class WorkspaceTreeService {
   async rename(root: vscode.Uri, relativePath: string, newName: string): Promise<VscodeWorkspaceEntry> {
     const rootId = this.gateway.registerRoot(root);
     const entry = await this.operations.rename(rootId, { relativePath, newName });
+    this.schedulePersistOrderConfig();
+    return {
+      ...entry,
+      uri: this.gateway.uriFor(rootId, entry.relativePath),
+      writable: vscode.workspace.fs.isWritableFileSystem(root.scheme) !== false,
+    };
+  }
+
+  async move(
+    root: vscode.Uri,
+    relativePath: string,
+    targetParentRelativePath: string,
+  ): Promise<VscodeWorkspaceEntry> {
+    const rootId = this.gateway.registerRoot(root);
+    const entry = await this.operations.move(rootId, { relativePath, targetParentRelativePath });
+    this.schedulePersistOrderConfig();
     return {
       ...entry,
       uri: this.gateway.uriFor(rootId, entry.relativePath),
@@ -212,6 +362,7 @@ export class WorkspaceTreeService {
       relativePath,
       options: { useTrash: true, recursive: true },
     });
+    this.schedulePersistOrderConfig();
   }
 
   async copy(
@@ -221,7 +372,9 @@ export class WorkspaceTreeService {
   ): Promise<VscodeWorkspaceEntry> {
     const rootId = this.gateway.registerRoot(root);
     const entry = await this.gateway.copy(rootId, sourceRelativePath, targetParentRelativePath);
+    this.orderState.noteCreated(entry.relativePath);
     this.model.invalidateDirectory(rootId, targetParentRelativePath);
+    this.schedulePersistOrderConfig();
     return {
       ...entry,
       uri: this.gateway.uriFor(rootId, entry.relativePath),
@@ -235,11 +388,58 @@ export class WorkspaceTreeService {
   ): Promise<VscodeWorkspaceEntry> {
     const rootId = this.gateway.registerRoot(root);
     const entry = await this.operations.create(rootId, request);
+    this.schedulePersistOrderConfig();
     return {
       ...entry,
       uri: this.gateway.uriFor(rootId, entry.relativePath),
       writable: vscode.workspace.fs.isWritableFileSystem(root.scheme) !== false,
     };
+  }
+
+  private orderConfigUri(root: vscode.Uri): vscode.Uri {
+    return vscode.Uri.joinPath(root, ...WORKSPACE_TREE_ORDER_RELATIVE_PATH.split('/'));
+  }
+
+  private async loadOrderConfig(): Promise<void> {
+    const root = this.rootUri;
+    if (!root) return;
+    try {
+      const bytes = await vscode.workspace.fs.readFile(this.orderConfigUri(root));
+      this.orderState.loadFromJson(Buffer.from(bytes).toString('utf8'));
+      this.model.invalidateAll(this.gateway.registerRoot(root));
+    } catch {
+      this.orderState.replaceConfig({
+        version: 1,
+        sortMode: 'name',
+        showCreatedAt: false,
+        showUpdatedAt: false,
+        showDotEntries: true,
+        showTimestampHover: true,
+        orders: {},
+      });
+    }
+  }
+
+  private schedulePersistOrderConfig(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      void this.persistOrderConfig();
+    }, 120);
+  }
+
+  private async persistOrderConfig(): Promise<void> {
+    const root = this.rootUri;
+    if (!root) return;
+    if (vscode.workspace.fs.isWritableFileSystem(root.scheme) === false) return;
+    const uri = this.orderConfigUri(root);
+    const easyviewDir = vscode.Uri.joinPath(root, '.easyview');
+    try {
+      await vscode.workspace.fs.createDirectory(easyviewDir);
+    } catch {
+      // Directory may already exist.
+    }
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(this.orderState.toJson(), 'utf8'));
   }
 }
 

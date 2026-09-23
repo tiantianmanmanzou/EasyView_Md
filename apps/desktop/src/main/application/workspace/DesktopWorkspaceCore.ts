@@ -7,15 +7,19 @@ import {
   type WorkspaceCreateRequest,
   type WorkspaceDeleteRequest,
   type WorkspaceEntry,
+  type WorkspaceMoveRequest,
   type WorkspaceRenameRequest,
+  type WorkspaceTreeSortMode,
   WorkspaceOperationError,
 } from '@easyview/contracts';
 import {
   LocalWorkspaceGateway,
   normalizeWorkspaceRelativePath,
   parentWorkspaceRelativePath,
+  WORKSPACE_TREE_ORDER_RELATIVE_PATH,
   WorkspaceFileOperationService,
   WorkspaceTreeModel,
+  WorkspaceTreeOrderState,
 } from '@easyview/node-runtime';
 import type { WorkspaceCopyRequest, WorkspaceResourcePaths } from '../../../contracts/workspace';
 
@@ -28,9 +32,11 @@ export const DESKTOP_WORKSPACE_ROOT_ID = 'desktop';
  */
 export class DesktopWorkspaceCore {
   private readonly gateway: LocalWorkspaceGateway;
+  private readonly orderState = new WorkspaceTreeOrderState();
   private readonly model: WorkspaceTreeModel;
   private readonly operations: WorkspaceFileOperationService;
   private boundRootPath: string | null = null;
+  private persistTimer: NodeJS.Timeout | undefined;
 
   constructor(trash?: (absolutePath: string) => Promise<void>) {
     this.gateway = new LocalWorkspaceGateway([], {
@@ -40,8 +46,8 @@ export class DesktopWorkspaceCore {
         }
         : undefined,
     });
-    this.model = new WorkspaceTreeModel(this.gateway);
-    this.operations = new WorkspaceFileOperationService(this.gateway, this.model);
+    this.model = new WorkspaceTreeModel(this.gateway, { sortProvider: this.orderState });
+    this.operations = new WorkspaceFileOperationService(this.gateway, this.model, this.orderState);
   }
 
   get rootId(): string {
@@ -50,6 +56,10 @@ export class DesktopWorkspaceCore {
 
   getRootPath(): string | null {
     return this.boundRootPath;
+  }
+
+  getSortMode(): WorkspaceTreeSortMode {
+    return this.orderState.getSortMode();
   }
 
   async bindRoot(selectedPath: string): Promise<string> {
@@ -65,6 +75,7 @@ export class DesktopWorkspaceCore {
       name: path.basename(rootPath),
     });
     this.boundRootPath = rootPath;
+    await this.loadOrderConfig();
     return rootPath;
   }
 
@@ -72,6 +83,15 @@ export class DesktopWorkspaceCore {
     this.model.clear();
     this.gateway.unregisterRoot(DESKTOP_WORKSPACE_ROOT_ID);
     this.boundRootPath = null;
+    this.orderState.replaceConfig({
+      version: 1,
+      sortMode: 'name',
+      showCreatedAt: false,
+      showUpdatedAt: false,
+      showDotEntries: true,
+      showTimestampHover: true,
+      orders: {},
+    });
   }
 
   async listChildren(relativePath = ''): Promise<WorkspaceEntry[]> {
@@ -80,14 +100,93 @@ export class DesktopWorkspaceCore {
     return entries.map((entry) => ({ ...entry }));
   }
 
+  async setSortMode(sortMode: WorkspaceTreeSortMode): Promise<WorkspaceTreeSortMode> {
+    this.requireRoot();
+    this.orderState.setSortMode(sortMode);
+    this.model.invalidateAll(DESKTOP_WORKSPACE_ROOT_ID);
+    await this.persistOrderConfig();
+    return sortMode;
+  }
+
+  getShowCreatedAt(): boolean {
+    return this.orderState.getShowCreatedAt();
+  }
+
+  getShowUpdatedAt(): boolean {
+    return this.orderState.getShowUpdatedAt();
+  }
+
+  getShowDotEntries(): boolean {
+    return this.orderState.getShowDotEntries();
+  }
+
+  getShowTimestampHover(): boolean {
+    return this.orderState.getShowTimestampHover();
+  }
+
+  getShowTimestamps(): boolean {
+    return this.orderState.getShowTimestamps();
+  }
+
+  async setShowCreatedAt(showCreatedAt: boolean): Promise<boolean> {
+    this.requireRoot();
+    this.orderState.setShowCreatedAt(showCreatedAt);
+    await this.persistOrderConfig();
+    return showCreatedAt === true;
+  }
+
+  async setShowUpdatedAt(showUpdatedAt: boolean): Promise<boolean> {
+    this.requireRoot();
+    this.orderState.setShowUpdatedAt(showUpdatedAt);
+    await this.persistOrderConfig();
+    return showUpdatedAt === true;
+  }
+
+  async setShowDotEntries(showDotEntries: boolean): Promise<boolean> {
+    this.requireRoot();
+    this.orderState.setShowDotEntries(showDotEntries);
+    await this.persistOrderConfig();
+    return showDotEntries !== false;
+  }
+
+  async setShowTimestampHover(showTimestampHover: boolean): Promise<boolean> {
+    this.requireRoot();
+    this.orderState.setShowTimestampHover(showTimestampHover);
+    await this.persistOrderConfig();
+    return showTimestampHover !== false;
+  }
+
+  async reorder(
+    parentRelativePath: string,
+    movedName: string,
+    siblingNames: readonly string[],
+    beforeName?: string,
+  ): Promise<void> {
+    this.requireRoot();
+    this.orderState.reorder(parentRelativePath, movedName, siblingNames, beforeName);
+    this.model.invalidateDirectory(DESKTOP_WORKSPACE_ROOT_ID, parentRelativePath);
+    await this.persistOrderConfig();
+  }
+
   async create(request: WorkspaceCreateRequest): Promise<WorkspaceEntry> {
     this.requireRoot();
-    return this.operations.create(DESKTOP_WORKSPACE_ROOT_ID, request);
+    const entry = await this.operations.create(DESKTOP_WORKSPACE_ROOT_ID, request);
+    this.schedulePersistOrderConfig();
+    return entry;
   }
 
   async rename(request: WorkspaceRenameRequest): Promise<WorkspaceEntry> {
     this.requireRoot();
-    return this.operations.rename(DESKTOP_WORKSPACE_ROOT_ID, request);
+    const entry = await this.operations.rename(DESKTOP_WORKSPACE_ROOT_ID, request);
+    this.schedulePersistOrderConfig();
+    return entry;
+  }
+
+  async move(request: WorkspaceMoveRequest): Promise<WorkspaceEntry> {
+    this.requireRoot();
+    const entry = await this.operations.move(DESKTOP_WORKSPACE_ROOT_ID, request);
+    this.schedulePersistOrderConfig();
+    return entry;
   }
 
   async delete(request: WorkspaceDeleteRequest): Promise<void> {
@@ -99,6 +198,7 @@ export class DesktopWorkspaceCore {
         recursive: request.options?.recursive ?? true,
       },
     });
+    this.schedulePersistOrderConfig();
   }
 
   /** Desktop clipboard paste — not part of the shared mutation facade. */
@@ -136,7 +236,9 @@ export class DesktopWorkspaceCore {
     await fs.cp(sourcePath, targetPath, { recursive: true, errorOnExist: true, force: false });
 
     const relativePath = normalizeWorkspaceRelativePath(path.relative(root, targetPath));
+    this.orderState.noteCreated(relativePath);
     this.model.invalidateDirectory(DESKTOP_WORKSPACE_ROOT_ID, targetParentRelativePath);
+    this.schedulePersistOrderConfig();
     return {
       id: createWorkspaceNodeId(DESKTOP_WORKSPACE_ROOT_ID, relativePath),
       rootId: DESKTOP_WORKSPACE_ROOT_ID,
@@ -178,11 +280,52 @@ export class DesktopWorkspaceCore {
       return null;
     }
     const normalized = relativePaths.map((value) => normalizeWorkspaceRelativePath(value.replace(/\\/g, '/')));
+    if (normalized.some((value) => value === WORKSPACE_TREE_ORDER_RELATIVE_PATH || value === '.easyview')) {
+      void this.loadOrderConfig();
+    }
     return this.model.invalidate(DESKTOP_WORKSPACE_ROOT_ID, normalized).map((entry) => entry.relativePath);
   }
 
   parentRelativePath(relativePath: string): string {
     return parentWorkspaceRelativePath(relativePath);
+  }
+
+  private async loadOrderConfig(): Promise<void> {
+    const root = this.boundRootPath;
+    if (!root) return;
+    const configPath = path.join(root, ...WORKSPACE_TREE_ORDER_RELATIVE_PATH.split('/'));
+    try {
+      const raw = await fs.readFile(configPath, 'utf8');
+      this.orderState.loadFromJson(raw);
+    } catch {
+      this.orderState.replaceConfig({
+        version: 1,
+        sortMode: 'name',
+        showCreatedAt: false,
+        showUpdatedAt: false,
+        showDotEntries: true,
+        showTimestampHover: true,
+        orders: {},
+      });
+    }
+    this.model.invalidateAll(DESKTOP_WORKSPACE_ROOT_ID);
+  }
+
+  private schedulePersistOrderConfig(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      void this.persistOrderConfig();
+    }, 120);
+  }
+
+  private async persistOrderConfig(): Promise<void> {
+    const root = this.boundRootPath;
+    if (!root) return;
+    const easyviewDir = path.join(root, '.easyview');
+    const configPath = path.join(root, ...WORKSPACE_TREE_ORDER_RELATIVE_PATH.split('/'));
+    await fs.mkdir(easyviewDir, { recursive: true });
+    await fs.writeFile(configPath, this.orderState.toJson(), 'utf8');
   }
 
   private requireRoot(): string {

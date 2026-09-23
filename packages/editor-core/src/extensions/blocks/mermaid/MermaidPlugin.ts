@@ -12,7 +12,17 @@ import type { Transaction } from "prosemirror-state";
 import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { isCode, isMermaid } from "../../../editor/lib/CodeDetection";
-import { findBlockNodes, type NodeWithPos, findParentNode } from "../../../editor/lib/NodeFinder";
+import {
+  findBlockNodes,
+  type NodeWithPos,
+  findParentNode,
+} from "../../../editor/lib/NodeFinder";
+import {
+  MermaidRenderScheduler,
+  MermaidSvgCache,
+} from "./MermaidRenderScheduler";
+import { withMermaidRuntimeLock } from "./MermaidRuntimeLock";
+import { MermaidVisibilityController } from "./MermaidVisibilityController";
 
 export const pluginKey = new PluginKey("mermaid");
 
@@ -23,24 +33,6 @@ export type MermaidState = {
   isDark: boolean;
   editingId?: string;
 };
-
-class Cache {
-  static get(key: string) {
-    return this.data.get(key);
-  }
-
-  static set(key: string, value: string) {
-    this.data.set(key, value);
-
-    if (this.data.size > this.maxSize) {
-      const oldest = this.data.keys().next().value;
-      if (oldest !== undefined) this.data.delete(oldest);
-    }
-  }
-
-  private static maxSize = 20;
-  private static data: Map<string, string> = new Map();
-}
 
 let mermaid: typeof MermaidUnsafe;
 
@@ -66,7 +58,7 @@ const LIGHT_THEME_VARIABLES = {
   labelBackground: "#ffffff",
 };
 
-class MermaidRenderer {
+export class MermaidRenderer {
   readonly diagramId: string;
   readonly element: HTMLElement;
   readonly elementId: string;
@@ -81,239 +73,305 @@ class MermaidRenderer {
   private startTranslateY = 0;
   private viewport: HTMLDivElement | null = null;
   private svgContainer: HTMLDivElement | null = null;
+  private requestedBlock: { node: Node; pos: number } | null = null;
+  private requestedDark = false;
+  private requestedKey = "";
+  private renderedKey = "";
+  private pendingKey = "";
+  private requestVersion = 0;
+  private disposed = false;
+  private visible = false;
+  private retainedHeight = 120;
 
-  constructor() {
-    this.diagramId = uuidv4();
+  constructor(
+    private readonly scheduler: MermaidRenderScheduler,
+    private readonly cache: MermaidSvgCache,
+    private readonly visibility: MermaidVisibilityController,
+    element?: HTMLElement,
+    diagramId = uuidv4(),
+  ) {
+    this.diagramId = diagramId;
     this.elementId = `mermaid-diagram-wrapper-${this.diagramId}`;
-    this.element =
-      document.getElementById(this.elementId) || document.createElement("div");
+    this.element = element ?? document.createElement("div");
     this.element.id = this.elementId;
     this.element.classList.add("mermaid-diagram-wrapper");
+    this.showPlaceholder("Mermaid diagram");
   }
 
-  private resetZoomPan() {
+  mount(block: { node: Node; pos: number }, isDark: boolean): HTMLElement {
+    if (this.disposed) return this.element;
+    const nextKey = this.cacheKey(block.node.textContent, isDark);
+    this.requestedBlock = block;
+    this.requestedDark = isDark;
+    if (this.requestedKey !== nextKey) {
+      this.requestVersion++;
+      this.scheduler.cancel(this);
+      this.requestedKey = nextKey;
+      this.renderedKey = "";
+      this.pendingKey = "";
+      this.releaseRenderedContent();
+    }
+    this.visibility.observe(this);
+    if (this.visible) this.requestRender();
+    return this.element;
+  }
+
+  requestRender(): void {
+    if (this.disposed || !this.visible || !this.requestedBlock) return;
+    const block = this.requestedBlock;
+    const isDark = this.requestedDark;
+    const key = this.cacheKey(block.node.textContent, isDark);
+    if (this.renderedKey === key && this.element.querySelector("svg")) return;
+    if (this.pendingKey === key) return;
+    const version = ++this.requestVersion;
+    this.pendingKey = key;
+    this.scheduler.enqueue(this, async () => {
+      try {
+        await this.render(block, isDark, key, version);
+      } finally {
+        if (version === this.requestVersion) this.pendingKey = "";
+      }
+    });
+  }
+
+  destroy(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.requestVersion++;
+    this.pendingKey = "";
+    this.scheduler.cancel(this);
+    this.visibility.unobserve(this);
+    this.requestedBlock = null;
+    this.element.replaceChildren();
+    this.viewport = null;
+    this.svgContainer = null;
+  }
+
+  setViewportVisible(visible: boolean): void {
+    if (this.disposed || visible === this.visible) return;
+    this.visible = visible;
+    if (visible) this.requestRender();
+    else {
+      this.requestVersion++;
+      this.pendingKey = "";
+      this.scheduler.cancel(this);
+      this.releaseRenderedContent();
+    }
+  }
+
+  private cacheKey(text: string, isDark: boolean): string {
+    return `${isDark ? "dark" : "light"}-${text}`;
+  }
+
+  private showPlaceholder(label: string): void {
+    this.element.replaceChildren();
+    this.element.style.minHeight = `${this.retainedHeight}px`;
+    const placeholder = document.createElement("div");
+    placeholder.className = "mermaid-render-placeholder";
+    placeholder.textContent = label;
+    this.element.appendChild(placeholder);
+    this.viewport = null;
+    this.svgContainer = null;
+  }
+
+  private releaseRenderedContent(): void {
+    if (this.element.isConnected) {
+      const height = this.element.getBoundingClientRect().height;
+      if (Number.isFinite(height) && height > 0)
+        this.retainedHeight = Math.max(120, Math.ceil(height));
+    }
+    this.showPlaceholder("Mermaid diagram");
+  }
+
+  private resetZoomPan(): void {
     this.scale = 1;
     this.translateX = 0;
     this.translateY = 0;
     this.applyTransform();
   }
 
-  private applyTransform() {
+  private applyTransform(): void {
     if (this.svgContainer) {
       this.svgContainer.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
     }
   }
 
-  private setupZoomPan(element: HTMLElement) {
-    // Build zoom/pan structure
+  private setupZoomPan(element: HTMLElement): void {
     const viewport = document.createElement("div");
     viewport.className = "mermaid-viewport";
-
     const svgContainer = document.createElement("div");
     svgContainer.className = "mermaid-svg-container";
-
-    // Move existing SVG content into container
-    while (element.firstChild) {
-      svgContainer.appendChild(element.firstChild);
-    }
+    while (element.firstChild) svgContainer.appendChild(element.firstChild);
     viewport.appendChild(svgContainer);
 
-    // Zoom controls
     const controls = document.createElement("div");
     controls.className = "mermaid-zoom-controls";
-
     const zoomIn = document.createElement("button");
     zoomIn.className = "mermaid-zoom-btn";
     zoomIn.textContent = "+";
     zoomIn.title = "Zoom in";
-    zoomIn.addEventListener("click", (e) => {
-      e.stopPropagation();
+    zoomIn.addEventListener("click", (event) => {
+      event.stopPropagation();
       if (!this.viewport) return;
       const rect = this.viewport.getBoundingClientRect();
-      const cx = rect.width / 2;
-      const cy = rect.height / 2;
       const oldScale = this.scale;
       this.scale = Math.min(this.scale * 1.25, 5);
-      this.translateX = cx - (cx - this.translateX) * (this.scale / oldScale);
-      this.translateY = cy - (cy - this.translateY) * (this.scale / oldScale);
+      this.translateX =
+        rect.width / 2 -
+        (rect.width / 2 - this.translateX) * (this.scale / oldScale);
+      this.translateY =
+        rect.height / 2 -
+        (rect.height / 2 - this.translateY) * (this.scale / oldScale);
       this.applyTransform();
     });
-
     const zoomOut = document.createElement("button");
     zoomOut.className = "mermaid-zoom-btn";
-    zoomOut.textContent = "\u2212"; // minus sign
+    zoomOut.textContent = "−";
     zoomOut.title = "Zoom out";
-    zoomOut.addEventListener("click", (e) => {
-      e.stopPropagation();
+    zoomOut.addEventListener("click", (event) => {
+      event.stopPropagation();
       if (!this.viewport) return;
       const rect = this.viewport.getBoundingClientRect();
-      const cx = rect.width / 2;
-      const cy = rect.height / 2;
       const oldScale = this.scale;
       this.scale = Math.max(this.scale / 1.25, 0.2);
-      this.translateX = cx - (cx - this.translateX) * (this.scale / oldScale);
-      this.translateY = cy - (cy - this.translateY) * (this.scale / oldScale);
+      this.translateX =
+        rect.width / 2 -
+        (rect.width / 2 - this.translateX) * (this.scale / oldScale);
+      this.translateY =
+        rect.height / 2 -
+        (rect.height / 2 - this.translateY) * (this.scale / oldScale);
       this.applyTransform();
     });
-
     const zoomReset = document.createElement("button");
     zoomReset.className = "mermaid-zoom-btn";
     zoomReset.textContent = "1:1";
     zoomReset.title = "Reset zoom";
-    zoomReset.addEventListener("click", (e) => {
-      e.stopPropagation();
+    zoomReset.addEventListener("click", (event) => {
+      event.stopPropagation();
       this.resetZoomPan();
     });
-
-    controls.appendChild(zoomIn);
-    controls.appendChild(zoomOut);
-    controls.appendChild(zoomReset);
-
+    controls.append(zoomOut, zoomReset, zoomIn);
+    viewport.appendChild(controls);
     element.appendChild(viewport);
-    element.appendChild(controls);
-
     this.viewport = viewport;
     this.svgContainer = svgContainer;
 
-    // Wheel zoom only with an explicit modifier. Plain touchpad/mouse-wheel
-    // scrolling should keep scrolling the document when the cursor is over a diagram.
-    viewport.addEventListener("wheel", (e) => {
-      if (!e.ctrlKey && !e.metaKey) {
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      const rect = viewport.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const oldScale = this.scale;
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      this.scale = Math.min(Math.max(this.scale * factor, 0.2), 5);
-      // Adjust translation so point under mouse stays fixed
-      this.translateX = mouseX - (mouseX - this.translateX) * (this.scale / oldScale);
-      this.translateY = mouseY - (mouseY - this.translateY) * (this.scale / oldScale);
-      this.applyTransform();
-    }, { passive: false });
-
-    // Pan via pointer events
-    viewport.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
+    viewport.addEventListener(
+      "wheel",
+      (event) => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        const oldScale = this.scale;
+        this.scale = Math.min(
+          Math.max(this.scale * (event.deltaY < 0 ? 1.1 : 0.9), 0.2),
+          5,
+        );
+        this.translateX =
+          mouseX - (mouseX - this.translateX) * (this.scale / oldScale);
+        this.translateY =
+          mouseY - (mouseY - this.translateY) * (this.scale / oldScale);
+        this.applyTransform();
+      },
+      { passive: false },
+    );
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
       this.isPanning = true;
-      this.panStartX = e.clientX;
-      this.panStartY = e.clientY;
+      this.panStartX = event.clientX;
+      this.panStartY = event.clientY;
       this.startTranslateX = this.translateX;
       this.startTranslateY = this.translateY;
-      viewport.setPointerCapture(e.pointerId);
+      viewport.setPointerCapture(event.pointerId);
       viewport.classList.add("panning");
     });
-
-    viewport.addEventListener("pointermove", (e) => {
+    viewport.addEventListener("pointermove", (event) => {
       if (!this.isPanning) return;
-      this.translateX = this.startTranslateX + (e.clientX - this.panStartX);
-      this.translateY = this.startTranslateY + (e.clientY - this.panStartY);
+      this.translateX = this.startTranslateX + event.clientX - this.panStartX;
+      this.translateY = this.startTranslateY + event.clientY - this.panStartY;
       this.applyTransform();
     });
-
-    const endPan = (e: PointerEvent) => {
+    const endPan = (event: PointerEvent) => {
       if (!this.isPanning) return;
       this.isPanning = false;
-      viewport.releasePointerCapture(e.pointerId);
+      if (viewport.hasPointerCapture(event.pointerId))
+        viewport.releasePointerCapture(event.pointerId);
       viewport.classList.remove("panning");
     };
     viewport.addEventListener("pointerup", endPan);
     viewport.addEventListener("pointercancel", endPan);
   }
 
-  render = async (block: { node: Node; pos: number }, isDark: boolean) => {
-    const element = this.element;
-    const text = block.node.textContent;
-
-    const cacheKey = `${isDark ? "dark" : "light"}-${text}`;
-    const cache = Cache.get(cacheKey);
-    if (cache) {
-      element.classList.remove("parse-error", "empty");
-      element.innerHTML = "";
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = cache;
-      while (tempDiv.firstChild) {
-        element.appendChild(tempDiv.firstChild);
-      }
-      this.resetZoomPan();
-      this.setupZoomPan(element);
+  private async render(
+    block: { node: Node; pos: number },
+    isDark: boolean,
+    key: string,
+    version: number,
+  ): Promise<void> {
+    if (this.disposed || !this.visible || version !== this.requestVersion)
       return;
+    const text = block.node.textContent;
+    let svg = this.cache.get(key);
+    let bindFunctions: ((element: Element) => void) | undefined;
+
+    if (!svg) {
+      const renderElement = document.createElement("div");
+      const tempId = `offscreen-mermaid-${this.diagramId}-${version}`;
+      renderElement.id = tempId;
+      renderElement.style.cssText =
+        "position:absolute;left:-9999px;top:-9999px;font-size:12px;";
+      document.body.appendChild(renderElement);
+      try {
+        const rendered = await withMermaidRuntimeLock(async () => {
+          mermaid ??= (await import("mermaid")).default;
+          mermaid.initialize({
+            startOnLoad: false,
+            suppressErrorRendering: true,
+            flowchart: { wrappingWidth: 320 },
+            gantt: { useWidth: 700 },
+            pie: { useWidth: 700 },
+            fontSize: 12,
+            theme: isDark ? "dark" : "base",
+            darkMode: isDark,
+            themeVariables: isDark ? undefined : LIGHT_THEME_VARIABLES,
+          });
+          return mermaid.render(tempId, text);
+        });
+        svg = rendered.svg;
+        bindFunctions = rendered.bindFunctions;
+        if (text && !this.disposed) this.cache.set(key, svg);
+      } finally {
+        renderElement.remove();
+      }
     }
 
-    // Create a temporary element that will render the diagram off-screen. This is necessary
-    // as Mermaid will error if the element is not visible or the element is removed while the
-    // diagram is being rendered.
-    const renderElement = document.createElement("div");
-    const tempId =
-      "offscreen-mermaid-" + Math.random().toString(36).substr(2, 9);
-    renderElement.id = tempId;
-    renderElement.style.position = "absolute";
-    renderElement.style.left = "-9999px";
-    renderElement.style.top = "-9999px";
-    renderElement.style.fontSize = "12px";
-    document.body.appendChild(renderElement);
-
-    try {
-      mermaid ??= (await import("mermaid")).default;
-
-      mermaid.initialize({
-        startOnLoad: true,
-        suppressErrorRendering: true,
-        // Bound the width of each flowchart node so long text wraps instead of
-        // overflowing / being clipped at the node edge (especially CJK labels).
-        flowchart: { wrappingWidth: 320 },
-        gantt: { useWidth: 700 },
-        pie: { useWidth: 700 },
-        fontSize: 12,
-        theme: isDark ? "dark" : "base",
-        darkMode: isDark,
-        themeVariables: isDark ? undefined : LIGHT_THEME_VARIABLES,
-      });
-
-      const { svg, bindFunctions } = await mermaid.render(tempId, text);
-
-      // Cache the rendered SVG so we won't need to calculate it again in the same session
-      if (text) {
-        Cache.set(cacheKey, svg);
-      }
-      element.classList.remove("parse-error", "empty");
-      element.innerHTML = "";
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = svg;
-      while (tempDiv.firstChild) {
-        element.appendChild(tempDiv.firstChild);
-      }
-
-      // Setup zoom/pan controls
-      this.resetZoomPan();
-      this.setupZoomPan(element);
-
-      // Allow the user to interact with the diagram
-      bindFunctions?.(element);
-    } catch (error) {
-      const isEmpty = block.node.textContent.trim().length === 0;
-
-      if (isEmpty) {
-        element.innerText = "Empty diagram";
-        element.classList.add("empty");
-      } else {
-        element.innerText = String(error);
-        element.classList.add("parse-error");
-      }
-    } finally {
-      renderElement.remove();
-    }
-  };
+    if (
+      this.disposed ||
+      !this.visible ||
+      version !== this.requestVersion ||
+      !svg
+    )
+      return;
+    this.element.classList.remove("parse-error", "empty");
+    this.element.style.minHeight = "";
+    this.element.replaceChildren();
+    const template = document.createElement("template");
+    template.innerHTML = svg;
+    this.element.appendChild(template.content);
+    this.resetZoomPan();
+    this.setupZoomPan(this.element);
+    bindFunctions?.(this.element);
+    this.renderedKey = key;
+  }
 }
 
 function overlap(
   start1: number,
   end1: number,
   start2: number,
-  end2: number
+  end2: number,
 ): number {
   return Math.max(0, Math.min(end1, end2) - Math.max(start1, start2));
 }
@@ -325,7 +383,7 @@ function overlap(
 */
 function findBestOverlapDecoration(
   decorations: Decoration[],
-  block: NodeWithPos
+  block: NodeWithPos,
 ): Decoration | undefined {
   if (decorations.length === 0) {
     return undefined;
@@ -336,9 +394,9 @@ function findBestOverlapDecoration(
         decoration.from,
         decoration.to,
         block.pos,
-        block.pos + block.node.nodeSize
-      )
-    )
+        block.pos + block.node.nodeSize,
+      ),
+    ),
   );
 }
 
@@ -352,36 +410,35 @@ function getNewState({
   const decorations: Decoration[] = [];
 
   // Find all blocks that represent Mermaid diagrams (supports both "mermaid" and "mermaidjs")
-  const allBlocks = findBlockNodes(doc, true);  // MUST use true to descend into document structure
+  const allBlocks = findBlockNodes(doc, true); // MUST use true to descend into document structure
   const codeBlocks = allBlocks.filter((item) => isCode(item.node));
   const blocks = codeBlocks.filter((item) => isMermaid(item.node));
 
-  blocks.forEach((block, index) => {
+  blocks.forEach((block) => {
     const existingDecorations = pluginState.decorationSet.find(
       block.pos,
       block.pos + block.node.nodeSize,
-      (spec) => !!spec.diagramId
+      (spec) => !!spec.diagramId,
     );
 
     const bestDecoration = findBestOverlapDecoration(
       existingDecorations,
-      block
+      block,
     );
 
-    const renderer: MermaidRenderer =
-      bestDecoration?.spec?.renderer ?? new MermaidRenderer();
-
+    const diagramId: string = bestDecoration?.spec.diagramId ?? uuidv4();
+    // EditorState (including undo snapshots) contains identifiers only. A widget
+    // never closes over a renderer, cache, scheduler or a historical document.
     const diagramDecoration = Decoration.widget(
       block.pos + block.node.nodeSize,
       () => {
-        void renderer.render(block, pluginState.isDark);
-        return renderer.element;
+        const element = document.createElement("div");
+        element.id = `mermaid-diagram-wrapper-${diagramId}`;
+        element.className = "mermaid-diagram-wrapper";
+        element.style.minHeight = "120px";
+        return element;
       },
-      {
-        diagramId: renderer.diagramId,
-        renderer,
-        side: -10,
-      }
+      { diagramId, blockPos: block.pos, key: diagramId, side: -10 },
     );
 
     const diagramIdDecoration = Decoration.node(
@@ -389,9 +446,8 @@ function getNewState({
       block.pos + block.node.nodeSize,
       {},
       {
-        diagramId: renderer.diagramId,
-        renderer,
-      }
+        diagramId,
+      },
     );
 
     decorations.push(diagramDecoration);
@@ -428,7 +484,7 @@ export default function Mermaid({
         transaction: Transaction,
         pluginState: MermaidState,
         oldState,
-        state
+        state,
       ) => {
         const themeMeta = transaction.getMeta("theme");
         const mermaidMeta = transaction.getMeta(pluginKey);
@@ -452,7 +508,7 @@ export default function Mermaid({
               : pluginState.editingId,
           decorationSet: pluginState.decorationSet.map(
             transaction.mapping,
-            transaction.doc
+            transaction.doc,
           ),
         };
 
@@ -467,10 +523,10 @@ export default function Mermaid({
           if (isEditing && codeBlock && !transaction.docChanged) {
             const decorations = nextPluginState.decorationSet.find(
               codeBlock.pos,
-              codeBlock.pos + codeBlock.node.nodeSize
+              codeBlock.pos + codeBlock.node.nodeSize,
             );
             const nodeDecoration = decorations.find(
-              (d) => d.spec.diagramId && d.from === codeBlock.pos
+              (d) => d.spec.diagramId && d.from === codeBlock.pos,
             );
             if (nodeDecoration?.spec.diagramId !== nextPluginState.editingId) {
               isEditing = false;
@@ -497,32 +553,60 @@ export default function Mermaid({
       },
     },
     view: (view) => {
-      try {
-        view.dispatch(view.state.tr.setMeta(pluginKey, { loaded: true }));
-      } catch (e) {
-        // View might be destroyed
-      }
+      // Plugin views may be recreated when EditorState is replaced. Each view
+      // owns its runtime; the next view rehydrates the current widget DOM from
+      // document state instead of reusing resources destroyed by the old view.
+      const scheduler = new MermaidRenderScheduler();
+      const cache = new MermaidSvgCache();
+      const visibility = new MermaidVisibilityController();
+      const renderers = new Map<string, MermaidRenderer>();
+      const sync = () => {
+        const state = pluginKey.getState(view.state) as MermaidState;
+        const elements = new Map(
+          Array.from(view.dom.querySelectorAll<HTMLElement>(".mermaid-diagram-wrapper"))
+            .map((element) => [element.id, element] as const),
+        );
+        const liveIds = new Set<string>();
+        for (const decoration of state.decorationSet.find()) {
+          const blockPos = decoration.spec.blockPos as number | undefined;
+          if (!decoration.spec.diagramId || blockPos === undefined) continue;
+          const diagramId = decoration.spec.diagramId as string;
+          const node = view.state.doc.nodeAt(blockPos);
+          const element = elements.get(`mermaid-diagram-wrapper-${diagramId}`);
+          if (!node || !element) continue;
+          liveIds.add(diagramId);
+          let renderer = renderers.get(diagramId);
+          if (renderer && renderer.element !== element) {
+            renderer.destroy();
+            renderers.delete(diagramId);
+            renderer = undefined;
+          }
+          if (!renderer) {
+            renderer = new MermaidRenderer(scheduler, cache, visibility, element, diagramId);
+            renderers.set(diagramId, renderer);
+          }
+          renderer.mount({ node, pos: blockPos }, state.isDark);
+        }
+        for (const [id, renderer] of renderers) {
+          if (!liveIds.has(id)) {
+            renderer.destroy();
+            renderers.delete(id);
+          }
+        }
+      };
+      sync();
       return {
-        update(view, prevState) {
-          const prevPluginState = pluginKey.getState(prevState);
-          const pluginState = pluginKey.getState(view.state);
-          if (!prevPluginState || !pluginState || prevPluginState.isDark === pluginState.isDark) {
-            return;
-          }
-
-          const allBlocks = findBlockNodes(view.state.doc, true);
-          const mermaidBlocks = allBlocks.filter((item) => isCode(item.node) && isMermaid(item.node));
-          for (const block of mermaidBlocks) {
-            const decorations = pluginState.decorationSet.find(
-              block.pos,
-              block.pos + block.node.nodeSize,
-              (spec: { renderer?: unknown }) => !!spec.renderer
-            );
-            const renderer = decorations.find((decoration: Decoration) => decoration.spec.renderer)?.spec.renderer as MermaidRenderer | undefined;
-            if (renderer) {
-              void renderer.render(block, pluginState.isDark);
-            }
-          }
+        update(_view, prevState) {
+          const previous = pluginKey.getState(prevState) as MermaidState | undefined;
+          const current = pluginKey.getState(view.state) as MermaidState;
+          if (previous?.decorationSet !== current.decorationSet || previous?.isDark !== current.isDark) sync();
+        },
+        destroy() {
+          visibility.dispose();
+          scheduler.dispose();
+          for (const renderer of renderers.values()) renderer.destroy();
+          renderers.clear();
+          cache.clear();
         },
       };
     },
@@ -573,8 +657,9 @@ export default function Mermaid({
           if (diagram && event.detail === 1) {
             // Select node on single click
             view.dispatch(
-              view.state.tr
-                .setSelection(TextSelection.near(view.state.doc.resolve(pos)))
+              view.state.tr.setSelection(
+                TextSelection.near(view.state.doc.resolve(pos)),
+              ),
             );
             return true;
           }
@@ -586,7 +671,7 @@ export default function Mermaid({
             case "ArrowDown": {
               const { selection } = view.state;
               const $pos = view.state.doc.resolve(
-                Math.min(selection.from + 1, view.state.doc.nodeSize)
+                Math.min(selection.from + 1, view.state.doc.nodeSize),
               );
               const nextBlock = $pos.nodeAfter;
 
@@ -595,10 +680,10 @@ export default function Mermaid({
                   view.state.tr
                     .setSelection(
                       TextSelection.near(
-                        view.state.doc.resolve(selection.to + 1)
-                      )
+                        view.state.doc.resolve(selection.to + 1),
+                      ),
                     )
-                    .scrollIntoView()
+                    .scrollIntoView(),
                 );
                 event.preventDefault();
                 return true;
@@ -608,7 +693,7 @@ export default function Mermaid({
             case "ArrowUp": {
               const { selection } = view.state;
               const $pos = view.state.doc.resolve(
-                Math.max(0, selection.from - 1)
+                Math.max(0, selection.from - 1),
               );
               const prevBlock = $pos.nodeBefore;
 
@@ -617,10 +702,10 @@ export default function Mermaid({
                   view.state.tr
                     .setSelection(
                       TextSelection.near(
-                        view.state.doc.resolve(selection.from - 2)
-                      )
+                        view.state.doc.resolve(selection.from - 2),
+                      ),
                     )
-                    .scrollIntoView()
+                    .scrollIntoView(),
                 );
                 event.preventDefault();
                 return true;

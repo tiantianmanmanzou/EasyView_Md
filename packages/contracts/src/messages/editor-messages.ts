@@ -1,4 +1,5 @@
 import type { AiChatAttachment, AiChatHistoryEntry, AiChatSettings } from '../ai/ai-chat';
+import type { AiTextPatch } from '../ai/text-patch';
 import type { XlsxTablePayload } from '../export/xlsx-export';
 
 export interface EditorSettingsPayload {
@@ -6,6 +7,14 @@ export interface EditorSettingsPayload {
   tocVisible: boolean;
   tableWrap: boolean;
 }
+
+export interface TextOffsetPatchPayload {
+  from: number;
+  to: number;
+  insert: string;
+}
+
+export type DocumentPatchSource = 'local' | 'external' | 'ai' | 'formatter' | 'undo' | 'redo';
 
 export interface GitLineRangePayload {
   startLine: number;
@@ -33,26 +42,55 @@ export interface TerminalAppearancePayload {
   letterSpacing?: number;
 }
 
-export interface DocumentUpdatePayload {
+export interface EditorUiStatePayload {
+  scrollRatio?: number;
+  cursorOffset?: number;
+  tocVisible?: boolean;
+  tocWidth?: number;
+  tocExpandedKeys?: string[];
+  fullWidth?: boolean;
+  tableWrap?: boolean;
+  sourceMode?: boolean;
+  activePanel?: string;
+}
+
+export interface DocumentSnapshotPayload {
+  documentId: string;
+  revision: number;
   content: string;
+  contentHash: string;
   imagePathMap?: Record<string, string>;
-  isUndoRedo?: boolean;
-  skipAutoScroll?: boolean;
   filename?: string;
   filePath?: string;
   fullWidth?: boolean;
   tocVisible?: boolean;
   tableWrap?: boolean;
-  gitLineRanges?: GitLineRangePayload[];
   tableFirstRowStickyDefault?: boolean;
   initialCursorLine?: number;
   initialCursorCharacter?: number;
   initialTotalLines?: number;
   terminalAppearance?: TerminalAppearancePayload;
+  uiState?: EditorUiStatePayload;
+  reason?: 'initial' | 'visible' | 'resync' | 'reload';
 }
 
+export interface DocumentPatchPayload {
+  documentId: string;
+  baseRevision: number;
+  revision: number;
+  edits: TextOffsetPatchPayload[];
+  resultHash: string;
+  source: Exclude<DocumentPatchSource, 'local'>;
+  imagePathMap?: Record<string, string>;
+  skipAutoScroll?: boolean;
+}
+
+
 export type EditorToHostMessage =
-  | ({ type: 'edit'; content: string } & EditorSettingsPayload)
+  | ({ type: 'applyEdits'; documentId: string; clientEditId: string; baseRevision: number; edits: TextOffsetPatchPayload[]; resultHash: string; source: 'local' | 'undo' | 'redo' } & EditorSettingsPayload)
+  | { type: 'snapshotApplied'; documentId: string; revision: number; contentHash: string }
+  | { type: 'requestResync'; documentId: string; revision: number; reason: string }
+  | { type: 'updateUiState'; documentId: string; state: EditorUiStatePayload }
   | { type: 'requestTabCompletion'; requestId: string; line: number; character: number; wordPrefix: string }
   | { type: 'setTableFirstRowStickyDefault'; sticky: boolean }
   | { type: 'ready' }
@@ -80,18 +118,21 @@ export type EditorToHostMessage =
   | { type: 'exportDocx'; title: string; markdown: string; mermaidImages: Array<{ source: string; pngBase64: string; width: number; height: number }>; asciiImages: Array<{ source: string; pngBase64: string; width: number; height: number }> }
   | { type: 'exportXlsx'; payload: XlsxTablePayload; fileName: string }
   | { type: 'exportHtml'; html: string; images: ExportImagePayload[] }
-  | { type: 'aiChat.send'; requestId: string; mode: 'chat' | 'agent'; model: string; userMessage: string; attachments: AiChatAttachment[]; history: AiChatHistoryEntry[]; documentContent?: string; documentFileName?: string }
+  | { type: 'aiChat.send'; requestId: string; mode: 'chat' | 'agent'; model: string; userMessage: string; attachments: AiChatAttachment[]; history: AiChatHistoryEntry[]; documentContent?: string; documentFileName?: string; documentFilePath?: string }
   | { type: 'aiChat.abort'; requestId: string }
   | { type: 'aiChat.getSettings'; requestId: string }
   | { type: 'aiChat.saveSettings'; requestId: string; settings: AiChatSettings }
   | { type: 'aiChat.saveApiKey'; requestId: string; apiKey: string }
+  | { type: 'aiChat.saveWebSearchApiKey'; requestId: string; apiKey: string }
   | { type: 'aiChat.pickImage' }
   | { type: 'productThemeChanged'; mode: 'light' | 'gray' | 'dark' };
 
 export type HostToEditorMessage =
-  | ({ type: 'init' } & DocumentUpdatePayload)
-  | ({ type: 'documentChanged' } & DocumentUpdatePayload)
-  | { type: 'gitStatusChanged'; lineRanges: GitLineRangePayload[]; content: string }
+  | ({ type: 'documentSnapshot' } & DocumentSnapshotPayload)
+  | ({ type: 'documentPatched' } & DocumentPatchPayload)
+  | { type: 'editsApplied'; documentId: string; clientEditId: string; revision: number; resultHash: string }
+  | { type: 'resyncRequired'; documentId: string; revision: number; reason: string }
+  | { type: 'gitStatusChanged'; documentId: string; revision: number; lineRanges: GitLineRangePayload[] }
   | { type: 'commitMessageGenerated'; message: string; source?: string }
   | { type: 'commitMessageGenerationFailed'; message: string }
   | { type: 'stageFileCompleted'; message: string }
@@ -118,8 +159,10 @@ export type HostToEditorMessage =
   | { type: 'terminalError'; message: string }
   | { type: 'aiChat.delta'; requestId: string; text?: string; reasoning?: string }
   | { type: 'aiChat.done'; requestId: string; content: string; reasoning?: string; finishReason?: string }
+  | { type: 'aiChat.tool'; requestId: string; phase: 'call' | 'result'; toolName: string; input: unknown; output?: unknown }
+  | { type: 'aiChat.applyPatches'; requestId: string; path: string; patches: AiTextPatch[] }
   | { type: 'aiChat.error'; requestId: string; message: string; aborted?: boolean }
-  | { type: 'aiChat.settingsResponse'; requestId: string; settings: AiChatSettings; hasApiKey: boolean }
+  | { type: 'aiChat.settingsResponse'; requestId: string; settings: AiChatSettings; hasApiKey: boolean; hasWebSearchApiKey: boolean }
   | { type: 'aiChat.settingsSaved'; requestId: string; ok: boolean; message?: string }
   | { type: 'aiChat.imagePicked'; images: Array<{ name: string; dataUrl: string }> }
   | { type: 'setProductTheme'; mode: 'light' | 'gray' | 'dark' };
@@ -128,7 +171,10 @@ export type EditorMessageHandler = (message: EditorToHostMessage) => void;
 
 
 const EDITOR_MESSAGE_TYPES = new Set<EditorToHostMessage['type']>([
-  'edit',
+  'applyEdits',
+  'snapshotApplied',
+  'requestResync',
+  'updateUiState',
   'requestTabCompletion',
   'setTableFirstRowStickyDefault',
   'ready',
@@ -161,6 +207,7 @@ const EDITOR_MESSAGE_TYPES = new Set<EditorToHostMessage['type']>([
   'aiChat.getSettings',
   'aiChat.saveSettings',
   'aiChat.saveApiKey',
+  'aiChat.saveWebSearchApiKey',
   'aiChat.pickImage',
   'productThemeChanged',
 ]);

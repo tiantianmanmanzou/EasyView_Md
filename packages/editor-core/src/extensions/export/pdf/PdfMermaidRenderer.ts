@@ -4,6 +4,7 @@
 
 import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import { type PdfPalette } from './PdfPalette';
+import { withMermaidRuntimeLock } from '../../blocks/mermaid/MermaidRuntimeLock';
 import {
   looksLikeMermaid,
   normalizeMermaidSource,
@@ -142,38 +143,40 @@ export async function renderMermaidSvgs(sources: string[], palette: PdfPalette):
     const mermaidModule = await import('mermaid');
     const mermaid = mermaidModule.default;
 
-    mermaid.initialize({
-      startOnLoad: false,
-      suppressErrorRendering: true,
-      theme: palette.mermaidTheme as any,
-      darkMode: palette.mermaidDarkMode,
-      fontFamily: '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, Helvetica, sans-serif',
-      // Render labels as SVG <text> (htmlLabels:false) and bound the node width so the
-      // text wraps at a max width. This keeps the exported diagram from overflowing or
-      // being clipped. (htmlLabels:false avoids foreignObject labels that can't be drawn
-      // into the exported PNG and would otherwise be flattened into a single clipped line.)
-      htmlLabels: false,
-      flowchart: { wrappingWidth: 320 },
-      themeVariables: palette.mermaidThemeVariables,
-      gantt: { useWidth: 700 },
-      pie: { useWidth: 700 },
-    } as any);
+    await withMermaidRuntimeLock(async () => {
+      mermaid.initialize({
+        startOnLoad: false,
+        suppressErrorRendering: true,
+        theme: palette.mermaidTheme as any,
+        darkMode: palette.mermaidDarkMode,
+        fontFamily: '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, Helvetica, sans-serif',
+        // Render labels as SVG <text> (htmlLabels:false) and bound the node width so the
+        // text wraps at a max width. This keeps the exported diagram from overflowing or
+        // being clipped. (htmlLabels:false avoids foreignObject labels that can't be drawn
+        // into the exported PNG and would otherwise be flattened into a single clipped line.)
+        htmlLabels: false,
+        flowchart: { wrappingWidth: 320 },
+        themeVariables: palette.mermaidThemeVariables,
+        gantt: { useWidth: 700 },
+        pie: { useWidth: 700 },
+      } as any);
 
-    for (const source of unique) {
-      const tempEl = document.createElement('div');
-      tempEl.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
-      document.body.appendChild(tempEl);
-      try {
-        const tempId = 'pdf-mermaid-' + Math.random().toString(36).slice(2, 11);
-        tempEl.id = tempId;
-        const { svg } = await mermaid.render(tempId, source);
-        map.set(source, svg);
-      } catch (error) {
-        console.warn('[EasyView_Md PDF] Mermaid re-render failed; using editor SVG if available:', error);
-      } finally {
-        tempEl.remove();
+      for (const source of unique) {
+        const tempEl = document.createElement('div');
+        tempEl.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+        document.body.appendChild(tempEl);
+        try {
+          const tempId = 'pdf-mermaid-' + Math.random().toString(36).slice(2, 11);
+          tempEl.id = tempId;
+          const { svg } = await mermaid.render(tempId, source);
+          map.set(source, svg);
+        } catch (error) {
+          console.warn('[EasyView_Md PDF] Mermaid re-render failed; using editor SVG if available:', error);
+        } finally {
+          tempEl.remove();
+        }
       }
-    }
+    });
   } catch (error) {
     console.warn('[EasyView_Md PDF] Mermaid import failed; using editor SVG if available:', error);
   }

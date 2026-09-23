@@ -58,7 +58,7 @@ import {
 import { initContextMenu } from './ui/ContextMenu';
 import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
 import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
-import { ExportController } from './controllers/ExportController';
+import { LazyExportController } from './controllers/lazyExportController';
 import { SourceModeController } from './controllers/SourceModeController';
 import { LayoutController } from './controllers/LayoutController';
 import { ShortcutController } from './controllers/ShortcutController';
@@ -79,9 +79,10 @@ import { createFileHeader, type EasyViewAccentTheme, type ToolbarShortcutAction,
 export type { EasyViewAccentTheme } from './ui/FileHeader';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
-import { createTerminalModal, type TerminalAppearance } from './ui/TerminalModal';
-import { createAiChatPanel } from './ui/AiChatPanel';
+import { createLazyTerminalModal, type TerminalAppearance } from './ui/lazyTerminalModal';
+import { createLazyAiChatPanel } from './ui/lazyAiChatPanel';
 import type { EditorHostTransport, EditorSourceDocumentRequest, HostToEditorMessage } from '@easyview/contracts';
+import { EditorSyncAdapter } from './sync/editorSyncAdapter';
 import type { EasyViewEditorHostActions } from './hosts/host-actions';
 export type { EasyViewEditorHostActions } from './hosts/host-actions';
 import { handleHostMessageSideEffect } from './hostMessageRouter';
@@ -178,8 +179,22 @@ let executeCommandImpl: (command: EasyViewEditorCommand) => void = () => undefin
 const notifyUiState = (): void => {
   const state = getUiState();
   uiStateListeners.forEach((listener) => listener(state));
+  const documentId = editorSync?.documentId;
+  if (documentId) {
+    host.postMessage({
+      type: 'updateUiState',
+      documentId,
+      state: {
+        sourceMode: state.sourceMode,
+        tocVisible: state.outlineVisible,
+        fullWidth: state.fullWidth,
+        tableWrap: state.tableWrap,
+      },
+    });
+  }
 };
 let canPostEditsToHost = false;
+let editorSync: EditorSyncAdapter | null = null;
 let sourceEditor: ReturnType<typeof createSourceEditor> | null = null;
 let sourceModeController: SourceModeController | null = null;
 const toggleSourceMode = (): void => { sourceModeController?.toggleSourceMode(); };
@@ -1040,35 +1055,11 @@ function updateSourceSettingsComment(): void {
 }
 
 function postEdit(content: string): void {
-  if (!canPostEditsToHost) {
-    console.debug('[EasyView_Md] Suppressed pre-init edit sync', {
-      length: content.length,
-    });
-    host.postMessage({
-      type: 'openWithDebugLog',
-      stage: 'suppressedPreInitEdit',
-      meta: {
-        editLength: content.length,
-        currentContentLength: currentContent.length,
-      },
-    });
+  if (!canPostEditsToHost || !editorSync?.isReady) {
+    console.debug('[EasyView_Md] Suppressed pre-snapshot edit sync', { length: content.length });
     return;
   }
-  host.postMessage({
-    type: 'openWithDebugLog',
-    stage: 'postEdit',
-    meta: {
-      editLength: content.length,
-      currentContentLength: currentContent.length,
-    },
-  });
-  host.postMessage({
-    type: 'edit',
-    content,
-    fullWidth: isFullWidth,
-    tocVisible: isTocVisible,
-    tableWrap: isTableWrap,
-  });
+  editorSync.applyLocalContent(content, 'local');
 }
 
 type HeadingBreadcrumbEntry = { level: number; text: string; pos: number };
@@ -1381,7 +1372,7 @@ function initEditor() {
   };
   console.log(`[EasyView_Md perf] create UI (FileHeader+Toolbar): ${(performance.now() - tUI).toFixed(1)}ms`);
   let stickyNote: StickyNoteFacade = createNoopStickyNote();
-  const terminalModal = createTerminalModal({
+  const terminalModal = createLazyTerminalModal({
     postMessage: (msg) => host.postMessage(msg),
     appearance: terminalAppearance,
     onVisibilityChange: (visible) => fileHeader.syncTerminalState(visible),
@@ -1498,6 +1489,78 @@ function initEditor() {
     },
   });
 
+  editorSync = new EditorSyncAdapter({
+    postMessage: (message) => host.postMessage(message),
+    getSettings: () => ({ fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap }),
+    onSnapshot: (content, _revision, message) => {
+      const isInit = !canPostEditsToHost;
+      initReceived = true;
+      currentContent = content;
+      stickyNote.setDocumentContent(content);
+      if (message.imagePathMap) editor.setImagePathMap(message.imagePathMap);
+      if (message.filename) fileHeader.setName(message.filename);
+      if (typeof message.filePath === 'string') {
+        currentFilePath = message.filePath;
+        aiChatPanel.setFilePath(documentActive ? currentFilePath : '');
+        toc.setFilePath(currentFilePath);
+      }
+      if (typeof message.fullWidth === 'boolean') { isFullWidth = message.fullWidth; dom.getById('editor')?.classList.toggle('full-width', isFullWidth); fileHeader.syncFullWidthState(isFullWidth); }
+      if (typeof message.tocVisible === 'boolean' && uiMode !== 'desktop') { isTocVisible = message.tocVisible; isTocVisible ? toc.open() : toc.close(); fileHeader.syncTocState(isTocVisible); }
+      if (typeof message.tableWrap === 'boolean') { isTableWrap = message.tableWrap; dom.getById('editor')?.classList.toggle('table-wrap', isTableWrap); fileHeader.syncTableWrapState(isTableWrap); }
+      if (typeof message.tableFirstRowStickyDefault === 'boolean') setFirstRowStickyDefault(message.tableFirstRowStickyDefault);
+      if (message.terminalAppearance) { terminalAppearance = message.terminalAppearance; terminalModal.updateAppearance(terminalAppearance); }
+      if (isSourceMode && sourceEditor) {
+        sourceEditor.setContent(content);
+      } else {
+        editor.setContent(content, isInit, isInit ? undefined : { externalChange: true, addToHistory: false, scrollIntoView: false });
+      }
+      canPostEditsToHost = true;
+      updateTocStatusBar();
+      refreshChangeRailsAfterLayout();
+      notifyUiState();
+
+      if (isInit) {
+        toolbar.update(view);
+        toc.update(view);
+        requestAnimationFrame(() => {
+          const scrollArea = dom.getById('editor-scroll-area');
+          if (scrollArea) {
+            const totalLines = Math.max(1, message.initialTotalLines ?? 1);
+            const cursorLine = Math.min(Math.max(0, message.initialCursorLine ?? 0), totalLines - 1);
+            const lineRatio = cursorLine / Math.max(1, totalLines - 1);
+            const applyCursorScroll = () => {
+              const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+              scrollArea.scrollTop = Number.isFinite(lineRatio) ? Math.round(maxScrollTop * lineRatio) : 0;
+            };
+            applyCursorScroll();
+            requestAnimationFrame(applyCursorScroll);
+            setTimeout(applyCursorScroll, 80);
+            restoreEditorScrollPosition(scrollArea, content);
+          }
+          editor.view?.dom.querySelectorAll('.mdpre-source-line-gutter').forEach((el) => el.remove());
+          dom.themeRoot.classList.remove('inlinemd-booting');
+          dom.themeRoot.classList.add('inlinemd-ready');
+        });
+      }
+    },
+    onExternalContent: (content, patches) => {
+      if (isSourceMode && sourceEditor) {
+        sourceEditor.setContent(content);
+        currentContent = content;
+        stickyNote.setDocumentContent(content);
+        updateTocStatusBar();
+        return true;
+      }
+      const applied = editor.applyTextPatches(patches, { externalChange: true, addToHistory: false, scrollIntoView: false });
+      if (applied) {
+        currentContent = content;
+        stickyNote.setDocumentContent(content);
+        updateTocStatusBar();
+        refreshChangeRailsAfterLayout();
+      }
+      return applied;
+    },
+  });
   console.log(`[EasyView_Md perf] new EditorCore(): ${(performance.now() - tCore).toFixed(1)}ms`);
 
   try {
@@ -1538,7 +1601,7 @@ function initEditor() {
     stickyNote = createNoopStickyNote();
   }
 
-  const aiChatPanel = createAiChatPanel({
+  const aiChatPanel = createLazyAiChatPanel({
     postMessage: (msg) => host.postMessage(msg),
     container: aiChatContainer,
     getDocumentContent: () => documentActive
@@ -1722,7 +1785,7 @@ function initEditor() {
     toggleAllHeadings(view, isAllCollapsed);
   });
 
-  const exportController = new ExportController({
+  const exportController = new LazyExportController({
     editor,
     view,
     fileHeader,
@@ -1931,47 +1994,19 @@ function initEditor() {
     }, 120);
   };
 
-  const requestTabCompletionFromHost = (
-    line: number,
-    character: number,
-    wordPrefix: string,
+  // Custom editors do not have a native Cursor completion provider. Sending a
+  // host request for every ProseMirror selection update creates an unbounded
+  // request/response loop in Cursor's inline-suggestion machinery. Keep the
+  // unsupported capability local and let SourceEditor fall back to indentation.
+  const requestTabCompletionFromHost = async (
+    _line: number,
+    _character: number,
+    _wordPrefix: string,
   ): Promise<{
     insertText: string;
     replaceStartCharacter?: number;
     replaceEndCharacter?: number;
-  } | null> => {
-    return new Promise((resolve) => {
-      const requestId = Math.random().toString(36).slice(2, 11);
-      const subscription = host.subscribe((message) => {
-        if (message.type !== 'tabCompletionResponse' || message.requestId !== requestId) return;
-        clearTimeout(timeout);
-        subscription.unsubscribe();
-        if (typeof message.insertText !== 'string' || !message.insertText) {
-          resolve(null);
-          return;
-        }
-        resolve({
-          insertText: message.insertText,
-          replaceStartCharacter:
-            typeof message.replaceStartCharacter === 'number' ? message.replaceStartCharacter : undefined,
-          replaceEndCharacter:
-            typeof message.replaceEndCharacter === 'number' ? message.replaceEndCharacter : undefined,
-        });
-      });
-      const timeout = setTimeout(() => {
-        subscription.unsubscribe();
-        resolve(null);
-      }, 1200);
-
-      host.postMessage({
-        type: 'requestTabCompletion',
-        requestId,
-        line,
-        character,
-        wordPrefix,
-      });
-    });
-  };
+  } | null> => null;
 
   runWysiwygTabCompletion = (pmView: EditorView): boolean => {
     const selection = pmView.state.selection;
@@ -2254,171 +2289,19 @@ function initEditor() {
     }
 
     switch (message.type) {
-      case 'init':
-      case 'documentChanged': {
-        const tMsg = message.type === 'init' ? performance.now() : 0;
-        const isInit = message.type === 'init';
-        const previousContent = currentContent;
-        host.postMessage({
-          type: 'openWithDebugLog',
-          stage: message.type === 'init' ? 'initReceived' : 'documentChangedReceived',
-          meta: {
-            messageContentLength: typeof message.content === 'string' ? message.content.length : -1,
-            previousContentLength: previousContent.length,
-            canPostEditsToHost,
-            isSourceMode,
-          },
-        });
-        if (message.type === 'init') {
-          console.log('[EasyView_Md perf] init message received');
-          dualHistory.clear();
-          editOperationLog.clear();
-        }
-        initReceived = true;
-        const content = message.content || '';
-        const changedLine = !isInit ? findFirstChangedLine(previousContent, content) : null;
-        const changedTotalLines = Math.max(1, content.split('\n').length);
-        const shouldAutoFollowExternalChange =
-          !isInit && autoFollowExternalEdits && !message.skipAutoScroll && changedLine !== null;
-
-        if (message.imagePathMap) {
-          editor.setImagePathMap(message.imagePathMap);
-        }
-
-        if (message.filename) {
-          fileHeader.setName(message.filename);
-        }
-        if (typeof message.filePath === 'string') {
-          currentFilePath = message.filePath;
-          aiChatPanel.setFilePath(documentActive ? currentFilePath : '');
-          // Always bind TOC expand state to the document path (not documentActive),
-          // so file switches cannot drop restored keys during tab transitions.
-          toc.setFilePath(currentFilePath);
-        }
-        if (message.terminalAppearance && typeof message.terminalAppearance === 'object') {
-          terminalAppearance = message.terminalAppearance as TerminalAppearance;
-          terminalModal.updateAppearance(terminalAppearance);
-        }
-
-        if (message.type === 'init') {
-          if (typeof message.fullWidth === 'boolean') {
-            isFullWidth = message.fullWidth;
-            dom.getById('editor')?.classList.toggle('full-width', isFullWidth);
-            fileHeader.syncFullWidthState(isFullWidth);
-          }
-          if (typeof message.tocVisible === 'boolean' && uiMode !== 'desktop') {
-            isTocVisible = message.tocVisible;
-            if (isTocVisible) toc.open();
-            if (!isTocVisible) toc.close();
-            fileHeader.syncTocState(isTocVisible);
-          }
-          if (typeof message.tableFirstRowStickyDefault === 'boolean') {
-            setFirstRowStickyDefault(message.tableFirstRowStickyDefault);
-          }
-          if (typeof message.tableWrap === 'boolean') {
-            isTableWrap = message.tableWrap;
-            dom.getById('editor')?.classList.toggle('table-wrap', isTableWrap);
-            dom.eventTarget.dispatchEvent(new CustomEvent('easyview-table-wrap-layout-change'));
-            fileHeader.syncTableWrapState(isTableWrap);
-          }
-          notifyUiState();
-        }
-
-        if (content === currentContent && message.type !== 'init') return;
-        currentContent = content;
-        stickyNote.setDocumentContent(content);
-
-        if (isSourceMode && sourceEditor) {
-          sourceEditor.setContent(content);
-          canPostEditsToHost = true;
-          if (shouldAutoFollowExternalChange && changedLine !== null) {
-            sourceEditor.scrollToLine(changedLine, 'smooth');
-          }
-          updateTocStatusBar();
-          break;
-        }
-
-        const tSetContent = isInit ? performance.now() : 0;
-        const scrollArea = dom.getById('editor-scroll-area');
-        const prevScrollRatio =
-          !isInit && scrollArea && scrollArea.scrollHeight > scrollArea.clientHeight
-            ? scrollArea.scrollTop / (scrollArea.scrollHeight - scrollArea.clientHeight)
-            : 0;
-        editor.setContent(content, isInit, isInit ? undefined : { scrollIntoView: false });
-        canPostEditsToHost = true;
-        updateTocStatusBar();
-        if (!isInit && scrollArea) {
-          if (shouldAutoFollowExternalChange && changedLine !== null) {
-            scrollWysiwygToApproxLine(changedLine, changedTotalLines);
-          } else {
-            const restoreScroll = () => {
-              const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
-              scrollArea.scrollTop = Math.round(maxScrollTop * prevScrollRatio);
-            };
-            restoreScroll();
-            requestAnimationFrame(restoreScroll);
-            setTimeout(restoreScroll, 60);
-          }
-        }
-        refreshChangeRailsAfterLayout();
-        if (Array.isArray(message.gitLineRanges) && view) {
-          view.dispatch(
-            view.state.tr.setMeta(GIT_CHANGE_META, {
-              lineRanges: message.gitLineRanges,
-              content,
-            })
-          );
-        }
-        if (isInit) {
-          console.log(`[EasyView_Md perf] editor.setContent(init): ${(performance.now() - tSetContent).toFixed(1)}ms`);
-          toolbar.update(view);
-          toc.update(view);
-          requestAnimationFrame(() => {
-            const scrollArea = dom.getById('editor-scroll-area');
-            if (scrollArea) {
-              const cursorLine =
-                typeof (message as any).initialCursorLine === 'number' ? (message as any).initialCursorLine : 0;
-              const totalLines =
-                typeof (message as any).initialTotalLines === 'number' ? (message as any).initialTotalLines : 1;
-              const safeTotal = Math.max(1, totalLines);
-              const safeLine = Math.min(Math.max(0, cursorLine), safeTotal - 1);
-              const ratioDenominator = Math.max(1, safeTotal - 1);
-              const lineRatio = safeLine / ratioDenominator;
-              const applyCursorScroll = () => {
-                const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
-                scrollArea.scrollTop = Number.isFinite(lineRatio) ? Math.round(maxScrollTop * lineRatio) : 0;
-              };
-
-              applyCursorScroll();
-              requestAnimationFrame(applyCursorScroll);
-              setTimeout(applyCursorScroll, 80);
-              // The initial cursor positioning runs after editor.setContent and
-              // would otherwise overwrite the persisted page position.
-              restoreEditorScrollPosition(scrollArea, content);
-            }
-            editor.view?.dom.querySelectorAll('.mdpre-source-line-gutter').forEach((el) => el.remove());
-            dom.themeRoot.classList.remove('inlinemd-booting');
-            dom.themeRoot.classList.add('inlinemd-ready');
-          });
-          console.log(`[EasyView_Md perf] init message TOTAL: ${(performance.now() - tMsg).toFixed(1)}ms`);
-          console.log(`[EasyView_Md perf] initEditor TOTAL: ${(performance.now() - tInit).toFixed(1)}ms`);
-        }
+      case 'documentSnapshot':
+      case 'documentPatched':
+      case 'editsApplied':
+      case 'resyncRequired': {
+        editorSync?.handleMessage(message);
         break;
       }
 
       case 'gitStatusChanged':
-        if (view) {
-          const messageContent = typeof message.content === 'string' ? message.content : null;
-          // Drop stale Git updates computed from older content snapshots.
-          if (messageContent !== null && messageContent !== currentContent) {
-            break;
-          }
-          view.dispatch(
-            view.state.tr.setMeta(GIT_CHANGE_META, {
-              lineRanges: Array.isArray(message.lineRanges) ? message.lineRanges : [],
-              content: messageContent ?? currentContent,
-            })
-          );
+        if (view && message.revision === (editorSync?.revision ?? message.revision)) {
+          view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
+            lineRanges: Array.isArray(message.lineRanges) ? message.lineRanges : [],
+          }));
         }
         break;
 
@@ -2471,9 +2354,9 @@ function initEditor() {
   const tBootstrap = performance.now();
   console.log(`[EasyView_Md perf] pre-bootstrap setup: ${(tBootstrap - tInit).toFixed(1)}ms`);
   if (initialMessage) {
-    console.log(`[EasyView_Md perf] applying explicit initial host message`);
     handleHostMessage(initialMessage);
-  } else {
+  }
+  if (!editorSync?.isReady) {
     host.postMessage({ type: 'ready' });
     readyRetryTimer = setInterval(() => {
       if (initReceived || disposed) {
@@ -2510,6 +2393,8 @@ function initEditor() {
       hostSubscription.unsubscribe();
       if (readyRetryTimer) clearInterval(readyRetryTimer);
       if (readyRetryStopTimer) clearTimeout(readyRetryStopTimer);
+      editorSync?.dispose();
+      editorSync = null;
       readyRetryTimer = null;
       readyRetryStopTimer = null;
       dom.eventTarget.removeEventListener('error', errorHandler as EventListener);

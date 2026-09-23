@@ -1,22 +1,18 @@
 import type {
   EditorHostTransport,
-  HostToEditorMessage,
   EditorToHostMessage,
+  HostToEditorMessage,
 } from '@easyview/contracts';
 import type { VscodeEditorHostActionMessage } from './vscodeProtocol';
 import { createEasyViewEditor } from '@easyview/editor-core';
 
 interface VscodeWebviewApi {
   postMessage(message: EditorToHostMessage | VscodeEditorHostActionMessage): void;
+  getState<T = unknown>(): T | undefined;
+  setState<T = unknown>(state: T): void;
 }
 
 declare function acquireVsCodeApi(): VscodeWebviewApi;
-
-declare global {
-  interface Window {
-    __INITIAL_DATA__?: HostToEditorMessage;
-  }
-}
 
 const vscodeApi = acquireVsCodeApi();
 const transport: EditorHostTransport = {
@@ -43,12 +39,8 @@ const transport: EditorHostTransport = {
   },
 };
 
-const initialMessage = window.__INITIAL_DATA__;
-delete window.__INITIAL_DATA__;
-
 const editor = createEasyViewEditor({
   host: transport,
-  initialMessage,
   hostActions: {
     openSourceDocument(request) {
       vscodeApi.postMessage({ type: 'vscode.openSourceDocument', request });
@@ -59,4 +51,17 @@ const editor = createEasyViewEditor({
   },
 });
 
+const savedState = vscodeApi.getState<{ version?: number; scrollRatio?: number }>();
+const scrollArea = document.getElementById('editor-scroll-area');
+if (scrollArea) {
+  if (typeof savedState?.scrollRatio === 'number') {
+    requestAnimationFrame(() => {
+      scrollArea.scrollTop = Math.max(0, (scrollArea.scrollHeight - scrollArea.clientHeight) * savedState.scrollRatio!);
+    });
+  }
+  scrollArea.addEventListener('scroll', () => {
+    const denominator = Math.max(1, scrollArea.scrollHeight - scrollArea.clientHeight);
+    vscodeApi.setState({ version: 1, scrollRatio: scrollArea.scrollTop / denominator });
+  }, { passive: true });
+}
 window.addEventListener('unload', () => editor.dispose(), { once: true });

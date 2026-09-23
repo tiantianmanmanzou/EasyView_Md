@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createWorkspaceNodeId,
   isWorkspaceOperationError,
+  resolveWorkspaceTreeDropMode,
   resolveWorkspaceTreeIcon,
   WorkspaceOperationError,
 } from '../src';
@@ -27,6 +28,12 @@ describe('workspace contracts', () => {
     expect(resolveWorkspaceTreeIcon({ kind: 'root', name: 'repo' }).codicon).toBe('root-folder');
     expect(resolveWorkspaceTreeIcon({ kind: 'root', name: 'repo', expanded: true }).codicon).toBe('root-folder-opened');
     expect(resolveWorkspaceTreeIcon({ kind: 'directory', name: 'src', expanded: true }).id).toBe('folder-opened');
+    expect(resolveWorkspaceTreeIcon({ kind: 'directory', name: '.git' }).id).toBe('folder-dot');
+    expect(resolveWorkspaceTreeIcon({ kind: 'directory', name: '.vscode', expanded: true }).id).toBe('folder-dot-opened');
+    expect(resolveWorkspaceTreeIcon({ kind: 'directory', name: '.git' }).codicon).toBe('settings-gear');
+    expect(resolveWorkspaceTreeIcon({ kind: 'directory', name: '.git' }).svg).not.toBe(
+      resolveWorkspaceTreeIcon({ kind: 'directory', name: 'src' }).svg,
+    );
     expect(resolveWorkspaceTreeIcon({ kind: 'symlink', name: 'link' }).codicon).toBe('file-symlink-file');
 
     const markdown = resolveWorkspaceTreeIcon({ kind: 'file', name: 'guide.md' });
@@ -47,5 +54,15 @@ describe('workspace contracts', () => {
     expect(resolveWorkspaceTreeIcon({ kind: 'file', name: 'report.pdf' }).id).toBe('seti:pdf');
     expect(resolveWorkspaceTreeIcon({ kind: 'file', name: 'README.md' }).id).toBe('seti:info');
     expect(resolveWorkspaceTreeIcon({ kind: 'file', name: '.gitignore' }).id).toBe('seti:git');
+  });
+
+  it('resolves drop mode from row Y (directory top 30% = before, else into)', () => {
+    expect(resolveWorkspaceTreeDropMode('file', 10, 0, 26)).toBe('before');
+    expect(resolveWorkspaceTreeDropMode('symlink', 20, 0, 26)).toBe('before');
+    expect(resolveWorkspaceTreeDropMode('directory', 0, 0, 100)).toBe('before');
+    expect(resolveWorkspaceTreeDropMode('directory', 29, 0, 100)).toBe('before');
+    expect(resolveWorkspaceTreeDropMode('directory', 30, 0, 100)).toBe('into');
+    expect(resolveWorkspaceTreeDropMode('directory', 99, 0, 100)).toBe('into');
+    expect(resolveWorkspaceTreeDropMode('directory', 50, 0, 0)).toBe('into');
   });
 });

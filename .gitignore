@@ -1,6 +1,10 @@
 node_modules/
 *.vsix
 .DS_Store
+# Orphaned root-level build bundle (should only ever exist under apps/*/dist or apps/*/out,
+# both already ignored below). Re-added here as a guard after removing the ~3MB/79k-line
+# copy that had been accidentally committed and repeatedly re-committed at the repo root.
+/renderer.js
 out/
 coverage/
 playwright-report/

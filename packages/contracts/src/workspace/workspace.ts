@@ -181,3 +181,4 @@ export function filterWorkspaceEntriesByDotVisibility<T extends { name: string }
 
 export * from './workspace-tree-icons';
 export * from './workspace-tree-drop';
+export * from './workspace-tree-view';

@@ -1,8 +1,12 @@
 import {
   describeWorkspaceEntryTimestamps,
   filterWorkspaceEntriesByDotVisibility,
+  normalizeWorkspaceViewRelativePath as normalizeRelativePath,
+  parentOfWorkspaceViewRelativePath as parentRelativePath,
   resolveWorkspaceTreeDropMode,
   resolveWorkspaceTreeIcon,
+  workspaceEntryNameSelectionRange,
+  WORKSPACE_TREE_SORT_MODE_LABELS as SORT_MODE_LABELS,
   type WorkspaceTreeSortMode,
 } from '@easyview/contracts';
 import type {
@@ -17,12 +21,6 @@ export interface WorkspaceExplorerVsCodeApi {
   getState(): unknown;
   setState(s: unknown): void;
 }
-
-const SORT_MODE_LABELS: Record<WorkspaceTreeSortMode, string> = {
-  created: 'Sort by Created Time',
-  name: 'Sort by Name',
-  custom: 'Custom',
-};
 
 type PendingOpResolve = (result: Extract<WorkspaceExplorerEvent, { type: 'opResult' }>) => void;
 type PendingListResolve = (result: Extract<WorkspaceExplorerEvent, { type: 'listChildrenResult' }>) => void;
@@ -884,7 +882,7 @@ export class WorkspaceExplorerView {
     input.addEventListener('focus', () => this.setEditing(true));
     requestAnimationFrame(() => {
       input.focus();
-      selectFileName(input);
+      input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
     });
     return input;
   }
@@ -1411,17 +1409,3 @@ export class WorkspaceExplorerView {
   }
 }
 
-function normalizeRelativePath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
-}
-
-function parentRelativePath(value: string): string {
-  const normalized = normalizeRelativePath(value);
-  const index = normalized.lastIndexOf('/');
-  return index < 0 ? '' : normalized.slice(0, index);
-}
-
-function selectFileName(input: HTMLInputElement): void {
-  const dot = input.value.lastIndexOf('.');
-  input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
-}

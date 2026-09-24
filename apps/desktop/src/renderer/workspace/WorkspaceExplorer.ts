@@ -3,8 +3,12 @@ import type { EasyViewDesktopApi } from '../../preload/desktopApi';
 import {
   describeWorkspaceEntryTimestamps,
   filterWorkspaceEntriesByDotVisibility,
+  normalizeWorkspaceViewRelativePath as normalizeRelativePath,
+  parentOfWorkspaceViewRelativePath as parentRelativePath,
   resolveWorkspaceTreeDropMode,
   resolveWorkspaceTreeIcon,
+  workspaceEntryNameSelectionRange,
+  WORKSPACE_TREE_SORT_MODE_LABELS as SORT_MODE_LABELS,
 } from '@easyview/contracts';
 
 interface WorkspaceExplorerOptions {
@@ -15,12 +19,6 @@ interface WorkspaceExplorerOptions {
   onOpenWithDefaultApp(relativePath: string): void;
   onRevealInFolder(relativePath: string): void;
 }
-
-const SORT_MODE_LABELS: Record<WorkspaceTreeSortMode, string> = {
-  created: 'Sort by Created Time',
-  name: 'Sort by Name',
-  custom: 'Custom',
-};
 
 export class WorkspaceExplorer {
   private state: DesktopWorkspaceState | null = null;
@@ -532,7 +530,7 @@ export class WorkspaceExplorer {
       if (event.key === 'Enter') { event.preventDefault(); void this.renameEntry(entry.relativePath, input.value); }
     });
     input.addEventListener('blur', () => { if (this.renameRelativePath === entry.relativePath) void this.renameEntry(entry.relativePath, input.value); });
-    requestAnimationFrame(() => { input.focus(); selectFileName(input); });
+    requestAnimationFrame(() => { input.focus(); input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value)); });
     return input;
   }
 
@@ -907,9 +905,6 @@ export class WorkspaceExplorer {
   }
 }
 
-function normalizeRelativePath(value: string): string { return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, ''); }
-function parentRelativePath(value: string): string { const normalized = normalizeRelativePath(value); const index = normalized.lastIndexOf('/'); return index < 0 ? '' : normalized.slice(0, index); }
-function selectFileName(input: HTMLInputElement): void { const dot = input.value.lastIndexOf('.'); input.setSelectionRange(0, dot > 0 ? dot : input.value.length); }
 function workspaceRelativePath(rootPath: string, targetPath: string): string | null {
   const root = rootPath.replace(/[\\/]+$/, '').replace(/\\/g, '/');
   const target = targetPath.replace(/\\/g, '/');

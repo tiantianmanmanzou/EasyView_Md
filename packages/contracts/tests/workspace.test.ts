@@ -1,9 +1,14 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import {
   createWorkspaceNodeId,
   isWorkspaceOperationError,
+  normalizeWorkspaceViewRelativePath,
+  parentOfWorkspaceViewRelativePath,
   resolveWorkspaceTreeDropMode,
   resolveWorkspaceTreeIcon,
+  workspaceEntryNameSelectionRange,
+  WORKSPACE_TREE_SORT_MODE_LABELS,
   WorkspaceOperationError,
 } from '../src';
 
@@ -64,5 +69,46 @@ describe('workspace contracts', () => {
     expect(resolveWorkspaceTreeDropMode('directory', 30, 0, 100)).toBe('into');
     expect(resolveWorkspaceTreeDropMode('directory', 99, 0, 100)).toBe('into');
     expect(resolveWorkspaceTreeDropMode('directory', 50, 0, 0)).toBe('into');
+  });
+
+  it('shares sort-mode labels between Desktop and Extension tree menus', () => {
+    expect(WORKSPACE_TREE_SORT_MODE_LABELS).toEqual({
+      created: 'Sort by Created Time',
+      name: 'Sort by Name',
+      custom: 'Custom',
+    });
+  });
+
+  it('normalizes View-layer relative paths leniently (characterization of prior duplicated logic)', () => {
+    expect(normalizeWorkspaceViewRelativePath('docs/guide.md')).toBe('docs/guide.md');
+    expect(normalizeWorkspaceViewRelativePath('docs\\guide.md')).toBe('docs/guide.md');
+    expect(normalizeWorkspaceViewRelativePath('./docs/guide.md')).toBe('docs/guide.md');
+    expect(normalizeWorkspaceViewRelativePath('docs/guide.md/')).toBe('docs/guide.md');
+    expect(normalizeWorkspaceViewRelativePath('')).toBe('');
+    // Lenient by design: unlike the Gateway-side normalizer, it does not reject '..' or collapse
+    // interior '.' segments — Views only ever see paths a Gateway already produced or validated.
+    expect(normalizeWorkspaceViewRelativePath('a/./b')).toBe('a/./b');
+    expect(normalizeWorkspaceViewRelativePath('../escape')).toBe('../escape');
+  });
+
+  it('computes the parent of a View-layer relative path', () => {
+    expect(parentOfWorkspaceViewRelativePath('docs/guide.md')).toBe('docs');
+    expect(parentOfWorkspaceViewRelativePath('guide.md')).toBe('');
+    expect(parentOfWorkspaceViewRelativePath('a/b/c.md')).toBe('a/b');
+    expect(parentOfWorkspaceViewRelativePath('a\\b\\c.md')).toBe('a/b');
+    expect(parentOfWorkspaceViewRelativePath('')).toBe('');
+  });
+
+  it('computes the base-name selection range for a rename input, excluding the extension', () => {
+    expect(workspaceEntryNameSelectionRange('guide.md')).toEqual([0, 5]);
+    // Leading dot is not treated as an extension separator (dot index must be > 0).
+    expect(workspaceEntryNameSelectionRange('.gitignore')).toEqual([0, 10]);
+    expect(workspaceEntryNameSelectionRange('untitled')).toEqual([0, 8]);
+
+    // Still usable directly against a real input element.
+    const input = document.createElement('input');
+    input.value = 'guide.md';
+    input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 5]);
   });
 });

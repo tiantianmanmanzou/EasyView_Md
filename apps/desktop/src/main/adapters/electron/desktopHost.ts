@@ -2554,8 +2554,16 @@ async function saveFromMenu(saveAs: boolean): Promise<void> {
   }
 }
 
-function restartApp(): void {
-  // Bypass dirty-doc close confirmation; exit tears down windows immediately.
+async function restartApp(): Promise<void> {
+  // Must go through the same dirty-document confirmation as a normal window close.
+  // Previously this set isClosing=true unconditionally, which made the close handler's
+  // `if (isClosing || ...) return;` guard short-circuit and skip confirmCloseAll()
+  // entirely, silently discarding unsaved edits on restart.
+  if (isClosing) return;
+  if ([...documentSessions.values()].some((session) => session.dirty)) {
+    const canClose = await confirmCloseAll();
+    if (!canClose) return;
+  }
   isClosing = true;
   app.relaunch();
   app.exit(0);
@@ -2571,7 +2579,7 @@ function argvRequestsRestart(argv: string[]): boolean {
 function syncShellRestartMenu(): void {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
-      { label: '重启', click: () => restartApp() },
+      { label: '重启', click: () => { void restartApp(); } },
     ]));
     return;
   }
@@ -2639,7 +2647,7 @@ function createMenu(): void {
         { type: 'separator' },
         {
           label: '重启',
-          click: () => restartApp(),
+          click: () => { void restartApp(); },
         },
         { role: 'quit' },
       ],
@@ -2780,7 +2788,7 @@ if (!hasSingleInstanceLock) {
 } else {
   app.on('second-instance', (_event, argv) => {
     if (argvRequestsRestart(argv)) {
-      restartApp();
+      void restartApp();
       return;
     }
     const filePath = findMarkdownArgument(argv);

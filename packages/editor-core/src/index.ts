@@ -1500,6 +1500,16 @@ function initEditor() {
       if (message.imagePathMap) editor.setImagePathMap(message.imagePathMap);
       if (message.filename) fileHeader.setName(message.filename);
       if (typeof message.filePath === 'string') {
+        if (!isInit && message.filePath !== currentFilePath) {
+          // Switching to a different document while this instance is reused (e.g. desktop
+          // tab switch): the cross-mode undo/redo history and mode-entry bookkeeping below
+          // belong to the previous document and must not leak into the newly loaded one.
+          // See: undo-exhausted cross-document restore risk (dualHistory carries
+          // ProseMirror/CodeMirror snapshots keyed only by mode, not by document).
+          dualHistory.clear();
+          _hasEditedInCurrentMode = false;
+          _modeEntryContent = content;
+        }
         currentFilePath = message.filePath;
         aiChatPanel.setFilePath(documentActive ? currentFilePath : '');
         toc.setFilePath(currentFilePath);

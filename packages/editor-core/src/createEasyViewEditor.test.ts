@@ -104,4 +104,64 @@ describe('createEasyViewEditor entry boundary', () => {
     vi.unstubAllGlobals();
   });
 
+  it('does not throw when a document switch arrives after a source-mode toggle (tab switch reuse)', async () => {
+    // Regression guard for cross-document undo leakage: on desktop, tab switches reuse the
+    // same editor-core instance and only send a new documentSnapshot (no dispose/recreate).
+    // Toggling source mode records a DualModeHistory snapshot; switching to a different
+    // filePath afterwards must clear that snapshot instead of leaving it to be restored
+    // into the new document once its native undo stack is exhausted.
+    const root = document.createElement('section');
+    root.innerHTML = `
+      <div id="title-bar"></div>
+      <div id="editor-body">
+        <div id="editor-scroll-area"><div id="editor"></div></div>
+      </div>
+    `;
+    document.body.append(root);
+    let listener: ((message: HostToEditorMessage) => void) | undefined;
+    const host = createHost();
+    host.subscribe = (next) => {
+      listener = next;
+      return { unsubscribe: vi.fn() };
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubGlobal('ResizeObserver', class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    const editor = createEasyViewEditor({ host, root });
+
+    const baseSnapshot = {
+      type: 'documentSnapshot' as const,
+      documentId: 'doc-a',
+      revision: 1,
+      contentHash: 'ignored',
+      filename: 'a',
+      fullWidth: false,
+      tocVisible: true,
+      tableWrap: false,
+      tableFirstRowStickyDefault: false,
+      initialCursorLine: 0,
+      initialCursorCharacter: 0,
+      initialTotalLines: 1,
+      imagePathMap: {},
+      uiState: {},
+      reason: 'initial' as const,
+    };
+
+    listener?.({ ...baseSnapshot, content: '# Doc A', filePath: '/tmp/a.md' });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+    // Leave a stale cross-mode snapshot behind for doc A.
+    expect(() => editor.executeCommand('toggleSourceMode')).not.toThrow();
+
+    // Switch to a different document without disposing the instance (desktop tab switch).
+    expect(() => listener?.({ ...baseSnapshot, content: '# Doc B', filePath: '/tmp/b.md', reason: 'visible' })).not.toThrow();
+
+    editor.dispose();
+    error.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
 });

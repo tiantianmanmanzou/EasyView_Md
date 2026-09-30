@@ -7,6 +7,7 @@ interface ShortcutHeader {
   triggerExternalFollowToggle(): void;
   triggerThemeToggle(): void;
   triggerTocToggle(): void;
+  triggerViewChanges(): void;
 }
 
 interface LayoutShortcuts {
@@ -49,6 +50,7 @@ const TOOLBAR_ACTIONS: ToolbarShortcutAction[] = [
   'toggleStickyNote',
   'toggleAiChat',
   'toggleToc',
+  'toggleViewChanges',
 ];
 
 export class ShortcutController {
@@ -73,7 +75,7 @@ export class ShortcutController {
   }
 
   private handleToolbarAction(event: KeyboardEvent, action: ToolbarShortcutAction): boolean {
-    if ((action === 'stageFile' || action === 'commitFile') && !this.deps.host.capabilities.git) return false;
+    if ((action === 'stageFile' || action === 'commitFile' || action === 'toggleViewChanges') && !this.deps.host.capabilities.git) return false;
     if (action === 'toggleTerminal' && !this.deps.host.capabilities.terminal) return false;
     if (action === 'toggleAiChat' && !this.deps.host.capabilities.aiChat) return false;
     if (!this.matches(event, action)) return false;
@@ -125,6 +127,9 @@ export class ShortcutController {
         return true;
       case 'toggleToc':
         this.deps.fileHeader.triggerTocToggle();
+        return true;
+      case 'toggleViewChanges':
+        this.deps.fileHeader.triggerViewChanges();
         return true;
       default:
         return true;

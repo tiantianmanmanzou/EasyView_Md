@@ -10,6 +10,16 @@ export interface ByteRange {
   end: number;
 }
 
+export function parsePreviewContentPath(pathname: string): { contentId: string; assetPath: string } | null {
+  const raw = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+  if (!raw) return null;
+  const slash = raw.indexOf('/');
+  const contentId = decodeURIComponent(slash === -1 ? raw : raw.slice(0, slash));
+  const assetPath = slash === -1 ? '' : decodeURIComponent(raw.slice(slash + 1));
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(contentId)) return null;
+  return { contentId, assetPath };
+}
+
 export function parseByteRange(value: string | null, size: number): ByteRange | null | 'invalid' {
   if (!value) return null;
   const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim());
@@ -31,17 +41,26 @@ export function registerPreviewScheme(): void {
   protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
 }
 
-export function registerPreviewProtocol(electronProtocol: Protocol, sessions: PreviewSessionStore): void {
+export function registerPreviewProtocol(
+  electronProtocol: Protocol,
+  sessions: Pick<PreviewSessionStore, 'resolveContent' | 'resolveRelatedContent'>,
+): void {
   electronProtocol.handle(PREVIEW_SCHEME, async (request) => {
     try {
       const url = new URL(request.url);
-      if (url.hostname !== 'content') return new Response('Not found', { status: 404 });
-      const contentId = decodeURIComponent(url.pathname.slice(1));
-      const content = await sessions.resolveContent(contentId);
+      if (url.hostname !== 'content') return new Response('Not found', { status: 404, headers: corsHeaders() });
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: corsHeaders() });
+      }
+      const parsed = parsePreviewContentPath(url.pathname);
+      if (!parsed) return new Response('Not found', { status: 404, headers: corsHeaders() });
+      const content = parsed.assetPath
+        ? await sessions.resolveRelatedContent(parsed.contentId, parsed.assetPath)
+        : await sessions.resolveContent(parsed.contentId);
       const size = content.kind === 'memory' ? content.bytes.length : content.size;
       const range = parseByteRange(request.headers.get('range'), size);
       if (range === 'invalid') {
-        return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}`, 'Cache-Control': 'no-store' } });
+        return new Response(null, { status: 416, headers: { ...corsHeaders(), 'Content-Range': `bytes */${size}`, 'Cache-Control': 'no-store' } });
       }
       const start = range?.start ?? 0;
       const end = range?.end ?? Math.max(0, size - 1);
@@ -56,9 +75,17 @@ export function registerPreviewProtocol(electronProtocol: Protocol, sessions: Pr
       return new Response(body, { status: range ? 206 : 200, headers });
     } catch {
       // Do not expose workspace paths or session state through protocol errors.
-      return new Response('Not found', { status: 404 });
+      return new Response('Not found', { status: 404, headers: corsHeaders() });
     }
   });
+}
+
+function corsHeaders(): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Range',
+  };
 }
 
 function secureHeaders(contentType: string, contentLength: number, range: { start: number; end: number; size: number } | null): HeadersInit {
@@ -68,10 +95,23 @@ function secureHeaders(contentType: string, contentLength: number, range: { star
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    ...corsHeaders(),
   };
   if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${range.size}`;
   if (contentType.startsWith('text/html') || contentType === 'image/svg+xml') {
-    headers['Content-Security-Policy'] = "default-src 'none'; img-src data: easyview-preview:; style-src 'unsafe-inline'; font-src data: easyview-preview:; base-uri 'none'; form-action 'none'";
+    // Allow nested iframe / fetch / module loads of sibling workspace files.
+    headers['Content-Security-Policy'] = [
+      "default-src 'self' easyview-preview: blob: data:",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' easyview-preview: blob:",
+      "style-src 'self' 'unsafe-inline' easyview-preview: blob: data:",
+      "img-src 'self' data: blob: easyview-preview: http: https:",
+      "font-src 'self' data: blob: easyview-preview: http: https:",
+      "connect-src 'self' easyview-preview: blob: data:",
+      "frame-src 'self' easyview-preview: blob: data: about:",
+      "worker-src 'self' blob: easyview-preview:",
+      "media-src 'self' data: blob: easyview-preview:",
+      "base-uri 'self' easyview-preview:",
+    ].join('; ');
   }
   return headers;
 }

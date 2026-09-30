@@ -4,11 +4,13 @@ import {
   readLocalProductTheme,
   type EasyViewThemeMode,
 } from '@easyview/contracts';
-import { createEasyViewEditor } from '@easyview/editor-core';
-import type { DesktopTab, DesktopThemeMode } from '../contracts';
+import { cycleDesktopProductTheme } from './productThemeControl';
+import { createEasyViewEditor, type EasyViewEditorInstance } from '@easyview/editor-core';
+import type { DesktopEditorTab, DesktopTab, DesktopThemeMode } from '../contracts';
 import type { EasyViewDesktopApi } from '../preload/desktopApi';
 import type { EasyViewAccentTheme } from '@easyview/editor-core';
 import { createDesktopEditorHostTransport } from './desktopHostTransport';
+import { DesktopEditorInstanceRegistry } from './DesktopEditorInstanceRegistry';
 import { WorkspaceExplorer } from './workspace/WorkspaceExplorer';
 import { ActiveViewController } from './ActiveViewController';
 import { TabController } from './TabController';
@@ -32,7 +34,7 @@ if (!api?.editor || !api.app || !api.document) {
   throw new Error('EasyView_Md preload API is unavailable');
 }
 
-const editorHostTransport = createDesktopEditorHostTransport({
+const sharedEditorHost = createDesktopEditorHostTransport({
   postMessage: (message: EditorToHostMessage) => api.editor.postMessage(message),
   subscribe: (listener: (message: HostToEditorMessage) => void) =>
     api.editor.subscribe(listener),
@@ -61,8 +63,8 @@ function applyOsTheme(theme: DesktopThemeMode): void {
 }
 
 function applyProductThemeFromEditor(): void {
-  const mode = editor.getThemeState().mode;
-  if (!isEasyViewThemeMode(mode)) return;
+  const mode = activeEditor()?.getThemeState().mode;
+  if (!mode || !isEasyViewThemeMode(mode)) return;
   stampProductTheme(mode);
 }
 
@@ -74,13 +76,6 @@ window.__easyviewPdfFonts = {
   symbols: new URL('./fonts/NotoSansSymbols2-Regular.ttf', window.location.href).toString(),
 };
 
-const editor = createEasyViewEditor({
-  host: editorHostTransport,
-  uiMode: 'desktop',
-  outlinePosition: 'right',
-  aiChatContainer: document.getElementById('desktop-ai-chat-host'),
-});
-
 const titleName = document.getElementById('desktop-document-name')!;
 const themeToggle = document.getElementById('theme-toggle') as HTMLButtonElement;
 const themeDepth = document.getElementById('theme-depth') as HTMLInputElement;
@@ -90,16 +85,58 @@ const accentToggle = document.getElementById('accent-toggle') as HTMLButtonEleme
 let themePanelCloseTimer: number | undefined;
 const explorerElement = document.getElementById('workspace-explorer')!;
 const tabBar = document.getElementById('desktop-tab-bar')!;
-const editorBody = document.getElementById('editor-body')!;
+const editorMount = document.getElementById('desktop-editor-mount')!;
 const previewBody = document.getElementById('file-preview-root')!;
+const splitRoot = document.getElementById('desktop-split-root')!;
 let currentTab: DesktopTab | null = null;
 let tabController: TabController;
+let lastOutlineVisible = true;
+let lastOutlineWidth = 280;
+let editorStateSubscription: { unsubscribe(): void } | undefined;
 const previewApi = api;
+const editors = new DesktopEditorInstanceRegistry({
+  mount: editorMount,
+  capabilities: sharedEditorHost.capabilities,
+  postMessage: (message) => sharedEditorHost.postMessage(message),
+  subscribe: (listener) => sharedEditorHost.subscribe(listener),
+  createEditor: ({ root, host, initialMessage }) => createEasyViewEditor({
+    host,
+    initialMessage,
+    uiMode: 'desktop',
+    outlinePosition: 'right',
+    aiChatContainer: document.getElementById('desktop-ai-chat-host'),
+    root,
+  }),
+});
+
+function activeEditor(): EasyViewEditorInstance | null {
+  return editors.active();
+}
+
+function commandEditor(): EasyViewEditorInstance | null {
+  return activeEditor() ?? editors.lastFocused() ?? editors.first();
+}
+
+function bindActiveEditor(editor: EasyViewEditorInstance | null): void {
+  editorStateSubscription?.unsubscribe();
+  editorStateSubscription = editor?.subscribeUiState((state) => {
+    document.getElementById('outline-toggle')?.classList.toggle('active', state.outlineVisible);
+    workspaceExplorer.setOutlineVisible(state.outlineVisible);
+    publishMenuState();
+  });
+  if (editor) {
+    editor.setOutlineVisible(lastOutlineVisible);
+    editor.setOutlineWidth(lastOutlineWidth);
+  }
+}
+
 const workspaceExplorer = new WorkspaceExplorer({
   api,
   container: explorerElement,
   onStateChange: (state) => {
-    editor.setOutlineVisible(state.outlineVisible);
+    lastOutlineVisible = state.outlineVisible;
+    lastOutlineWidth = state.outlineWidth;
+    activeEditor()?.setOutlineVisible(state.outlineVisible);
     document.getElementById('workspace-toggle')?.classList.toggle('active', state.explorerVisible);
     publishMenuState();
   },
@@ -109,7 +146,7 @@ const workspaceExplorer = new WorkspaceExplorer({
 });
 
 const activeView = new ActiveViewController({
-  api, editorBody, previewBody,
+  api, splitRoot, editorBody: editorMount, previewBody, tabBar,
   onViewChanged: (view) => {
     const outlineButton = document.getElementById('outline-toggle') as HTMLButtonElement | null;
     if (outlineButton) outlineButton.disabled = view.kind !== 'editor';
@@ -117,12 +154,41 @@ const activeView = new ActiveViewController({
   },
 });
 
+function visibleEditorTabs(snapshot: { groups: Array<{ tabs: DesktopTab[]; activeTabId: string | null }> }): DesktopEditorTab[] {
+  const visible: DesktopEditorTab[] = [];
+  for (const group of snapshot.groups) {
+    const tab = group.tabs.find((item) => item.id === group.activeTabId);
+    if (tab?.kind === 'editor') visible.push(tab);
+  }
+  return visible;
+}
+
+function bindVisibleEditors(snapshot: { groups: Array<{ id: string; tabs: DesktopTab[]; activeTabId: string | null }> }, focused: DesktopTab | null): void {
+  const visible = visibleEditorTabs(snapshot);
+  const groupMounts = activeView.editorMounts();
+  const mounts = new Map<string, HTMLElement>();
+  for (const group of snapshot.groups) {
+    const mount = groupMounts.get(group.id);
+    const tab = group.tabs.find((item) => item.id === group.activeTabId);
+    if (mount && tab?.kind === 'editor') mounts.set(tab.id, mount);
+  }
+  editors.setVisible(visible, mounts);
+  if (focused?.kind === 'editor') {
+    editors.focus(focused.id);
+    bindActiveEditor(editors.active());
+  } else {
+    editors.clearActive();
+    bindActiveEditor(null);
+  }
+  editors.syncOpenTabs(snapshot.groups.flatMap((group) => group.tabs).filter((item) => item.kind === 'editor').map((item) => item.id));
+}
+
 tabController = new TabController({
   api,
-  container: tabBar,
-  onActiveTabChanged: (tab) => {
+  onActiveTabChanged: (tab, snapshot) => {
     currentTab = tab;
-    editor.setDocumentActive(tab?.kind === 'editor');
+    void activeView.showSnapshot(snapshot);
+    bindVisibleEditors(snapshot, tab);
     if (!tab) {
       titleName.textContent = 'EasyView_Md';
       titleName.removeAttribute('data-file-path');
@@ -136,25 +202,33 @@ tabController = new TabController({
       titleName.removeAttribute('data-file-path');
       workspaceExplorer.setActiveRelativePath(tab.relativePath);
     }
-    void activeView.showTab(tab);
     publishMenuState();
   },
 });
 
 function publishMenuState(): void {
-  const state = editor.getUiState();
+  const state = activeEditor()?.getUiState() ?? {
+    sourceMode: false,
+    outlineVisible: lastOutlineVisible,
+    fullWidth: true,
+    tableWrap: false,
+    viewChanges: false,
+  };
   api.menu.publishState({ ...state, hasActiveDocument: currentTab?.kind === 'editor' });
 }
 
 document.getElementById('workspace-toggle')?.addEventListener('click', () => workspaceExplorer.toggle());
-document.getElementById('outline-toggle')?.addEventListener('click', () => editor.executeCommand('toggleOutline'));
+document.getElementById('outline-toggle')?.addEventListener('click', () => activeEditor()?.executeCommand('toggleOutline'));
 const aiChatToggle = document.getElementById('ai-chat-toggle');
-aiChatToggle?.addEventListener('click', () => editor.executeCommand('toggleAiChat'));
+aiChatToggle?.addEventListener('click', () => commandEditor()?.executeCommand('toggleAiChat'));
 window.addEventListener('easyview-ai-chat-visibility-change', (event) => {
   aiChatToggle?.classList.toggle('active', (event as CustomEvent<boolean>).detail);
 });
 function syncThemeControl(): void {
-  const theme = editor.getThemeState();
+  const theme = {
+    mode: readLocalProductTheme(window.localStorage),
+    depth: activeEditor()?.getThemeState().depth ?? 0.5,
+  };
   const themeDisplay = {
     light: { icon: '☀', label: '亮色主题' },
     gray: { icon: '◐', label: '灰色主题' },
@@ -172,19 +246,24 @@ function syncThemeControl(): void {
 }
 accentToggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17h1.1a1.9 1.9 0 0 0 0-3.8h-.8a1.2 1.2 0 1 1 0-2.4H14a6.5 6.5 0 0 0-2-12.8Z"></path><circle cx="7.7" cy="11" r="1"></circle><circle cx="10.7" cy="7.4" r="1"></circle><circle cx="15.2" cy="8.2" r="1"></circle></svg>';
 function syncAccentControl(): void {
-  const accent = editor.getAccentTheme();
+  const accent = activeEditor()?.getAccentTheme() ?? 'default';
   accentToggle.dataset.accent = accent;
   accentControl.querySelectorAll<HTMLButtonElement>('[data-accent]').forEach((button) => {
     button.classList.toggle('active', button.dataset.accent === accent);
   });
 }
 themeToggle.addEventListener('click', () => {
-  editor.executeCommand('toggleTheme');
-  applyProductThemeFromEditor();
+  const next = cycleDesktopProductTheme(window.localStorage);
+  editors.applyProductTheme(next);
+  stampProductTheme(next);
+  const depth = activeEditor()?.getThemeState().depth ?? 0.5;
+  const detail = { mode: next, isDark: next === 'dark', depth };
+  window.dispatchEvent(new CustomEvent('inlinemd:themeChanged', { detail }));
+  window.dispatchEvent(new CustomEvent('easyview:productThemeChanged', { detail }));
   syncThemeControl();
 });
 themeDepth.addEventListener('input', () => {
-  editor.setThemeDepth(Number(themeDepth.value) / 100);
+  activeEditor()?.setThemeDepth(Number(themeDepth.value) / 100);
   syncThemeControl();
 });
 const openThemePanel = (): void => {
@@ -211,7 +290,7 @@ window.addEventListener('easyview:productThemeChanged', applyProductThemeFromEdi
 accentToggle.addEventListener('click', () => accentControl.classList.toggle('is-open'));
 accentControl.querySelectorAll<HTMLButtonElement>('[data-accent]').forEach((button) => {
   button.addEventListener('click', () => {
-    editor.setAccentTheme(button.dataset.accent as EasyViewAccentTheme);
+    activeEditor()?.setAccentTheme(button.dataset.accent as EasyViewAccentTheme);
     accentControl.classList.remove('is-open');
     syncAccentControl();
   });
@@ -222,12 +301,6 @@ api.document.onChanged((documentState) => {
   titleName.textContent = documentState.fileName;
   titleName.dataset.filePath = documentState.filePath;
   workspaceExplorer.setActiveDocument(documentState.filePath);
-  publishMenuState();
-});
-
-const editorStateSubscription = editor.subscribeUiState((state) => {
-  document.getElementById('outline-toggle')?.classList.toggle('active', state.outlineVisible);
-  workspaceExplorer.setOutlineVisible(state.outlineVisible);
   publishMenuState();
 });
 
@@ -247,16 +320,20 @@ api.menu.onCommand((command) => {
   if (command === 'rename') {
     const currentName = titleName.textContent ?? '';
     const nextName = window.prompt('重命名 Markdown 文件', currentName);
-    if (nextName?.trim()) void api.document.rename(nextName.trim());
+    if (nextName?.trim() && currentTab?.kind === 'editor') {
+      void api.document.rename(nextName.trim(), currentTab.id);
+    }
     return;
   }
-  editor.executeCommand(command);
+  activeEditor()?.executeCommand(command);
 });
 
 void workspaceExplorer.initialize().then(async (state) => {
+  lastOutlineVisible = state.outlineVisible;
+  lastOutlineWidth = state.outlineWidth;
   document.getElementById('workspace-toggle')?.classList.toggle('active', state.explorerVisible);
-  editor.setOutlineVisible(state.outlineVisible);
-  editor.setOutlineWidth(state.outlineWidth);
+  activeEditor()?.setOutlineVisible(state.outlineVisible);
+  activeEditor()?.setOutlineWidth(state.outlineWidth);
   await tabController.initialize();
   publishMenuState();
   applyProductThemeFromEditor();
@@ -272,10 +349,10 @@ void api.app.getTheme().then((result) => {
 
 window.addEventListener('unload', () => {
   themeSubscription.unsubscribe();
-  editorStateSubscription.unsubscribe();
+  editorStateSubscription?.unsubscribe();
   if (themePanelCloseTimer !== undefined) window.clearTimeout(themePanelCloseTimer);
   tabController.dispose();
   workspaceExplorer.dispose();
   activeView.dispose();
-  editor.dispose();
+  editors.dispose();
 }, { once: true });

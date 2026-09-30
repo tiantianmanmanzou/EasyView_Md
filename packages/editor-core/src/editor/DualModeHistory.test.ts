@@ -36,6 +36,16 @@ describe('DualModeHistory', () => {
     expect(history.canCrossModeRedo()).toBe(false);
   });
 
+  it('keeps undo stacks isolated across editor instances', () => {
+    const first = new DualModeHistory();
+    const second = new DualModeHistory();
+    first.recordModeSwitch('# doc A', 'wysiwyg');
+
+    expect(second.canCrossModeUndo()).toBe(false);
+    expect(second.crossModeUndo('# doc B', 'source')).toBeNull();
+    expect(first.crossModeUndo('# doc A edited', 'source')?.markdown).toBe('# doc A');
+  });
+
   it('crossModeRedo restores the most recent undone snapshot', () => {
     const history = new DualModeHistory();
     history.recordModeSwitch('v1', 'wysiwyg');

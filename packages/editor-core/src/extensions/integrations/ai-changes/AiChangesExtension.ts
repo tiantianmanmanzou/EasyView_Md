@@ -15,6 +15,8 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirr
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as ProsemirrorNode, Schema } from 'prosemirror-model';
 import { Extension } from '../../../editor/EditorExtension';
+import { extractBlockLineMap } from '../../../editor/lib/MarkdownParser';
+import type { GitRefreshStatus } from '@easyview/contracts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -33,8 +35,9 @@ interface BlockChange {
   pos: number;
   size: number;
   kind: ChangeKind;
+  startLine?: number;
   showOverview?: boolean;
-  overviewRatio?: number;
+  overviewRatios?: number[];
 }
 
 export interface GitLineRange {
@@ -57,22 +60,27 @@ interface DocumentLineBlockIndex {
 }
 
 interface AiChangesState {
-  /** Current decorations */
-  decorations: DecorationSet;
+  /** Persistent Git decorations derived from the current Git diff. */
+  gitDecorations: DecorationSet;
+  /** Transient decorations for external/AI edits. */
+  aiDecorations: DecorationSet;
   /** Whether external editing is actively happening */
   isActive: boolean;
   /** Timestamp of last external change */
   lastChangeTime: number;
   /** Fingerprints of blocks before external changes started */
   baseFingerprints: BlockFingerprint[];
-  /** Detected changes after debounce */
+  /** Detected transient changes after debounce */
   changes: BlockChange[];
+  /** Persistent block changes from the current Git diff. */
+  gitChanges: BlockChange[];
   /** Latest accepted Git revision */
   gitRevision: number;
   /** Git ranges used to build the current decorations */
   gitLineRanges: GitLineRange[];
   /** Structure identity for the cached block index */
   gitStructureKey: string;
+  gitMarkdown: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -93,7 +101,6 @@ const EXTERNAL_CHANGE_META = 'externalChange';
 const GIT_CHANGES_META = 'gitChanges';
 
 const pluginKey = new PluginKey<AiChangesState>('aiChanges');
-
 // ─── Utility: simple content hash ───────────────────────────────────────────
 
 function hashNode(node: ProsemirrorNode): string {
@@ -178,31 +185,30 @@ function computeBlockChanges(
   return changes;
 }
 
-const documentBlockIndexCache = new WeakMap<ProsemirrorNode, DocumentLineBlockIndex>();
+const documentBlockIndexCache = new WeakMap<ProsemirrorNode, { markdown: string; index: DocumentLineBlockIndex }>();
 
-function getDocumentBlockIndex(doc: ProsemirrorNode): DocumentLineBlockIndex {
+function getDocumentBlockIndex(doc: ProsemirrorNode, markdown: string): DocumentLineBlockIndex {
   const cached = documentBlockIndexCache.get(doc);
-  if (cached) return cached;
+  if (cached?.markdown === markdown) return cached.index;
 
   const blocks: DocumentBlockRange[] = [];
-  let nextLine = 1;
+  const sourceRanges = extractBlockLineMap(markdown);
   const structureParts: string[] = [];
 
-  doc.forEach((node, pos) => {
-    const lineCount = Math.max(1, (node.textContent.match(/\n/g)?.length ?? 0) + 1);
-    const startLine = nextLine;
-    const endLine = startLine + lineCount - 1;
+  doc.forEach((node, pos, ordinal) => {
+    const sourceRange = sourceRanges[ordinal];
+    if (!sourceRange) return;
+    const { startLine, endLine } = sourceRange;
     blocks.push({ startLine, endLine, pos, size: node.nodeSize });
     structureParts.push(`${node.type.name}:${node.nodeSize}:${startLine}-${endLine}`);
-    nextLine = endLine + 1;
   });
 
   const index = {
-    totalLines: Math.max(1, nextLine - 1),
+    totalLines: Math.max(1, markdown.split('\n').length),
     blocks,
     structureKey: structureParts.join('|'),
   };
-  documentBlockIndexCache.set(doc, index);
+  documentBlockIndexCache.set(doc, { markdown, index });
   return index;
 }
 
@@ -248,12 +254,13 @@ function getOverviewRatio(range: GitLineRange, totalLines: number): number {
 
 export function computeGitBlockChanges(
   lineRanges: GitLineRange[],
-  doc: ProsemirrorNode
+  doc: ProsemirrorNode,
+  markdown: string
 ): BlockChange[] {
   const normalizedRanges = normalizeGitRanges(lineRanges);
   if (!normalizedRanges.length) return [];
 
-  const index = getDocumentBlockIndex(doc);
+  const index = getDocumentBlockIndex(doc, markdown);
   const changes: BlockChange[] = [];
   let rangeIndex = 0;
 
@@ -266,13 +273,15 @@ export function computeGitBlockChanges(
     let probe = rangeIndex;
     let hasMatch = false;
     let allAdded = true;
-    let overviewRange: GitLineRange | undefined;
+    let firstChangedLine: number | undefined;
+    const overviewRanges: GitLineRange[] = [];
     while (probe < normalizedRanges.length && normalizedRanges[probe].startLine <= block.endLine) {
       const range = normalizedRanges[probe];
       if (intersects(block, range)) {
         hasMatch = true;
+        firstChangedLine ??= Math.max(block.startLine, Math.min(block.endLine, range.startLine));
         allAdded = allAdded && range.kind === 'added';
-        if (!overviewRange && isPreciseOverviewRange(range, index.totalLines)) overviewRange = range;
+        if (isPreciseOverviewRange(range, index.totalLines)) overviewRanges.push(range);
       }
       probe += 1;
     }
@@ -281,24 +290,10 @@ export function computeGitBlockChanges(
       pos: block.pos,
       size: block.size,
       kind: allAdded ? 'added' : 'modified',
-      showOverview: Boolean(overviewRange),
-      overviewRatio: overviewRange ? getOverviewRatio(overviewRange, index.totalLines) : undefined,
+      startLine: firstChangedLine,
+      showOverview: overviewRanges.length > 0,
+      overviewRatios: overviewRanges.map((range) => getOverviewRatio(range, index.totalLines)),
     });
-  }
-
-  if (!changes.length) {
-    for (const range of normalizedRanges) {
-      const block = index.blocks.find((candidate) => candidate.endLine >= range.startLine) ?? index.blocks[index.blocks.length - 1];
-      if (!block) continue;
-      if (changes.some((change) => change.pos === block.pos)) continue;
-      changes.push({
-        pos: block.pos,
-        size: block.size,
-        kind: range.kind,
-        showOverview: isPreciseOverviewRange(range, index.totalLines),
-        overviewRatio: getOverviewRatio(range, index.totalLines),
-      });
-    }
   }
 
   return changes;
@@ -309,7 +304,6 @@ export function computeGitBlockChanges(
 let indicatorEl: HTMLElement | null = null;
 let toastEl: HTMLElement | null = null;
 let fadeTimeoutId: ReturnType<typeof setTimeout> | null = null;
-let toastTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let debounceTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let scrollMarkerOverlay: HTMLElement | null = null;
 let leftMarkerOverlay: HTMLElement | null = null;
@@ -365,21 +359,19 @@ function layoutScrollMarkers() {
       const domRect = dom.getBoundingClientRect();
       if (change.showOverview !== false) {
         const documentTop = domRect.top - rect.top + scrollArea.scrollTop;
-        const sourceRatio =
-          typeof change.overviewRatio === 'number' && Number.isFinite(change.overviewRatio)
-            ? change.overviewRatio
-            : documentTop / scrollHeight;
-        const markerTop = Math.max(
-          1,
-          Math.min(viewportHeight - 5, Math.round(sourceRatio * viewportHeight))
-        );
+        for (const sourceRatio of change.overviewRatios ?? [documentTop / scrollHeight]) {
+          const markerTop = Math.max(
+            1,
+            Math.min(viewportHeight - 5, Math.round(sourceRatio * viewportHeight))
+          );
 
-        if (!renderedOverviewTops.has(markerTop)) {
-          renderedOverviewTops.add(markerTop);
-          const marker = document.createElement('div');
-          marker.className = `ai-scroll-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
-          marker.style.top = `${markerTop}px`;
-          scrollMarkerOverlay.appendChild(marker);
+          if (!renderedOverviewTops.has(markerTop)) {
+            renderedOverviewTops.add(markerTop);
+            const marker = document.createElement('div');
+            marker.className = `ai-scroll-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
+            marker.style.top = `${markerTop}px`;
+            scrollMarkerOverlay.appendChild(marker);
+          }
         }
       }
 
@@ -483,56 +475,103 @@ function getToastEl(): HTMLElement {
   if (!toastEl) {
     toastEl = document.createElement('div');
     toastEl.className = 'ai-changes-toast';
+    toastEl.setAttribute('role', 'group');
+    toastEl.setAttribute('aria-label', 'Change navigator');
     document.body.appendChild(toastEl);
+    let drag: { pointerId: number; x: number; y: number; left: number; top: number } | null = null;
+    toastEl.addEventListener('pointerdown', (event) => {
+      if ((event.target as HTMLElement).closest('button')) return;
+      const rect = toastEl!.getBoundingClientRect();
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+      toastEl!.setPointerCapture(event.pointerId);
+      toastEl!.classList.add('dragging');
+      event.preventDefault();
+    });
+    toastEl.addEventListener('pointermove', (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const left = Math.max(0, Math.min(window.innerWidth - toastEl!.offsetWidth, drag.left + event.clientX - drag.x));
+      const top = Math.max(0, Math.min(window.innerHeight - toastEl!.offsetHeight, drag.top + event.clientY - drag.y));
+      toastEl!.style.left = `${left}px`;
+      toastEl!.style.top = `${top}px`;
+      toastEl!.style.bottom = 'auto';
+      toastEl!.style.transform = 'none';
+    });
+    const endDrag = (event: PointerEvent) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      drag = null;
+      toastEl?.classList.remove('dragging');
+      toastEl?.releasePointerCapture(event.pointerId);
+    };
+    toastEl.addEventListener('pointerup', endDrag);
+    toastEl.addEventListener('pointercancel', endDrag);
   }
   return toastEl;
 }
 
-function showSummaryToast(changes: BlockChange[], view: EditorView) {
-  const modified = changes.filter((c) => c.kind === 'modified').length;
-  const added = changes.filter((c) => c.kind === 'added').length;
+function hideSummaryToast(): void {
+  toastEl?.classList.remove('visible');
+}
 
-  if (modified === 0 && added === 0) return;
+type RevealChange = (pos: number, startLine: number | undefined, view: EditorView) => void;
 
-  const parts: string[] = [];
-  if (modified > 0) parts.push(`${modified} block${modified > 1 ? 's' : ''} modified`);
-  if (added > 0) parts.push(`${added} block${added > 1 ? 's' : ''} added`);
+function revealInPreview(pos: number, _startLine: number | undefined, view: EditorView): void {
+  const dom = view.nodeDOM(pos);
+  if (dom instanceof HTMLElement) dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
 
+function showSummaryToast(changes: BlockChange[], view: EditorView, revealChange: RevealChange, source: 'git' | 'external' = 'external', gitStatus: GitRefreshStatus = 'ready') {
+  const navigableChanges = [...changes].sort((a, b) => a.pos - b.pos);
+  let currentIndex = 0;
   const el = getToastEl();
   el.innerHTML =
-    '<span class="ai-changes-toast-icon">\u2726</span>' +
-    `<span>${parts.join(', ')}</span>` +
-    '<a class="ai-changes-toast-jump">\u2193 Jump to changes</a>';
+    '<span class="ai-changes-toast-drag" aria-hidden="true"><svg viewBox="0 0 12 20" fill="currentColor"><circle cx="3" cy="4" r="1.2"/><circle cx="9" cy="4" r="1.2"/><circle cx="3" cy="10" r="1.2"/><circle cx="9" cy="10" r="1.2"/><circle cx="3" cy="16" r="1.2"/><circle cx="9" cy="16" r="1.2"/></svg></span>' +
+    '<span class="ai-changes-toast-summary">No changes</span>' +
+    '<span class="ai-changes-toast-count" role="status" aria-live="polite"></span>' +
+    '<span class="ai-changes-toast-controls">' +
+    '<button type="button" class="ai-changes-toast-prev" aria-label="Previous change" title="Previous change"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5-5 5 5"/></svg></button>' +
+    '<button type="button" class="ai-changes-toast-next" aria-label="Next change" title="Next change"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg></button>' +
+    '</span>' +
+    '<button type="button" class="ai-changes-toast-close" aria-label="Close change navigator" title="Close"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 5l10 10M15 5 5 15"/></svg></button>';
 
-  const jumpLink = el.querySelector('.ai-changes-toast-jump') as HTMLElement;
-  if (jumpLink) {
-    jumpLink.addEventListener('click', () => {
-      const firstChange = changes[0];
-      if (firstChange) {
-        const dom = view.nodeDOM(firstChange.pos);
-        if (dom && dom instanceof HTMLElement) {
-          dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }
-      el.classList.remove('visible');
-    });
-  }
+  const summary = el.querySelector<HTMLElement>('.ai-changes-toast-summary')!;
+  summary.textContent = gitStatus === 'loading' ? 'Loading Git changes…'
+    : gitStatus === 'error' ? 'Git read failed' : 'No changes';
+  const count = el.querySelector<HTMLElement>('.ai-changes-toast-count')!;
+  const previous = el.querySelector<HTMLButtonElement>('.ai-changes-toast-prev')!;
+  const next = el.querySelector<HTMLButtonElement>('.ai-changes-toast-next')!;
+  const refresh = () => {
+    summary.hidden = navigableChanges.length > 0;
+    count.hidden = navigableChanges.length === 0;
+    count.textContent = `${navigableChanges.length ? currentIndex + 1 : 0}/${navigableChanges.length}`;
+    count.setAttribute('aria-label', `${source === 'git' ? 'Git' : 'External'} change ${currentIndex + 1} of ${navigableChanges.length}`);
+    previous.disabled = currentIndex === 0;
+    next.disabled = currentIndex >= navigableChanges.length - 1;
+  };
+  const navigate = (index: number) => {
+    if (index < 0 || index >= navigableChanges.length) return;
+    currentIndex = index;
+    const change = navigableChanges[index];
+    revealChange(change.pos, change.startLine, view);
+    refresh();
+  };
+  previous.addEventListener('click', () => navigate(currentIndex - 1));
+  next.addEventListener('click', () => navigate(currentIndex + 1));
+  el.querySelector('.ai-changes-toast-close')!.addEventListener('click', hideSummaryToast);
+  refresh();
 
-  // Show toast
   el.offsetHeight;
   el.classList.add('visible');
+}
 
-  // Auto-hide after 8s
-  if (toastTimeoutId) clearTimeout(toastTimeoutId);
-  toastTimeoutId = setTimeout(() => {
-    el.classList.remove('visible');
-    toastTimeoutId = null;
-  }, HIGHLIGHT_DURATION_MS);
+function showAvailableChanges(gitChanges: BlockChange[], externalChanges: BlockChange[], view: EditorView, revealChange: RevealChange, gitStatus: GitRefreshStatus): void {
+  if (gitStatus !== 'ready') showSummaryToast([], view, revealChange, 'external', gitStatus);
+  else if (gitChanges.length) showSummaryToast(gitChanges, view, revealChange, 'git');
+  else showSummaryToast(externalChanges, view, revealChange);
 }
 
 // ─── Plugin ─────────────────────────────────────────────────────────────────
 
-function createAiChangesPlugin(): Plugin<AiChangesState> {
+function createAiChangesPlugin(shouldShowJumpToast: () => boolean, revealChange: RevealChange, getGitRefreshStatus: () => GitRefreshStatus): Plugin<AiChangesState> {
   let activeView: EditorView | null = null;
 
   return new Plugin<AiChangesState>({
@@ -541,74 +580,54 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
     state: {
       init(_, state): AiChangesState {
         return {
-          decorations: DecorationSet.empty,
+          gitDecorations: DecorationSet.empty,
+          aiDecorations: DecorationSet.empty,
           isActive: false,
           lastChangeTime: 0,
           baseFingerprints: [],
           changes: [],
+          gitChanges: [],
           gitRevision: -1,
           gitLineRanges: [],
           gitStructureKey: '',
+          gitMarkdown: '',
         };
       },
 
       apply(tr: Transaction, prev: AiChangesState, _oldState: EditorState, newState: EditorState): AiChangesState {
         const gitMeta = tr.getMeta(GIT_CHANGES_META);
         if (gitMeta) {
-          const { lineRanges, revision } = gitMeta as { lineRanges: GitLineRange[]; revision: number };
+          const { lineRanges, revision, markdown } = gitMeta as { lineRanges: GitLineRange[]; revision: number; markdown: string };
           if (!shouldAcceptGitRevision(prev.gitRevision, revision)) return prev;
           const normalizedRanges = normalizeGitRanges(lineRanges || []);
-          const nextStructureKey = getDocumentBlockIndex(newState.doc).structureKey;
+          const nextStructureKey = getDocumentBlockIndex(newState.doc, markdown).structureKey;
           if (revision === prev.gitRevision && gitRangesKey(normalizedRanges) === gitRangesKey(prev.gitLineRanges) &&
-              nextStructureKey === prev.gitStructureKey) {
+              nextStructureKey === prev.gitStructureKey && markdown === prev.gitMarkdown) {
             return tr.docChanged
-              ? { ...prev, decorations: prev.decorations.map(tr.mapping, newState.doc) }
+              ? {
+                  ...prev,
+                  gitDecorations: prev.gitDecorations.map(tr.mapping, newState.doc),
+                  aiDecorations: prev.aiDecorations.map(tr.mapping, newState.doc),
+                }
               : prev;
           }
-          const changes = computeGitBlockChanges(normalizedRanges, newState.doc);
-          hideIndicator();
-          if (debounceTimeoutId) clearTimeout(debounceTimeoutId);
-          if (fadeTimeoutId) clearTimeout(fadeTimeoutId);
-          if (toastTimeoutId) clearTimeout(toastTimeoutId);
 
-          if (changes.length === 0) {
-            clearScrollMarkers();
-            return {
-              decorations: DecorationSet.empty,
-              isActive: false,
-              lastChangeTime: 0,
-              baseFingerprints: [],
-              changes: [],
-              gitRevision: revision,
-              gitLineRanges: normalizedRanges,
-              gitStructureKey: nextStructureKey,
-            };
-          }
-
-          const diffDecos: Decoration[] = [];
-          for (const change of changes) {
+          const gitChanges = computeGitBlockChanges(normalizedRanges, newState.doc, markdown);
+          const gitDecos = gitChanges.flatMap((change) => {
             const node = newState.doc.nodeAt(change.pos);
-            if (!node) continue;
-            diffDecos.push(
-              Decoration.node(change.pos, change.pos + change.size, {
-                class: change.kind === 'modified' ? 'block-ai-modified' : 'block-ai-added',
-              })
-            );
-          }
-
-          if (activeView) {
-            renderScrollMarkers(changes, activeView);
-          }
+            return node ? [Decoration.node(change.pos, change.pos + change.size, {
+              class: change.kind === 'modified' ? 'block-ai-modified' : 'block-ai-added',
+            })] : [];
+          });
 
           return {
-            decorations: DecorationSet.create(newState.doc, diffDecos),
-            isActive: false,
-            lastChangeTime: Date.now(),
-            baseFingerprints: [],
-            changes,
+            ...prev,
+            gitDecorations: DecorationSet.create(newState.doc, gitDecos),
+            gitChanges,
             gitRevision: revision,
             gitLineRanges: normalizedRanges,
             gitStructureKey: nextStructureKey,
+            gitMarkdown: markdown,
           };
         }
 
@@ -646,7 +665,8 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
           showIndicator();
 
           return {
-            decorations: DecorationSet.create(newState.doc, shimmerDecos),
+            ...prev,
+            aiDecorations: DecorationSet.create(newState.doc, shimmerDecos),
             isActive: true,
             lastChangeTime: now,
             baseFingerprints: baseFp,
@@ -654,6 +674,7 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             gitRevision: prev.gitRevision,
             gitLineRanges: prev.gitLineRanges,
             gitStructureKey: prev.gitStructureKey,
+            gitMarkdown: prev.gitMarkdown,
           };
         }
 
@@ -665,8 +686,14 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
           hideIndicator();
 
           if (changes.length === 0) {
+            if (activeView && shouldShowJumpToast() && toastEl?.classList.contains('visible')) {
+              showAvailableChanges(prev.gitChanges, [], activeView, revealChange, getGitRefreshStatus());
+            } else {
+              hideSummaryToast();
+            }
             return {
-              decorations: DecorationSet.empty,
+              ...prev,
+              aiDecorations: DecorationSet.empty,
               isActive: false,
               lastChangeTime: 0,
               baseFingerprints: [],
@@ -674,6 +701,7 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
               gitRevision: prev.gitRevision,
               gitLineRanges: prev.gitLineRanges,
               gitStructureKey: prev.gitStructureKey,
+              gitMarkdown: prev.gitMarkdown,
             };
           }
 
@@ -689,17 +717,8 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             );
           }
 
-          // Auto-scroll to first change, then show toast
-          if (activeView) {
-            const firstChange = changes[0];
-            if (firstChange) {
-              const dom = activeView.nodeDOM(firstChange.pos);
-              if (dom && dom instanceof HTMLElement) {
-                dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              }
-            }
-            showSummaryToast(changes, activeView);
-            renderScrollMarkers(changes, activeView);
+          if (activeView && shouldShowJumpToast()) {
+            showAvailableChanges(prev.gitChanges, changes, activeView, revealChange, getGitRefreshStatus());
           }
 
           // Schedule fadeout
@@ -713,7 +732,8 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
           }, HIGHLIGHT_DURATION_MS);
 
           return {
-            decorations: DecorationSet.create(newState.doc, diffDecos),
+            ...prev,
+            aiDecorations: DecorationSet.create(newState.doc, diffDecos),
             isActive: false,
             lastChangeTime: prev.lastChangeTime,
             baseFingerprints: [],
@@ -721,6 +741,7 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
             gitRevision: prev.gitRevision,
             gitLineRanges: prev.gitLineRanges,
             gitStructureKey: prev.gitStructureKey,
+            gitMarkdown: prev.gitMarkdown,
           };
         }
 
@@ -749,45 +770,49 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
 
           return {
             ...prev,
-            decorations: DecorationSet.create(newState.doc, decos),
+            aiDecorations: DecorationSet.create(newState.doc, decos),
           };
         }
 
         // Clear all decorations
         if (tr.getMeta('aiChangesClear')) {
-          clearScrollMarkers();
           return {
-            decorations: DecorationSet.empty,
+            ...prev,
+            aiDecorations: DecorationSet.empty,
             isActive: false,
             lastChangeTime: 0,
             baseFingerprints: [],
             changes: [],
-            gitRevision: prev.gitRevision,
-            gitLineRanges: [],
-            gitStructureKey: '',
           };
         }
 
         // Rebuild Git decorations only when document structure changed.
         if (tr.docChanged && prev.gitLineRanges.length > 0) {
-          const nextIndex = getDocumentBlockIndex(newState.doc);
+          const nextIndex = getDocumentBlockIndex(newState.doc, prev.gitMarkdown);
           if (nextIndex.structureKey !== prev.gitStructureKey) {
-            const changes = computeGitBlockChanges(prev.gitLineRanges, newState.doc);
+            const changes = computeGitBlockChanges(prev.gitLineRanges, newState.doc, prev.gitMarkdown);
             const decos = changes.flatMap((change) => {
               const node = newState.doc.nodeAt(change.pos);
               return node ? [Decoration.node(change.pos, change.pos + change.size, {
                 class: change.kind === 'modified' ? 'block-ai-modified' : 'block-ai-added',
               })] : [];
             });
-            return { ...prev, decorations: DecorationSet.create(newState.doc, decos), changes, gitStructureKey: nextIndex.structureKey };
+            return {
+              ...prev,
+              gitDecorations: DecorationSet.create(newState.doc, decos),
+              gitChanges: changes,
+              gitStructureKey: nextIndex.structureKey,
+              aiDecorations: prev.aiDecorations.map(tr.mapping, newState.doc),
+            };
           }
         }
 
         // Map existing decorations through document changes
-        if (tr.docChanged && prev.decorations !== DecorationSet.empty) {
+        if (tr.docChanged && (prev.gitDecorations !== DecorationSet.empty || prev.aiDecorations !== DecorationSet.empty)) {
           return {
             ...prev,
-            decorations: prev.decorations.map(tr.mapping, tr.doc),
+            gitDecorations: prev.gitDecorations.map(tr.mapping, tr.doc),
+            aiDecorations: prev.aiDecorations.map(tr.mapping, tr.doc),
           };
         }
 
@@ -797,19 +822,31 @@ function createAiChangesPlugin(): Plugin<AiChangesState> {
 
     props: {
       decorations(state) {
-        return pluginKey.getState(state)?.decorations ?? DecorationSet.empty;
+        const pluginState = pluginKey.getState(state);
+        if (!pluginState) return DecorationSet.empty;
+        return pluginState.gitDecorations.add(state.doc, pluginState.aiDecorations.find());
       },
     },
 
     view(view) {
       activeView = view;
       return {
+        update(view, previousState) {
+          const state = pluginKey.getState(view.state);
+          const previous = pluginKey.getState(previousState);
+          if (state && (state.changes !== previous?.changes || state.gitChanges !== previous?.gitChanges || view.state.doc !== previousState.doc)) {
+            renderScrollMarkers(state.gitChanges, view);
+          }
+          if (state && state.gitChanges !== previous?.gitChanges
+            && toastEl?.classList.contains('visible') && shouldShowJumpToast()) {
+            showAvailableChanges(state.gitChanges, state.changes, view, revealChange, getGitRefreshStatus());
+          }
+        },
         destroy() {
           activeView = null;
           hideIndicator();
           if (debounceTimeoutId) clearTimeout(debounceTimeoutId);
           if (fadeTimeoutId) clearTimeout(fadeTimeoutId);
-          if (toastTimeoutId) clearTimeout(toastTimeoutId);
           if (indicatorEl) {
             indicatorEl.remove();
             indicatorEl = null;
@@ -832,11 +869,31 @@ export const AI_CHANGE_META = EXTERNAL_CHANGE_META;
 export const GIT_CHANGE_META = GIT_CHANGES_META;
 
 export class AiChangesExtension extends Extension {
+  constructor(
+    private readonly shouldShowJumpToast: () => boolean = () => true,
+    private readonly revealChange: RevealChange = revealInPreview,
+    private readonly getGitRefreshStatus: () => GitRefreshStatus = () => 'ready',
+  ) {
+    super();
+  }
+
+  hideJumpToast(): void { hideSummaryToast(); }
+
+  showCurrentJumpToast(view: EditorView | null): void {
+    if (!view || !this.shouldShowJumpToast()) return;
+    const state = pluginKey.getState(view.state);
+    showAvailableChanges(state?.gitChanges ?? [], state?.changes ?? [], view, this.revealChange, this.getGitRefreshStatus());
+  }
+
+  refreshVisibleJumpToast(view: EditorView | null): void {
+    if (toastEl?.classList.contains('visible')) this.showCurrentJumpToast(view);
+  }
+
   get name() {
     return 'aiChanges';
   }
 
   plugins(_schema: Schema) {
-    return [createAiChangesPlugin()];
+    return [createAiChangesPlugin(this.shouldShowJumpToast, this.revealChange, this.getGitRefreshStatus)];
   }
 }

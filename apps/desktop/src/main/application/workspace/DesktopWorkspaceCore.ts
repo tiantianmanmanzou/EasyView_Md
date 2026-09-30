@@ -248,6 +248,107 @@ export class DesktopWorkspaceCore {
     };
   }
 
+  /** Copy a file or folder from outside the workspace into a tree directory. */
+  async importExternal(sourcePath: string, targetParentRelativePath: string): Promise<WorkspaceEntry> {
+    const root = this.requireRoot();
+    const targetParent = normalizeWorkspaceRelativePath(targetParentRelativePath);
+    const parentPath = this.resolveAbsolutePath(targetParent);
+    const sourceStat = await fs.lstat(sourcePath);
+    if (sourceStat.isSymbolicLink()) {
+      throw new WorkspaceOperationError('SYMLINK_NOT_TRAVERSABLE', '暂不支持导入符号链接');
+    }
+
+    const parentStat = await fs.lstat(parentPath);
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+      throw new WorkspaceOperationError('NOT_DIRECTORY', '目标目录不可用');
+    }
+    const realParent = await fs.realpath(parentPath);
+    this.ensureWithinRoot(root, realParent);
+
+    const realSource = sourceStat.isDirectory() ? await fs.realpath(sourcePath) : path.resolve(sourcePath);
+    const realRoot = await fs.realpath(root);
+    if (realSource === realRoot) {
+      throw new WorkspaceOperationError('INVALID_PATH', '不能将工作区根目录导入自身');
+    }
+    if (sourceStat.isDirectory() && (realParent === realSource || realParent.startsWith(`${realSource}${path.sep}`))) {
+      throw new WorkspaceOperationError('INVALID_PATH', '不能导入到自身或其子目录中');
+    }
+
+    const targetPath = await uniqueCopyTargetPath(realParent, path.basename(sourcePath), sourceStat.isDirectory());
+    this.ensureWithinRoot(root, targetPath);
+    await fs.cp(sourcePath, targetPath, { recursive: true, errorOnExist: true, force: false });
+
+    const relativePath = normalizeWorkspaceRelativePath(path.relative(root, targetPath));
+    this.orderState.noteCreated(relativePath);
+    this.model.invalidateDirectory(DESKTOP_WORKSPACE_ROOT_ID, targetParent);
+    this.schedulePersistOrderConfig();
+    return {
+      id: createWorkspaceNodeId(DESKTOP_WORKSPACE_ROOT_ID, relativePath),
+      rootId: DESKTOP_WORKSPACE_ROOT_ID,
+      relativePath,
+      name: path.basename(targetPath),
+      kind: sourceStat.isDirectory() ? 'directory' : 'file',
+    };
+  }
+
+  async importExternalItems(
+    targetParentRelativePath: string,
+    items: ReadonlyArray<{ kind: 'file' | 'directory'; relativePath: string; data?: Uint8Array }>,
+  ): Promise<WorkspaceEntry | undefined> {
+    const root = this.requireRoot();
+    const targetParent = normalizeWorkspaceRelativePath(targetParentRelativePath);
+    const parentPath = this.resolveAbsolutePath(targetParent);
+    const parentStat = await fs.lstat(parentPath);
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+      throw new WorkspaceOperationError('NOT_DIRECTORY', '目标目录不可用');
+    }
+    const realParent = await fs.realpath(parentPath);
+    this.ensureWithinRoot(root, realParent);
+
+    const rename = new Map<string, string>();
+    const topLevels = [...new Set(items.map((item) => item.relativePath.split('/')[0] ?? item.relativePath))];
+    for (const name of topLevels) {
+      const isDirectory = items.some((item) => (
+        (item.relativePath === name && item.kind === 'directory')
+        || item.relativePath.startsWith(`${name}/`)
+      ));
+      const unique = await uniqueCopyTargetPath(realParent, name, isDirectory);
+      rename.set(name, path.basename(unique));
+    }
+
+    const remapped = items
+      .map((item) => ({ ...item, relativePath: applyTopLevelRename(item.relativePath, rename) }))
+      .sort((left, right) => {
+        if (left.kind === right.kind) return left.relativePath.localeCompare(right.relativePath);
+        return left.kind === 'directory' ? -1 : 1;
+      });
+
+    let last: WorkspaceEntry | undefined;
+    for (const item of remapped) {
+      const relativePath = normalizeWorkspaceRelativePath(item.relativePath);
+      const createdRelativePath = [targetParent, relativePath].filter(Boolean).join('/');
+      const targetPath = this.resolveAbsolutePath(createdRelativePath);
+      this.ensureWithinRoot(root, targetPath);
+      if (item.kind === 'directory') {
+        await fs.mkdir(targetPath, { recursive: true });
+      } else {
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.writeFile(targetPath, item.data ?? new Uint8Array());
+      }
+      this.orderState.noteCreated(createdRelativePath);
+      last = {
+        id: createWorkspaceNodeId(DESKTOP_WORKSPACE_ROOT_ID, createdRelativePath),
+        rootId: DESKTOP_WORKSPACE_ROOT_ID,
+        relativePath: createdRelativePath,
+        name: path.basename(targetPath),
+        kind: item.kind,
+      };
+    }
+    this.model.invalidateDirectory(DESKTOP_WORKSPACE_ROOT_ID, targetParent);
+    this.schedulePersistOrderConfig();
+    return last;
+  }
+
   resourcePaths(relativePath: string): WorkspaceResourcePaths {
     const root = this.requireRoot();
     const normalized = normalizeWorkspaceRelativePath(relativePath);
@@ -366,6 +467,12 @@ export function desktopWorkspaceErrorMessage(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : '工作区操作失败';
+}
+
+function applyTopLevelRename(relativePath: string, rename: ReadonlyMap<string, string>): string {
+  const top = relativePath.split('/')[0] ?? relativePath;
+  const next = rename.get(top) ?? top;
+  return relativePath === top ? next : `${next}${relativePath.slice(top.length)}`;
 }
 
 async function uniqueCopyTargetPath(parentPath: string, baseName: string, isDirectory: boolean): Promise<string> {

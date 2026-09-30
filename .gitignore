@@ -1,6 +1,7 @@
 node_modules/
 *.vsix
 .DS_Store
+
 # Orphaned root-level build bundle (should only ever exist under apps/*/dist or apps/*/out,
 # both already ignored below). Re-added here as a guard after removing the ~3MB/79k-line
 # copy that had been accidentally committed and repeatedly re-committed at the repo root.
@@ -9,24 +10,21 @@ out/
 coverage/
 playwright-report/
 test-results/
-协同评估流程设计.md
-解说视频-.mp4
-Sample.md
-Sample.assets/
-Electron跨平台APP改造执行方案.md
-跨平台架构功能重构与问题修复方案.md
 dist/
 .github/
 .cursor/
 .vscode-test/
-笔记.md
-🌟测试文件夹
-.cursor
-.cursor/rules
-.easyview
-.vscode
-.vscode-test
+.easyview/
+.vscode/
+.tmp/
+
+# Root-level personal notes / non-code materials (not part of the product tree)
 z笔记/
-tests
-test-results
-🌟测试文件夹
+笔记.md
+🌟测试文件夹/
+解说视频-.mp4
+协同评估流程设计.md
+Sample.md
+Sample.assets/
+Electron跨平台APP改造执行方案.md
+跨平台架构功能重构与问题修复方案.md

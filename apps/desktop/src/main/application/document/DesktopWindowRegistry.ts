@@ -1,11 +1,13 @@
 import type { WebContents } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { DesktopTabRegistry } from './DesktopTabRegistry';
+import type { DesktopWindowContext } from '../host/windowContext';
 
 export interface DesktopWindowSession {
   id: string;
   webContentsId: number;
   tabs: DesktopTabRegistry;
+  context: DesktopWindowContext;
 }
 
 /** Routes every renderer request by webContents instead of a process-global window. */
@@ -13,8 +15,8 @@ export class DesktopWindowRegistry {
   private readonly byWebContents = new Map<number, DesktopWindowSession>();
   private readonly byId = new Map<string, DesktopWindowSession>();
 
-  register(webContents: Pick<WebContents, 'id'>, tabs = new DesktopTabRegistry(randomUUID())): DesktopWindowSession {
-    const session: DesktopWindowSession = { id: tabs.snapshot().windowId, webContentsId: webContents.id, tabs };
+  register(webContents: Pick<WebContents, 'id'>, context: DesktopWindowContext): DesktopWindowSession {
+    const session: DesktopWindowSession = { id: context.id, webContentsId: webContents.id, tabs: context.tabs, context };
     this.byWebContents.set(webContents.id, session);
     this.byId.set(session.id, session);
     return session;
@@ -32,4 +34,6 @@ export class DesktopWindowRegistry {
   }
 
   get(windowId: string): DesktopWindowSession | null { return this.byId.get(windowId) ?? null; }
+
+  values(): DesktopWindowSession[] { return [...this.byId.values()]; }
 }

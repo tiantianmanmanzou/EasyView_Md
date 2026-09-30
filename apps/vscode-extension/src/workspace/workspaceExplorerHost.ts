@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { resolvePreviewRoute } from '@easyview/contracts/preview';
 import { isPhase1PreviewRoute } from '@easyview/preview-ui/phase1';
 import {
@@ -22,6 +24,8 @@ const VIEW_CONTAINER_COMMAND = 'workbench.view.extension.easyviewMd-workspacePan
 const FOCUS_ON_STARTUP_SETTING = 'workspace.focusFilesOnStartup';
 /** Wait for host sidebar restore (Cursor/VS Code) before taking focus. */
 const FOCUS_ON_STARTUP_DELAY_MS = 250;
+const WEBVIEW_READY_TIMEOUT_MS = 5_000;
+const WEBVIEW_READY_RETRIES = 2;
 const MARKDOWN_EXTENSION = /\.(md|markdown|mdx)$/i;
 
 export function registerWorkspaceExplorer(context: vscode.ExtensionContext): vscode.Disposable {
@@ -165,6 +169,9 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
   private revealTimer: NodeJS.Timeout | undefined;
   private readonly pendingFileEvents = new Map<string, vscode.Uri>();
   private fileEventTimer: NodeJS.Timeout | undefined;
+  private readyTimer: NodeJS.Timeout | undefined;
+  private readyAttempts = 0;
+  private viewReady = false;
   private readonly expandedRelativePaths = new Set<string>();
   private readonly entryKindByPath = new Map<string, VscodeWorkspaceEntry['kind']>();
 
@@ -177,6 +184,7 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
     this.watcher?.dispose();
     if (this.revealTimer) clearTimeout(this.revealTimer);
     if (this.fileEventTimer) clearTimeout(this.fileEventTimer);
+    if (this.readyTimer) clearTimeout(this.readyTimer);
   }
 
   initialize(): void {
@@ -191,6 +199,8 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
     _token: vscode.CancellationToken,
   ): void {
     this.view = webviewView;
+    this.viewReady = false;
+    this.readyAttempts = 0;
     webviewView.title = this.rootFolder?.name || 'Files';
 
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
@@ -201,15 +211,34 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
         ...workspaceFolders.map((folder) => folder.uri),
       ],
     };
-    webviewView.webview.html = getHtmlForWebview(webviewView.webview, this.context.extensionUri);
-
     webviewView.webview.onDidReceiveMessage((message: unknown) => {
       void this.handleRequest(message);
     });
+    this.watchWebviewReady(webviewView);
+    webviewView.webview.html = getHtmlForWebview(webviewView.webview, this.context.extensionUri);
 
     webviewView.onDidDispose(() => {
-      if (this.view === webviewView) this.view = undefined;
+      if (this.view === webviewView) {
+        this.view = undefined;
+        if (this.readyTimer) clearTimeout(this.readyTimer);
+        this.readyTimer = undefined;
+      }
     });
+  }
+
+  private watchWebviewReady(view: vscode.WebviewView): void {
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => {
+      this.readyTimer = undefined;
+      if (this.view !== view || this.viewReady) return;
+      if (this.readyAttempts >= WEBVIEW_READY_RETRIES) {
+        void vscode.window.showErrorMessage('EasyView_Md Files could not load its view. Reload the window to retry.');
+        return;
+      }
+      this.readyAttempts += 1;
+      this.watchWebviewReady(view);
+      view.webview.html = getHtmlForWebview(view.webview, this.context.extensionUri);
+    }, WEBVIEW_READY_TIMEOUT_MS);
   }
 
   getRootUri(): vscode.Uri | undefined {
@@ -471,8 +500,27 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
   private async dispatchRequest(message: WorkspaceExplorerRequest): Promise<void> {
     switch (message.type) {
       case 'ready':
+        this.viewReady = true;
+        if (this.readyTimer) clearTimeout(this.readyTimer);
+        this.readyTimer = undefined;
         this.updateRoot({ bootstrap: true });
         return;
+      case 'focusContextMenu': {
+        // macOS right-clicks reach inactive windows without activating the app.
+        // Focus the native application before transferring focus to its webview.
+        if (process.platform === 'darwin') {
+          const bundleEnd = process.execPath.indexOf('.app/');
+          if (bundleEnd < 0) throw new Error('Cannot locate the editor application bundle.');
+          const application = process.execPath.slice(0, bundleEnd + 4);
+          await promisify(execFile)('/usr/bin/osascript', [
+            '-e', `tell application ${JSON.stringify(application)} to activate`,
+          ]);
+        }
+        this.view?.show(false);
+        await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
+        this.postEvent({ type: 'opResult', requestId: message.requestId, ok: true });
+        return;
+      }
       case 'listChildren':
         await this.handleListChildren(message.requestId, message.relativePath);
         return;
@@ -523,6 +571,9 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
         return;
       case 'paste':
         await this.handlePaste(message);
+        return;
+      case 'importExternal':
+        await this.handleImportExternal(message);
         return;
       case 'copyPath':
         await this.handleCopyPath(message.relativePaths);
@@ -838,6 +889,46 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
+  private async handleImportExternal(
+    message: Extract<WorkspaceExplorerRequest, { type: 'importExternal' }>,
+  ): Promise<void> {
+    const root = this.requireRoot();
+    try {
+      let lastEntry: VscodeWorkspaceEntry | undefined;
+      const sourceUris = message.sourceUris ?? [];
+      if (sourceUris.length > 0) {
+        for (const raw of sourceUris) {
+          lastEntry = await this.treeService.importExternalUri(
+            root,
+            uriFromExternalDropValue(raw),
+            message.targetParentRelativePath,
+          );
+        }
+      } else {
+        const items = (message.items ?? []).map((item) => ({
+          kind: item.kind,
+          relativePath: item.relativePath,
+          ...(item.dataBase64 ? { data: Uint8Array.from(Buffer.from(item.dataBase64, 'base64')) } : {}),
+        }));
+        lastEntry = await this.treeService.importExternalItems(root, message.targetParentRelativePath, items);
+      }
+      if (!lastEntry) throw new Error('No files were dropped.');
+      this.postEvent({
+        type: 'opResult',
+        requestId: message.requestId,
+        ok: true,
+        entry: toExplorerEntry(lastEntry),
+      });
+    } catch (error) {
+      this.postEvent({
+        type: 'opResult',
+        requestId: message.requestId,
+        ok: false,
+        message: errorMessage(error),
+      });
+    }
+  }
+
   private async handleCopyPath(relativePaths: readonly string[]): Promise<void> {
     const root = this.requireRoot();
     const texts = relativePaths.map((relativePath) => {
@@ -891,6 +982,14 @@ function toExplorerEntry(entry: VscodeWorkspaceEntry): WorkspaceExplorerEntry {
     ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
     ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
   };
+}
+
+function uriFromExternalDropValue(raw: string): vscode.Uri {
+  const value = raw.trim();
+  if (/^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\') || value.startsWith('/')) {
+    return vscode.Uri.file(value);
+  }
+  return vscode.Uri.parse(value);
 }
 
 function uriFromRelativePath(root: vscode.Uri, relativePath: string): vscode.Uri {

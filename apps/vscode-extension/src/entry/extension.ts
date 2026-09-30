@@ -101,6 +101,12 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(NativeMarkdownDecorator.register(context, mermaidRenderer));
   context.subscriptions.push(MarkdownEditorProvider.register(context));
   context.subscriptions.push(FilePreviewProvider.register(context));
+  context.subscriptions.push(
+    vscode.commands.registerCommand('easyviewMd.debug.htmlPreviewState', () => FilePreviewProvider.getHtmlPreviewState()),
+    vscode.commands.registerCommand('easyviewMd.debug.htmlPreviewClick', (text: unknown) => (
+      typeof text === 'string' && text ? FilePreviewProvider.clickHtmlPreviewMenu(text) : false
+    )),
+  );
   context.subscriptions.push(registerNativeMarkdownImagePaste());
   context.subscriptions.push(registerWordToMarkdownCommand(context));
   context.subscriptions.push(registerPdfToMarkdownCommand(context));
@@ -250,8 +256,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('easyviewMd.openNativeEditor', async (uri?: vscode.Uri) => {
-      const activeEditor = vscode.window.activeTextEditor;
-      const rawTargetUri = uri ?? activeEditor?.document.uri;
+      const rawTargetUri = uri ?? resolveCurrentMarkdownUri();
 
       if (rawTargetUri && /\.(md|markdown|mdx)$/i.test(rawTargetUri.fsPath)) {
         const diskUri = toDiskFileUri(
@@ -260,13 +265,20 @@ export function activate(context: vscode.ExtensionContext) {
             : rawTargetUri,
         );
         try {
-          const document = await vscode.workspace.openTextDocument(diskUri);
-          await ensureNativeMarkdownEditorFont(document);
-          const editor = await vscode.window.showTextDocument(document, {
+          // Open the built-in text editor in the workbench. Cursor can render a
+          // large file there even when it refuses to synchronize that file's
+          // TextDocument to extensions. Opening the TextDocument here fails
+          // before the editor is shown, and vscode.open may choose another
+          // custom editor from workbench.editorAssociations.
+          await vscode.commands.executeCommand('vscode.openWith', diskUri, 'default', {
             preview: false,
             preserveFocus: false,
           });
-          await suppressConflictingMarkdownInlineDecorations(editor);
+          const editor = vscode.window.activeTextEditor;
+          if (editor && sameMarkdownResource(editor.document.uri, diskUri)) {
+            await ensureNativeMarkdownEditorFont(editor.document);
+            await suppressConflictingMarkdownInlineDecorations(editor);
+          }
           return editor;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -274,8 +286,7 @@ export function activate(context: vscode.ExtensionContext) {
             path: diskUri.fsPath,
             message,
           });
-          // Workbench open does not require ext-host TextDocument sync.
-          await vscode.commands.executeCommand('vscode.open', diskUri, { preview: false });
+          void vscode.window.showErrorMessage(`无法用原生 Markdown 编辑器打开文件：${message}`);
           return undefined;
         }
       }

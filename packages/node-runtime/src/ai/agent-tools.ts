@@ -102,7 +102,10 @@ async function gitBaseline(rootPath: string, relativePath: string): Promise<{ re
     return { repository: true, status: status.trimEnd(), diff: diff.trimEnd() };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    const exitCode = typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : undefined;
+    const rawExitCode = (error as { code?: unknown }).code;
+    const exitCode = typeof rawExitCode === 'number' || typeof rawExitCode === 'string'
+      ? Number(rawExitCode)
+      : undefined;
     if (code === 'ENOENT' || exitCode === 128) return { repository: false, status: '', diff: '' };
     throw error;
   }

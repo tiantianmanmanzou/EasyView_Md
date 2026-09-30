@@ -2,7 +2,9 @@ import type { EditorSourceDocumentRequest } from '@easyview/contracts';
 
 export type VscodeEditorHostActionMessage =
   | { type: 'vscode.openSourceDocument'; request: EditorSourceDocumentRequest }
-  | { type: 'vscode.persistOpenEditorShortcut'; shortcut: string };
+  | { type: 'vscode.persistOpenEditorShortcut'; shortcut: string }
+  | { type: 'vscode.insertIntoITerm'; prompt: string }
+  | { type: 'vscode.openChatWithPrompt'; prompt: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -12,6 +14,9 @@ export function isVscodeEditorHostActionMessage(value: unknown): value is Vscode
   if (!isRecord(value)) return false;
   if (value.type === 'vscode.persistOpenEditorShortcut') {
     return typeof value.shortcut === 'string' && value.shortcut.trim().length > 0;
+  }
+  if (value.type === 'vscode.openChatWithPrompt' || value.type === 'vscode.insertIntoITerm') {
+    return typeof value.prompt === 'string' && value.prompt.trim().length > 0;
   }
   if (value.type !== 'vscode.openSourceDocument' || !isRecord(value.request)) return false;
   const request = value.request;

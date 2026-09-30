@@ -10,7 +10,7 @@ const entrySource = fs.readFileSync(path.resolve(__dirname, '../../adapters/vsco
 
 describe('VS Code markdown sync host boundary', () => {
   it('uses one session with canonical patches and deterministic lifecycle cleanup', () => {
-    expect(providerSource).toContain('retainContextWhenHidden: false');
+    expect(providerSource).toContain('retainContextWhenHidden: true');
     expect(providerSource).toContain('supportsMultipleEditorsPerDocument: false');
     expect(providerSource).toContain('MarkdownEditorSession');
     expect(providerSource).not.toContain('setInterval(');
@@ -19,6 +19,8 @@ describe('VS Code markdown sync host boundary', () => {
     expect(sessionSource).toContain('applyPatches');
     expect(sessionSource).toContain('setTimeout');
     expect(sessionSource).toContain('this.sync.dispose()');
+    expect(sessionSource).toContain('documentActivate');
+    expect(sessionSource).not.toContain('if (this.visible) this.post(message)');
     expect(adapterSource).toContain('canonicalToRawRange');
     expect(adapterSource).toContain('expectedRawContent');
   });

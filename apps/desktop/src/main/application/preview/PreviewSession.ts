@@ -84,6 +84,29 @@ export class PreviewSessionStore {
     return { kind: 'file', filePath: session.realPath, size: session.size, mimeType: session.route.mimeType };
   }
 
+  async resolveRelatedContent(contentId: string, assetPath: string): Promise<PreviewContent> {
+    const session = await this.requireFresh(contentId);
+    if (session.route.route !== 'html') {
+      throw new PreviewSessionError('invalid', '当前预览不支持附属资源');
+    }
+    if (typeof assetPath !== 'string' || !assetPath || assetPath.includes('\0')) {
+      throw new PreviewSessionError('invalid', '预览资源路径无效');
+    }
+    if (path.posix.normalize(assetPath.replace(/\\/g, '/')) === session.fileName) {
+      return this.resolveContent(contentId);
+    }
+    const candidate = path.resolve(path.dirname(session.realPath), assetPath);
+    ensureWithinRoot(session.rootPath, candidate);
+    const lstat = await fs.lstat(candidate);
+    if (lstat.isSymbolicLink() || !lstat.isFile()) {
+      throw new PreviewSessionError('permission', '预览资源不可读取');
+    }
+    const resolved = await fs.realpath(candidate);
+    ensureWithinRoot(session.rootPath, resolved);
+    const stat = await fs.stat(resolved);
+    return { kind: 'file', filePath: resolved, size: stat.size, mimeType: mimeForRelatedHtmlAsset(path.basename(resolved)) };
+  }
+
   async filePath(sessionId: string): Promise<string> {
     return (await this.requireFresh(sessionId)).realPath;
   }
@@ -206,7 +229,9 @@ async writeBytes(sessionId: string, bytes: Buffer): Promise<PreviewDescriptor> {
       size: session.size,
       mtimeMs: session.mtimeMs,
       mimeType: session.route.mimeType,
-      contentUrl: `easyview-preview://content/${session.id}`,
+      contentUrl: session.route.route === 'html'
+        ? `easyview-preview://content/${session.id}/${encodeURIComponent(session.fileName)}`
+        : `easyview-preview://content/${session.id}`,
     };
   }
 }
@@ -255,4 +280,33 @@ function formatMiB(bytes: number): string {
 
 function stripUtf8Bom(content: string): string {
   return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+}
+
+function mimeForRelatedHtmlAsset(fileName: string): string {
+  switch (path.extname(fileName).toLowerCase()) {
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.js':
+    case '.mjs':
+    case '.cjs':
+      return 'text/javascript; charset=utf-8';
+    case '.json':
+    case '.jsonc':
+    case '.map':
+      return 'application/json; charset=utf-8';
+    case '.wasm':
+      return 'application/wasm';
+    case '.woff':
+      return 'font/woff';
+    case '.woff2':
+      return 'font/woff2';
+    case '.ttf':
+      return 'font/ttf';
+    case '.otf':
+      return 'font/otf';
+    default: {
+      const routed = resolvePreviewRoute(fileName);
+      return routed?.mimeType ?? 'application/octet-stream';
+    }
+  }
 }

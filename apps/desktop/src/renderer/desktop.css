@@ -129,10 +129,17 @@ body {
 }
 #desktop-workbench { min-height: 0; flex: 1; display: flex; overflow: hidden; }
 #desktop-center-pane { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-#desktop-main-row { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; }
-#desktop-active-content { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; }
+#desktop-split-root { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#desktop-main-row, .desktop-group-content { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; }
+#desktop-active-content, .desktop-active-content { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; }
+.desktop-editor-group { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.desktop-split { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; }
+.desktop-split[data-orientation="horizontal"] { flex-direction: row; }
+.desktop-split[data-orientation="vertical"] { flex-direction: column; }
+.desktop-split-pane { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; }
+.desktop-split-sash { flex: 0 0 4px; background: var(--vscode-panel-border); }
 #desktop-ai-chat-host { min-width: 0; min-height: 0; height: 100%; flex: 0 0 auto; display: flex; overflow: hidden; }
-#editor-body, #file-preview-root {
+#desktop-editor-mount, .desktop-editor-mount, #editor-body, #file-preview-root, .desktop-preview-root {
   min-width: 0;
   min-height: 0;
   width: 100%;
@@ -145,9 +152,22 @@ body {
   box-shadow: none;
   scrollbar-gutter: auto;
 }
-#editor-body[hidden], #file-preview-root[hidden] { display: none !important; }
-#desktop-tab-bar { display: flex; min-width: 0; height: 35px; flex: 0 0 35px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); scrollbar-width: thin; }
-#desktop-tab-bar[hidden] { display: none !important; }
+#desktop-editor-mount, .desktop-editor-mount {
+  display: flex;
+  flex-direction: column;
+}
+#desktop-editor-mount[hidden], .desktop-editor-mount[hidden], #editor-body[hidden], #file-preview-root[hidden], .desktop-preview-root[hidden] { display: none !important; }
+.desktop-editor-session {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+.desktop-editor-session[hidden] { display: none !important; }
+#desktop-tab-bar, .desktop-tab-bar { display: flex; min-width: 0; height: 35px; flex: 0 0 35px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); scrollbar-width: thin; }
+#desktop-tab-bar[hidden], .desktop-tab-bar[hidden] { display: none !important; }
 .desktop-tab { position: relative; display: flex; min-width: 120px; max-width: 240px; flex: 0 0 auto; border-right: 1px solid var(--vscode-panel-border); color: var(--vscode-editorWidget-foreground); background: var(--vscode-editorWidget-background); }
 .desktop-tab.active { color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); box-shadow: inset 0 2px 0 var(--mdpre-accent, var(--vscode-focusBorder)); }
 .desktop-tab-activate { display: flex; min-width: 0; flex: 1; align-items: center; gap: 7px; border: 0; padding: 0 6px 0 10px; color: inherit; background: transparent; font: inherit; cursor: pointer; }

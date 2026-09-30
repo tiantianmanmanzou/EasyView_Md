@@ -11,7 +11,8 @@
     "./frontmatter": "./src/parsing/frontmatter.ts",
     "./table-style-metadata": "./src/serialization/table-style-metadata.ts",
     "./pandoc-highlight-markup": "./src/transforms/pandoc-highlight-markup.ts",
-    "./document": "./src/document/index.ts"
+    "./document": "./src/document/index.ts",
+    "./git-diff": "./src/git-diff.ts"
   },
   "files": [
     "src",
@@ -22,12 +23,14 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "diff": "^7.0.0",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.1",
     "prosemirror-model": "^1.25.4",
     "prosemirror-tables": "^1.8.1"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/js-yaml": "^4.0.9"
   }
 }

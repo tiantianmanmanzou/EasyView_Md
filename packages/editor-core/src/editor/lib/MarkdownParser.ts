@@ -14,7 +14,7 @@ import { schema } from '../EditorSchema';
 import { parseMarkdownWithFrontmatter } from '@easyview/markdown-core/frontmatter';
 import { applyCustomRules } from './MarkdownItRules';
 import { applyTableRules } from './MarkdownTableRules';
-import { parseMarkdownWithHtmlTables } from './HtmlTableParser';
+import { parseMarkdownWithHtmlTables, splitMarkdownByHtmlTables } from './HtmlTableParser';
 import { tokenMapping } from './MarkdownTokenMapping';
 import { applyEasyViewTableMeta, stripEasyViewTableMeta } from '@easyview/markdown-core/table-style-metadata';
 import { stripPandocHighlightMarkup } from '@easyview/markdown-core/pandoc-highlight-markup';
@@ -222,6 +222,34 @@ export function extractTextblockLineMap(markdown: string): number[] {
   }
 
   return lines;
+}
+
+/** Source ranges for the top-level blocks produced by the Markdown parser. */
+export function extractBlockLineMap(markdown: string): Array<{ startLine: number; endLine: number }> {
+  const { content: withoutMeta } = stripEasyViewTableMeta(markdown);
+  const { rawYaml, content, hasFrontmatter } = parseMarkdownWithFrontmatter(withoutMeta);
+  const normalizedContent = normalizeTableColumns(stripPandocHighlightMarkup(content));
+  const ranges: Array<{ startLine: number; endLine: number }> = [];
+  let lineOffset = 0;
+  if (hasFrontmatter && rawYaml) {
+    const frontmatter = withoutMeta.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (frontmatter) {
+      lineOffset = (frontmatter[0].match(/\n/g) ?? []).length;
+      ranges.push({ startLine: 1, endLine: frontmatter[1].split(/\r?\n/).length + 2 });
+    }
+  }
+  for (const segment of splitMarkdownByHtmlTables(normalizedContent)) {
+    if (segment.type === 'html-table') {
+      ranges.push({ startLine: lineOffset + 1, endLine: lineOffset + segment.content.split('\n').length });
+    } else {
+      for (const token of lineMapMarkdownIt.parse(segment.content, {})) {
+        if (token.level !== 0 || token.nesting === -1 || !token.map) continue;
+        ranges.push({ startLine: lineOffset + token.map[0] + 1, endLine: lineOffset + token.map[1] });
+      }
+    }
+    lineOffset += (segment.content.match(/\n/g) ?? []).length;
+  }
+  return ranges;
 }
 
 // ─── Table column normalization ─────────────────────────────────────────────

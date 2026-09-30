@@ -11,6 +11,8 @@ import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import { createEditorDomContext, type EditorDomContext } from '../../../runtime/editorDomContext';
 import { TextSelection } from 'prosemirror-state';
 import scrollIntoView from 'scroll-into-view-if-needed';
+import { headingPathActionLabels } from './HeadingPathActionLabels';
+import { headingPathActionIcons } from './HeadingPathActionIcons';
 
 // Outline: HEADING_OFFSET = 20
 const HEADING_OFFSET = 20;
@@ -19,6 +21,14 @@ interface HeadingEntry {
   level: number;
   text: string;
   pos: number;
+}
+
+interface TableOfContentsOptions {
+  position?: 'left' | 'right';
+  dom?: EditorDomContext;
+  onCopyOutlinePath?: (headingPos: number) => void;
+  onSendHeadingToChat?: (headingPos: number) => void;
+  onInsertIntoITerm?: (headingPos: number) => void;
 }
 
 type TocDropPlacement = 'before' | 'after';
@@ -104,6 +114,8 @@ export class TableOfContents {
   private dragOverHeadingPos: number | null = null;
   private dragPlacement: TocDropPlacement | null = null;
   public sourceClickHandler: ((heading: { level: number; text: string }) => void) | null = null;
+  /** Change View navigation remains registered while embedded source mode temporarily owns clicks. */
+  public changeViewClickHandler: ((heading: { level: number; text: string }) => void) | null = null;
   private sourceScrollEl: HTMLElement | null = null;
   private sourceScrollHandler: (() => void) | null = null;
   private sourceGetActivePos: (() => number) | null = null;
@@ -117,19 +129,36 @@ export class TableOfContents {
   private resizer: HTMLElement | null = null;
   private isResizingSidebar = false;
   private currentFilePath = '';
+  private contextMenu: HTMLElement | null = null;
+
+  private readonly hideContextMenu = (): void => {
+    this.contextMenu?.remove();
+    this.contextMenu = null;
+  };
+
+  private readonly onRootMouseDown = (event: MouseEvent): void => {
+    if (this.contextMenu && !this.contextMenu.contains(event.target as Node)) this.hideContextMenu();
+  };
+
+  private readonly onRootKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') this.hideContextMenu();
+  };
 
   private loadTableMode(): boolean {
     try {
-      const saved = this.dom.window.localStorage.getItem('easyview-toc-mode');
-      return saved === null ? true : saved === 'table';
+      const saved = this.dom.window.localStorage.getItem('easyview-toc-source');
+      if (saved === 'table' || saved === 'headings') return saved === 'table';
+      // Ignore the previous `easyview-toc-mode` key: it defaulted to table and
+      // was written on first construct, so it is not a real user preference.
+      return false;
     } catch {
-      return true;
+      return false;
     }
   }
 
   private saveTableMode(): void {
     try {
-      this.dom.window.localStorage.setItem('easyview-toc-mode', this.tableMode ? 'table' : 'normal');
+      this.dom.window.localStorage.setItem('easyview-toc-source', this.tableMode ? 'table' : 'headings');
     } catch {
       // Webview storage can be unavailable in restricted environments.
     }
@@ -268,7 +297,7 @@ export class TableOfContents {
 
   private readonly dom: EditorDomContext;
 
-  constructor(view: EditorView, private readonly options: { position?: 'left' | 'right'; dom?: EditorDomContext } = {}) {
+  constructor(view: EditorView, private readonly options: TableOfContentsOptions = {}) {
     this.view = view;
     this.dom = options.dom ?? createEditorDomContext();
     this.tableMode = this.loadTableMode();
@@ -277,6 +306,59 @@ export class TableOfContents {
     this.ensureStyles();
     this.createSidebar();
     this.attachScrollListener();
+    this.dom.root.addEventListener('mousedown', this.onRootMouseDown as EventListener);
+    this.dom.root.addEventListener('keydown', this.onRootKeyDown as EventListener);
+  }
+
+  private showHeadingContextMenu(event: MouseEvent, headingPos: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.hideContextMenu();
+    const menu = this.dom.document.createElement('div');
+    menu.className = 'context-menu toc-context-menu visible';
+    menu.setAttribute('role', 'menu');
+    const actions = [
+      { label: headingPathActionLabels.clipboard, icon: headingPathActionIcons.clipboard, run: this.options.onCopyOutlinePath },
+      { label: headingPathActionLabels.cursorChat, icon: headingPathActionIcons.cursorChat, run: this.options.onSendHeadingToChat },
+      { label: headingPathActionLabels.iTerm2, icon: headingPathActionIcons.iTerm2, run: this.options.onInsertIntoITerm },
+    ];
+    for (const action of actions) {
+      if (!action.run) continue;
+      const item = this.dom.document.createElement('div');
+      item.className = 'context-menu-item';
+      item.setAttribute('role', 'menuitem');
+      item.tabIndex = 0;
+      const icon = this.dom.document.createElement('span');
+      icon.className = 'toc-context-menu-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = action.icon;
+      const label = this.dom.document.createElement('span');
+      label.className = 'context-menu-label';
+      label.textContent = action.label;
+      item.append(icon, label);
+      const activate = (): void => {
+        this.hideContextMenu();
+        action.run?.(headingPos);
+      };
+      item.addEventListener('mousedown', (mouseEvent) => {
+        mouseEvent.preventDefault();
+        mouseEvent.stopPropagation();
+        if (mouseEvent.button === 0) activate();
+      });
+      item.addEventListener('keydown', (keyEvent) => {
+        if (keyEvent.key !== 'Enter' && keyEvent.key !== ' ') return;
+        keyEvent.preventDefault();
+        keyEvent.stopPropagation();
+        activate();
+      });
+      menu.appendChild(item);
+    }
+    if (!menu.childElementCount) return;
+    this.dom.overlayRoot.appendChild(menu);
+    this.contextMenu = menu;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(0, Math.min(event.clientX, this.dom.window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(0, Math.min(event.clientY, this.dom.window.innerHeight - rect.height - 8))}px`;
   }
 
   getHeadings(): Array<{ level: number; text: string; pos: number }> {
@@ -354,6 +436,14 @@ export class TableOfContents {
         border-radius: 8px;
         transition: background 120ms ease, color 120ms ease;
       }
+      .toc-context-menu .context-menu-item {
+        padding: 4px 12px;
+        line-height: 18px;
+        justify-content: flex-start;
+        gap: 8px;
+      }
+      .toc-context-menu-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; }
+      .toc-context-menu-icon svg { display: block; width: 16px; height: 16px; }
       .toc-item.active {
         border-left: none !important;
         box-shadow: none !important;
@@ -390,20 +480,26 @@ export class TableOfContents {
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        min-width: 22px;
-        height: 16px;
-        padding: 0 5px;
-        border-radius: 4px;
-        border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .28));
-        background: color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent);
+        min-width: 0;
+        height: 12px;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         color: var(--vscode-descriptionForeground, #8a8a8a);
         font-family: var(--vscode-editor-font-family, monospace);
-        font-size: 10px;
+        font-size: 9px;
         font-weight: 600;
         letter-spacing: .02em;
         line-height: 1;
         pointer-events: none;
         user-select: none;
+        opacity: 0;
+        transition: opacity 120ms ease;
+      }
+      .toc-item:hover .toc-item-level,
+      .toc-item:focus-within .toc-item-level {
+        opacity: 1;
       }
       .toc-item-actions {
         display: inline-flex;
@@ -548,18 +644,14 @@ export class TableOfContents {
     detailModeBtn.className = 'toc-table-mode-option';
     detailModeBtn.textContent = '全文目录';
     detailModeBtn.addEventListener('click', () => {
-      this.tableMode = false;
-      this.refreshTableModeControl();
-      this.renderList();
+      this.setOutlineSource('headings');
     });
     this.tableModeToggleBtn = this.dom.document.createElement('button');
     this.tableModeToggleBtn.type = 'button';
     this.tableModeToggleBtn.className = 'toc-table-mode-option';
     this.tableModeToggleBtn.textContent = '表格目录';
     this.tableModeToggleBtn.addEventListener('click', () => {
-      this.tableMode = true;
-      this.refreshTableModeControl();
-      this.renderList();
+      this.setOutlineSource('table');
     });
     modeGroup.append(detailModeBtn, this.tableModeToggleBtn);
     tableControls.append(modeGroup);
@@ -753,11 +845,16 @@ export class TableOfContents {
    */
   private renderList(): void {
     if (!this.tocList) return;
+    this.hideContextMenu();
 
     this.tocList.innerHTML = '';
     if (this.tableMode) {
       this.renderTableTree();
       return;
+    }
+
+    if (this.headings.length === 0) {
+      this.headings = this.extractHeadings(this.view.state.doc);
     }
 
     this.rebuildHeadingKeyMap();
@@ -818,7 +915,8 @@ export class TableOfContents {
     }
 
     filtered.forEach((heading) => {
-      const actionsDisabled = !!this.sourceClickHandler;
+      const navigationHandler = this.sourceClickHandler ?? this.changeViewClickHandler;
+      const actionsDisabled = !!navigationHandler;
       const hasChildren = hasChildrenMap.get(heading.pos) ?? false;
       const hasChildrenBeyondMax = hasChildrenBeyondMaxMap.get(heading.pos) ?? false;
 
@@ -827,6 +925,7 @@ export class TableOfContents {
       item.setAttribute('data-level', String(heading.level - adjustment));
       item.setAttribute('data-pos', String(heading.pos));
       item.title = heading.text;
+      item.addEventListener('contextmenu', (event) => this.showHeadingContextMenu(event, heading.pos));
 
       const toggleBtn = this.dom.document.createElement('button');
       toggleBtn.className = 'toc-item-toggle';
@@ -906,9 +1005,10 @@ export class TableOfContents {
       actions.appendChild(dragBtn);
       actions.appendChild(deleteBtn);
 
+      // Level badge sits left of the expand/collapse toggle.
+      item.appendChild(levelTag);
       item.appendChild(toggleBtn);
       item.appendChild(text);
-      item.appendChild(levelTag);
       item.appendChild(actions);
 
       item.addEventListener('click', (e) => {
@@ -920,14 +1020,14 @@ export class TableOfContents {
         if (hasChildren) {
           this.toggleHeadingCollapse(heading.pos, hasChildrenBeyondMax);
         }
-        if (this.sourceClickHandler) {
+        if (navigationHandler) {
           // Lock active heading to clicked one (same as scrollToHeading does for WYSIWYG)
           this.clickedPos = heading.pos;
           this.programmaticScroll = true;
           setTimeout(() => { this.programmaticScroll = false; }, 600);
           this.activeIndex = heading.pos;
           this.applyActiveClass(heading.pos);
-          this.sourceClickHandler({ level: heading.level, text: heading.text });
+          navigationHandler({ level: heading.level, text: heading.text });
         } else {
           this.scrollToHeading(heading.pos);
         }
@@ -968,6 +1068,13 @@ export class TableOfContents {
     });
 
     this.highlightActiveHeading();
+  }
+
+  private setOutlineSource(source: 'headings' | 'table'): void {
+    this.tableMode = source === 'table';
+    this.refreshTableModeControl();
+    this.headings = this.extractHeadings(this.view.state.doc);
+    this.renderList();
   }
 
   private refreshTableModeControl(): void {
@@ -1151,6 +1258,19 @@ export class TableOfContents {
     return false;
   }
 
+  /** Expanding a node must not restore nested expand state on descendants. */
+  private collapseTablePathDescendants(
+    pathKey: string,
+    tree: Map<string, { path: string[]; childCount: number; itemCount: number }>,
+    maxDepth: number,
+  ): void {
+    tree.forEach((_, candidateKey) => {
+      if (!candidateKey.startsWith(`${pathKey}\u0001`)) return;
+      this.expandedTablePathKeys.delete(candidateKey);
+      if (!Number.isFinite(maxDepth)) this.collapsedTablePathKeys.add(candidateKey);
+    });
+  }
+
   private toggleTablePathCollapse(
     pathKey: string,
     tree: Map<string, { path: string[]; childCount: number; itemCount: number }>,
@@ -1165,22 +1285,22 @@ export class TableOfContents {
       if (this.tableNodeHasDescendantBeyondMax(tree, pathKey, maxDepth)) {
         this.expandedTablePathKeys.add(pathKey);
       }
+      this.collapseTablePathDescendants(pathKey, tree, maxDepth);
     }
     this.renderList();
     this.saveExpandState();
   }
 
   /**
-   * H1–H5 filters limit the default depth. Nodes deeper than the filter stay
-   * reachable by expanding an ancestor, matching normal-mode heading TOC.
+   * H1–H5 filters limit the default depth. A deeper node becomes visible only
+   * when its immediate parent is expanded, so one click never reveals
+   * grandchildren.
    */
   private isTablePathVisible(path: string[], maxDepth: number): boolean {
     if (this.isTablePathHiddenByCollapse(path)) return false;
     if (path.length <= maxDepth) return true;
-    for (let i = 1; i < path.length; i += 1) {
-      if (this.expandedTablePathKeys.has(path.slice(0, i).join('\u0001'))) return true;
-    }
-    return false;
+    if (path.length <= 1) return false;
+    return this.expandedTablePathKeys.has(path.slice(0, -1).join('\u0001'));
   }
 
   private revealTableRows(path: string[]): void {
@@ -1422,6 +1542,20 @@ export class TableOfContents {
     this.view.focus();
   }
 
+  /** Expanding a heading reveals only its next level, never descendants of children. */
+  private collapseHeadingDescendants(headingPos: number): void {
+    const heading = this.headings.find((entry) => entry.pos === headingPos);
+    if (!heading) return;
+    for (const child of this.headings) {
+      if (child.pos <= headingPos) continue;
+      if (child.level <= heading.level) break;
+      const childKey = this.headingKeyForPos(child.pos);
+      if (!childKey) continue;
+      this.expandedHeadingKeys.delete(childKey);
+      if (this.maxVisibleLevel === null) this.collapsedHeadingKeys.add(childKey);
+    }
+  }
+
   private toggleHeadingCollapse(headingPos: number, hasChildrenBeyondMax: boolean): void {
     const key = this.headingKeyForPos(headingPos);
     if (!key) return;
@@ -1433,9 +1567,12 @@ export class TableOfContents {
 
     if (explicitCollapsedNow) {
       this.collapsedHeadingKeys.delete(key);
+      if (hasChildrenBeyondMax) this.expandedHeadingKeys.add(key);
+      this.collapseHeadingDescendants(headingPos);
     } else if (levelCollapsedNow) {
       this.expandedHeadingKeys.add(key);
       this.collapsedHeadingKeys.delete(key);
+      this.collapseHeadingDescendants(headingPos);
     } else if (expandedOverrideNow) {
       this.expandedHeadingKeys.delete(key);
     } else {
@@ -1524,7 +1661,7 @@ export class TableOfContents {
 
     // Auto-scroll active item into view within TOC sidebar (Outline does this)
     const activeElement = activeItem as HTMLElement | null;
-    if (activeElement) {
+    if (activeElement && typeof activeElement.scrollIntoView === 'function') {
       activeElement.scrollIntoView({
         block: 'nearest',
         behavior: 'smooth',
@@ -1652,12 +1789,22 @@ export class TableOfContents {
     this.view = view;
     if (!this.isVisible) return;
 
-    // Selection-only transactions do not change the heading index. Keep the
-    // cached headings and only update the active item. Hidden TOC instances
-    // return above, so they do not scan the document at all.
+    // Keep the heading cache current even while the table tree is showing.
+    // Init uses view.updateState (no dispatch); table-mode used to skip that
+    // scan, so switching back to 全文目录 rendered an empty list until the
+    // next window/visibility refresh called update() without a transaction.
+    const shouldScan = transaction?.docChanged || !transaction;
+    let headingsDirty = false;
+    if (shouldScan) {
+      const newHeadings = this.extractHeadings(view.state.doc);
+      if (this.headingsChanged(this.headings, newHeadings)) {
+        this.headings = newHeadings;
+        headingsDirty = true;
+      }
+    }
+
     if (this.tableMode) {
-      if (transaction?.docChanged) {
-        this.headings = this.extractHeadings(view.state.doc);
+      if (transaction?.docChanged || !transaction) {
         this.renderList();
       } else if (transaction?.selectionSet) {
         this.highlightActiveTableNode();
@@ -1665,13 +1812,9 @@ export class TableOfContents {
       return;
     }
 
-    if (transaction?.docChanged || !transaction) {
-      const newHeadings = this.extractHeadings(view.state.doc);
-      if (this.headingsChanged(this.headings, newHeadings)) {
-        this.headings = newHeadings;
-        this.renderList();
-        return;
-      }
+    if (headingsDirty) {
+      this.renderList();
+      return;
     }
 
     // Fast path for large documents: when only cursor/selection moves,
@@ -1715,6 +1858,7 @@ export class TableOfContents {
 
   public close(): void {
     if (!this.isVisible) return;
+    this.hideContextMenu();
     this.isVisible = false;
     this.isResizingSidebar = false;
     this.sidebar?.classList.remove('resizing');
@@ -1729,6 +1873,9 @@ export class TableOfContents {
    * @param scrollEl The CodeMirror scroll DOM element (.cm-scroller).
    */
   public enterSourceMode(getActivePos: () => number, scrollEl: HTMLElement): void {
+    if (this.sourceScrollHandler && this.sourceScrollEl) {
+      this.sourceScrollEl.removeEventListener('scroll', this.sourceScrollHandler);
+    }
     this.sourceGetActivePos = getActivePos;
     this.sourceScrollEl = scrollEl;
 
@@ -1781,6 +1928,9 @@ export class TableOfContents {
   }
 
   public destroy(): void {
+    this.hideContextMenu();
+    this.dom.root.removeEventListener('mousedown', this.onRootMouseDown as EventListener);
+    this.dom.root.removeEventListener('keydown', this.onRootKeyDown as EventListener);
     this.exitSourceMode();
     this.clearDropIndicators();
     if (this.scrollHandler && this.scrollAreaEl) {

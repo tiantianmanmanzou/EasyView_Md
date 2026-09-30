@@ -7,6 +7,7 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceDeleteRequest,
   WorkspaceEntry,
+  WorkspaceImportExternalRequest,
   WorkspacePasteRequest,
   WorkspaceRenameRequest,
   WorkspaceResourcePaths,
@@ -187,6 +188,7 @@ export interface WorkspaceApi {
   delete(request: WorkspaceDeleteRequest): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   copyClipboard(relativePath: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   pasteClipboard(request: WorkspacePasteRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
+  importExternal(request: WorkspaceImportExternalRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
   getResourcePaths(relativePath: string): Promise<import('@easyview/contracts').OperationResult<WorkspaceResourcePaths>>;
   showContextMenu(relativePath: string, kind: WorkspaceEntry['kind']): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   openEntry(relativePath: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;

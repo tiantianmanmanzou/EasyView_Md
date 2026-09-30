@@ -29,6 +29,20 @@ describe('createEasyViewEditor entry boundary', () => {
     expect(createEasyViewEditor).toBeTypeOf('function');
   });
 
+  it('starts when Follow is enabled before the editor view exists', () => {
+    localStorage.setItem('mdpre-external-follow-scroll', 'true');
+    const root = document.createElement('section');
+    document.body.append(root);
+    let editor: ReturnType<typeof createEasyViewEditor> | undefined;
+    try {
+      editor = createEasyViewEditor({ host: createHost(), root });
+      expect(editor).toBeDefined();
+    } finally {
+      editor?.dispose();
+      localStorage.removeItem('mdpre-external-follow-scroll');
+    }
+  });
+
   it('creates and disposes simultaneous rooted instances without sharing facade state', () => {
     const firstRoot = document.createElement('section');
     const secondRoot = document.createElement('section');
@@ -49,6 +63,7 @@ describe('createEasyViewEditor entry boundary', () => {
     error.mockRestore();
   });
   it('reveals the editor after the initial document snapshot is rendered', async () => {
+    localStorage.setItem('mdpre-external-follow-scroll', 'true');
     const root = document.createElement('section');
     root.classList.add('inlinemd-booting');
     root.innerHTML = `
@@ -98,8 +113,42 @@ describe('createEasyViewEditor entry boundary', () => {
     expect(root.classList.contains('inlinemd-booting')).toBe(false);
     expect(root.classList.contains('inlinemd-ready')).toBe(true);
     expect(root.querySelector('.ProseMirror')?.textContent).toContain('Heading');
+    expect(document.querySelector('.ai-changes-toast.visible .ai-changes-toast-summary')?.textContent).toBe('No changes');
 
     editor.dispose();
+    localStorage.removeItem('mdpre-external-follow-scroll');
+    error.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps undo-related facade state isolated across five simultaneous instances', () => {
+    vi.stubGlobal('ResizeObserver', class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const editors = Array.from({ length: 5 }, () => {
+      const root = document.createElement('section');
+      root.innerHTML = `
+        <div id="title-bar"></div>
+        <div id="editor-body">
+          <div id="editor-scroll-area"><div id="editor"></div></div>
+        </div>
+      `;
+      document.body.append(root);
+      return createEasyViewEditor({ host: createHost(), root });
+    });
+
+    editors[0]?.setOutlineVisible(true);
+    editors[2]?.setOutlineVisible(true);
+    expect(editors.map((editor) => editor.getUiState().outlineVisible)).toEqual([
+      true, false, true, false, false,
+    ]);
+
+    editors[0]?.dispose();
+    expect(editors[2]?.getUiState().outlineVisible).toBe(true);
+    editors.slice(1).forEach((editor) => editor.dispose());
     error.mockRestore();
     vi.unstubAllGlobals();
   });

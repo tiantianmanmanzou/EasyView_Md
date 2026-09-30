@@ -27,6 +27,7 @@ export type ToolbarShortcutAction =
   | 'toggleStickyNote'
   | 'toggleAiChat'
   | 'openSourceMode'
+  | 'toggleViewChanges'
   | 'copyOutlinePath'
   | 'copyFullPath'
   | 'stageFile'
@@ -50,6 +51,7 @@ const DEFAULT_SHORTCUTS: ToolbarShortcutConfig = {
   toggleStickyNote: 'Alt+N',
   toggleAiChat: 'Alt+I',
   openSourceMode: 'Alt+Q',
+  toggleViewChanges: 'Alt+V',
   copyOutlinePath: 'Alt+Shift+O',
   copyFullPath: 'Alt+Shift+P',
   stageFile: 'Alt+S',
@@ -69,6 +71,7 @@ const SHORTCUT_LABELS: Record<ToolbarShortcutAction, string> = {
   toggleStickyNote: 'Toggle sticky note',
   toggleAiChat: 'Toggle AI chat',
   openSourceMode: 'Open source mode',
+  toggleViewChanges: 'Toggle change view',
   copyOutlinePath: 'Copy outline path',
   copyFullPath: 'Copy file and outline path',
   stageFile: 'Stage current file',
@@ -747,6 +750,8 @@ export interface FileHeader {
   setAiChatHandler: (handler: () => void) => void;
   setStickyNoteHandler: (handler: () => void) => void;
   setExternalFollowHandler: (handler: (enabled: boolean) => void) => void;
+  setViewChangesHandler: (handler: () => void) => void;
+  syncViewChangesState: (enabled: boolean, available: boolean) => void;
   setShortcutChangeHandler: (handler: (config: ToolbarShortcutConfig) => void) => void;
   getShortcutConfig: () => ToolbarShortcutConfig;
   syncTocState: (visible: boolean) => void;
@@ -759,6 +764,7 @@ export interface FileHeader {
   triggerTableWrapToggle: () => void;
   triggerExternalFollowToggle: () => void;
   triggerThemeToggle: () => void;
+  triggerViewChanges: () => void;
   getThemeState: () => { mode: ThemeModeName; depth: number };
   cycleTheme: () => void;
   setThemeMode: (mode: ThemeModeName) => void;
@@ -836,6 +842,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   let shortcutChangeHandler: ((config: ToolbarShortcutConfig) => void) | null = null;
   let externalFollowEnabled = readStoredExternalFollowEnabled();
   let externalFollowHandler: ((enabled: boolean) => void) | null = null;
+  let viewChangesHandler: (() => void) | null = null;
+  let viewChangesEnabled = false;
+  let viewChangesAvailable = false;
   let commitConfirmHandler: ((message: string) => void) | null = null;
   let commitSyncHandler: ((message: string) => void) | null = null;
   let commitModalBusy = false;
@@ -891,6 +900,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
 
   const syncExternalFollowButton = (enabled: boolean): void => {
     externalFollowBtn.classList.toggle('active', enabled);
+    externalFollowBtn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     setTitleWithShortcut(
       externalFollowBtn,
       enabled ? 'Disable external-edit auto-follow scroll' : 'Enable external-edit auto-follow scroll',
@@ -1255,10 +1265,29 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   themeWrap.appendChild(depthPanel);
   rightGroup.appendChild(themeWrap);
 
+  const viewChangesBtn = document.createElement('button');
+  viewChangesBtn.type = 'button';
+  viewChangesBtn.className = 'file-header-btn';
+  viewChangesBtn.dataset.action = 'toggleViewChanges';
+  viewChangesBtn.title = 'View Changes';
+  viewChangesBtn.setAttribute('aria-label', 'View Changes');
+  viewChangesBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16M4 12h10M4 19h16"/><path d="m17 9 3 3-3 3"/></svg>';
+  viewChangesBtn.disabled = true;
+  viewChangesBtn.setAttribute('aria-disabled', 'true');
+  viewChangesBtn.addEventListener('click', () => {
+    if (viewChangesBtn.disabled) return;
+    viewChangesHandler?.();
+  });
+  if (capabilities.git) rightGroup.appendChild(viewChangesBtn);
+
   const externalFollowBtn = document.createElement('button');
+  externalFollowBtn.type = 'button';
   externalFollowBtn.className = 'file-header-btn';
+  externalFollowBtn.dataset.action = 'toggleExternalFollow';
+  externalFollowBtn.setAttribute('aria-label', 'Toggle external-edit auto-follow scroll');
   externalFollowBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 18 6-6-6-6"/><circle cx="6" cy="12" r="2"/></svg>';
-  externalFollowBtn.addEventListener('click', () => {
+  externalFollowBtn.addEventListener('click', (event) => {
+    event.preventDefault();
     externalFollowEnabled = !externalFollowEnabled;
     syncExternalFollowButton(externalFollowEnabled);
     try {
@@ -1615,6 +1644,13 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       capabilities.sourceMode === 'native' ? 'Open native source mode' : 'Toggle source mode',
       'openSourceMode',
     );
+    setTitleWithShortcut(
+      viewChangesBtn,
+      !viewChangesAvailable
+        ? 'View Changes (no uncommitted changes)'
+        : viewChangesEnabled ? 'Exit View Changes' : 'View Changes',
+      'toggleViewChanges',
+    );
     syncExternalFollowButton(externalFollowEnabled);
     setTitleWithShortcut(themeToggleBtn, THEME_TITLES[themeMode], 'toggleTheme');
   };
@@ -1700,6 +1736,21 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       externalFollowHandler = handler;
       externalFollowHandler?.(externalFollowEnabled);
     },
+    setViewChangesHandler(handler: () => void) { viewChangesHandler = handler; },
+    syncViewChangesState(enabled: boolean, available: boolean) {
+      viewChangesEnabled = enabled && available;
+      viewChangesAvailable = available;
+      viewChangesBtn.disabled = !available;
+      viewChangesBtn.setAttribute('aria-disabled', available ? 'false' : 'true');
+      viewChangesBtn.classList.toggle('active', viewChangesEnabled);
+      setTitleWithShortcut(
+        viewChangesBtn,
+        !available
+          ? 'View Changes (no uncommitted changes)'
+          : viewChangesEnabled ? 'Exit View Changes' : 'View Changes',
+        'toggleViewChanges',
+      );
+    },
     setShortcutChangeHandler(handler: (config: ToolbarShortcutConfig) => void) {
       shortcutChangeHandler = handler;
       shortcutChangeHandler({ ...shortcutConfig });
@@ -1736,6 +1787,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     },
     triggerThemeToggle() {
       themeToggleBtn.click();
+    },
+    triggerViewChanges() {
+      viewChangesBtn.click();
     },
     getThemeState() {
       return { mode: themeMode, depth: themeDepth };

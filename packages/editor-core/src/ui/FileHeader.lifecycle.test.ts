@@ -73,6 +73,7 @@ describe('FileHeader lifecycle', () => {
 
     expect(header.el.querySelector('[data-action="stageFile"]')).toBeNull();
     expect(header.el.querySelector('[data-action="commitFile"]')).toBeNull();
+    expect(header.el.querySelector('[data-action="toggleViewChanges"]')).toBeNull();
     expect(header.el.querySelector('[data-action="toggleTerminal"]')).toBeNull();
   });
 
@@ -107,6 +108,65 @@ describe('FileHeader lifecycle', () => {
 
     expect(document.querySelector('[data-action="openWithEasyView"]')).toBeNull();
     expect(document.querySelector('[data-action="openSourceMode"]')).not.toBeNull();
+  });
+
+  it('toggles external-follow scroll on and off from the toolbar button', () => {
+    const handler = vi.fn();
+    const header = createHeader();
+    header.setExternalFollowHandler(handler);
+    document.body.appendChild(header.el);
+    const toggle = header.el.querySelector('[data-action="toggleExternalFollow"]') as HTMLButtonElement;
+
+    expect(toggle).not.toBeNull();
+    const initiallyOn = toggle.getAttribute('aria-pressed') === 'true';
+    expect(handler).toHaveBeenLastCalledWith(initiallyOn);
+
+    toggle.click();
+    expect(toggle.getAttribute('aria-pressed')).toBe(initiallyOn ? 'false' : 'true');
+    expect(toggle.classList.contains('active')).toBe(!initiallyOn);
+    expect(handler).toHaveBeenLastCalledWith(!initiallyOn);
+
+    toggle.click();
+    expect(toggle.getAttribute('aria-pressed')).toBe(initiallyOn ? 'true' : 'false');
+    expect(toggle.classList.contains('active')).toBe(initiallyOn);
+    expect(handler).toHaveBeenLastCalledWith(initiallyOn);
+  });
+
+  it('includes change view in toolbar shortcut settings', () => {
+    const header = createHeader();
+    document.body.appendChild(header.el);
+
+    const settingsButton = Array.from(header.el.querySelectorAll('button'))
+      .find((button) => button.title === 'Configure toolbar shortcuts') as HTMLButtonElement;
+    settingsButton.click();
+
+    const input = document.querySelector('[data-action="toggleViewChanges"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    expect(input.value === 'Alt+V' || input.value === 'Option+V').toBe(true);
+  });
+
+  it('disables change view until git reports uncommitted changes', () => {
+    const handler = vi.fn();
+    const header = createHeader();
+    header.setViewChangesHandler(handler);
+    document.body.appendChild(header.el);
+    const toggle = header.el.querySelector('[data-action="toggleViewChanges"]') as HTMLButtonElement;
+
+    expect(toggle.disabled).toBe(true);
+    toggle.click();
+    expect(handler).not.toHaveBeenCalled();
+
+    header.syncViewChangesState(false, true);
+    expect(toggle.disabled).toBe(false);
+    toggle.click();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    header.syncViewChangesState(true, false);
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.classList.contains('active')).toBe(false);
+    expect(toggle.title).toContain('no uncommitted changes');
+    toggle.click();
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('does not link openWithEasyView and openSourceMode shortcuts', () => {

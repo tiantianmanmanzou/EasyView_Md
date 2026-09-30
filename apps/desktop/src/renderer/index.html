@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: easyview-preview: http: https:; font-src 'self' easyview-preview: data: blob:; connect-src 'self' easyview-preview: http: https: blob:; worker-src 'self' blob:; frame-src 'self' easyview-preview: blob:; media-src 'self' data: blob: easyview-preview:; object-src 'none'; base-uri 'none';"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: easyview-preview: http: https:; font-src 'self' easyview-preview: data: blob:; connect-src 'self' easyview-preview: http: https: blob:; worker-src 'self' blob:; frame-src 'self' easyview-preview: blob: data: about:; media-src 'self' data: blob: easyview-preview:; object-src 'none'; base-uri 'none';"
     />
     <link href="./webview.css" rel="stylesheet" />
     <link href="./xterm.css" rel="stylesheet" />
@@ -13,7 +13,7 @@
     <link href="./desktop.css" rel="stylesheet" />
     <title>EasyView_Md</title>
   </head>
-  <body class="inlinemd-booting easyview-desktop">
+  <body class="easyview-desktop">
     <div id="desktop-root">
       <header id="desktop-title-bar">
         <button id="workspace-toggle" class="desktop-title-button" type="button" title="左侧目录树" aria-label="左侧目录树">
@@ -61,16 +61,16 @@
       <div id="desktop-workbench">
         <aside id="workspace-explorer" aria-label="工作区目录树"></aside>
         <main id="desktop-center-pane">
-          <div id="desktop-tab-bar" role="tablist" aria-label="打开的文件" hidden></div>
-          <div id="desktop-main-row">
-            <div id="desktop-active-content">
-              <div id="editor-body" hidden>
-                <div id="editor-scroll-area">
-                  <div id="editor"></div>
+          <div id="desktop-split-root">
+            <section class="desktop-editor-group" data-group-id="group-1">
+              <div id="desktop-tab-bar" class="desktop-tab-bar" role="tablist" aria-label="打开的文件" hidden></div>
+              <div id="desktop-main-row" class="desktop-group-content">
+                <div id="desktop-active-content" class="desktop-active-content">
+                  <div id="desktop-editor-mount" class="desktop-editor-mount" hidden></div>
+                  <div id="file-preview-root" class="desktop-preview-root" hidden></div>
                 </div>
               </div>
-              <div id="file-preview-root" hidden></div>
-            </div>
+            </section>
           </div>
         </main>
         <aside id="desktop-ai-chat-host" aria-label="AI 对话"></aside>

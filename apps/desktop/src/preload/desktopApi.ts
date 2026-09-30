@@ -23,9 +23,9 @@ export type DesktopSaveResult = OperationResult<SaveDocumentResult | null>;
 export interface EasyViewDesktopApi {
   document: {
     open(): Promise<DesktopDocumentResult>;
-    save(content: string, expectedMtimeMs: number | null): Promise<DesktopSaveResult>;
-    saveAs(content: string, suggestedFileName: string, lineEnding: '\n' | '\r\n'): Promise<DesktopSaveResult>;
-    rename(fileName: string): Promise<OperationResult<SaveDocumentResult>>;
+    save(content: string, sessionId: string): Promise<DesktopSaveResult>;
+    saveAs(content: string, suggestedFileName: string, lineEnding: '\n' | '\r\n', sessionId: string): Promise<DesktopSaveResult>;
+    rename(fileName: string, sessionId: string): Promise<OperationResult<SaveDocumentResult>>;
     onChanged(listener: (event: DocumentOpenResult) => void): { unsubscribe(): void };
   };
   window: {
@@ -39,6 +39,7 @@ export interface EasyViewDesktopApi {
   };
   app: {
     getTheme(): Promise<OperationResult<DesktopThemeMode>>;
+    newWindow(): Promise<OperationResult<boolean>>;
     onThemeChanged(listener: (theme: DesktopThemeMode) => void): { unsubscribe(): void };
   };
   workspace: WorkspaceApi;

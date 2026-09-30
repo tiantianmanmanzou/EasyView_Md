@@ -357,7 +357,7 @@ function blockDragPlugin(): Plugin {
               clone.querySelectorAll(
                 '.block-drag-handle, .table-controls, .table-column-controls, ' +
                 '.table-grip, .table-grip-column, .table-grip-row, .table-add-column, .table-add-row, ' +
-                '.code-block-toolbar, .heading-actions, .heading-trailing, .heading-copy-outline'
+                '.code-block-toolbar, .heading-actions, .heading-trailing, .heading-copy-outline, .heading-send-to-chat'
               ).forEach(el => el.remove());
               clone.style.margin = '0';
               clone.style.opacity = '';

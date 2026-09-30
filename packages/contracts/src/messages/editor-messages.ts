@@ -22,6 +22,15 @@ export interface GitLineRangePayload {
   kind: 'modified' | 'added';
 }
 
+export interface GitChangeSnapshotPayload {
+  indexObjectId: string | null;
+  baseContent: string;
+  currentContentHash: string;
+  isUntracked: boolean;
+}
+
+export type GitRefreshStatus = 'loading' | 'ready' | 'error';
+
 export interface ImagePayload {
   src: string;
   originalSrc: string;
@@ -51,6 +60,7 @@ export interface EditorUiStatePayload {
   fullWidth?: boolean;
   tableWrap?: boolean;
   sourceMode?: boolean;
+  viewChanges?: boolean;
   activePanel?: string;
 }
 
@@ -69,9 +79,17 @@ export interface DocumentSnapshotPayload {
   initialCursorLine?: number;
   initialCursorCharacter?: number;
   initialTotalLines?: number;
+  gitRefreshStatus?: GitRefreshStatus;
   terminalAppearance?: TerminalAppearancePayload;
   uiState?: EditorUiStatePayload;
   reason?: 'initial' | 'visible' | 'resync' | 'reload';
+}
+
+export interface DocumentActivatePayload {
+  documentId: string;
+  revision: number;
+  contentHash: string;
+  reason?: 'visible';
 }
 
 export interface DocumentPatchPayload {
@@ -104,6 +122,7 @@ export type EditorToHostMessage =
   | { type: 'save' }
   | { type: 'webviewRuntimeError'; source: string; message: string; stack?: string }
   | { type: 'stageFile' }
+  | { type: 'stageHunk'; content: string }
   | { type: 'generateCommitMessage' }
   | { type: 'commitFile'; message: string }
   | { type: 'syncFile'; message: string }
@@ -129,10 +148,12 @@ export type EditorToHostMessage =
 
 export type HostToEditorMessage =
   | ({ type: 'documentSnapshot' } & DocumentSnapshotPayload)
+  | ({ type: 'documentActivate' } & DocumentActivatePayload)
   | ({ type: 'documentPatched' } & DocumentPatchPayload)
   | { type: 'editsApplied'; documentId: string; clientEditId: string; revision: number; resultHash: string }
   | { type: 'resyncRequired'; documentId: string; revision: number; reason: string }
-  | { type: 'gitStatusChanged'; documentId: string; revision: number; lineRanges: GitLineRangePayload[] }
+  | { type: 'gitStatusChanged'; documentId: string; revision: number; lineRanges: GitLineRangePayload[]; snapshot: GitChangeSnapshotPayload }
+  | { type: 'gitRefreshStatus'; documentId: string; revision: number; status: 'loading' | 'error' }
   | { type: 'commitMessageGenerated'; message: string; source?: string }
   | { type: 'commitMessageGenerationFailed'; message: string }
   | { type: 'stageFileCompleted'; message: string }
@@ -188,6 +209,7 @@ const EDITOR_MESSAGE_TYPES = new Set<EditorToHostMessage['type']>([
   'save',
   'webviewRuntimeError',
   'stageFile',
+  'stageHunk',
   'generateCommitMessage',
   'commitFile',
   'syncFile',

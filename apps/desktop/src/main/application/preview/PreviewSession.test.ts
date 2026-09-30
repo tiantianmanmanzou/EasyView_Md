@@ -28,6 +28,28 @@ describe('PreviewSessionStore', () => {
     await expect(sessions.readText(descriptor.sessionId)).resolves.toEqual({ content: 'hello', truncated: false });
   });
 
+  it('opens HTML with a page URL and serves sibling assets from the same directory', async () => {
+    const root = await workspace();
+    await fs.writeFile(path.join(root, 'page.html'), '<link rel="stylesheet" href="style.css"><h1>Hi</h1>');
+    await fs.writeFile(path.join(root, 'style.css'), 'h1{color:red}');
+    const sessions = new PreviewSessionStore();
+    const descriptor = await sessions.open(root, 'page.html');
+    expect(descriptor.route).toBe('html');
+    expect(descriptor.contentUrl).toBe(`easyview-preview://content/${descriptor.sessionId}/page.html`);
+    await fs.mkdir(path.join(root, 'dsmp', 'page'), { recursive: true });
+    await fs.writeFile(path.join(root, 'dsmp', 'page', '库.html'), '<h1>库</h1>');
+    const related = await sessions.resolveRelatedContent(descriptor.sessionId, 'style.css');
+    expect(related).toMatchObject({ kind: 'file', mimeType: 'text/css; charset=utf-8' });
+    if (related.kind === 'file') {
+      expect(related.filePath).toBe(await fs.realpath(path.join(root, 'style.css')));
+    }
+    const nested = await sessions.resolveRelatedContent(descriptor.sessionId, 'dsmp/page/库.html');
+    expect(nested).toMatchObject({ kind: 'file', mimeType: 'text/html; charset=utf-8' });
+    if (nested.kind === 'file') {
+      expect(nested.filePath).toBe(await fs.realpath(path.join(root, 'dsmp', 'page', '库.html')));
+    }
+  });
+
   it('rejects lexical traversal and symlinks rather than following them outside the workspace', async () => {
     const root = await workspace();
     const outside = await workspace();

@@ -18,10 +18,6 @@ const desktopAssets: PreviewAssetConfig = {
 };
 
 const extraViewers: PreviewExtraViewers = {
-  html: () => import('./viewers/HtmlViewer').then(({ HtmlViewer }) => (descriptor, host) => {
-    if (!host.readText) throw new Error('当前宿主未提供文本读取能力');
-    return h(HtmlViewer, { descriptor, readText: host.readText.bind(host) });
-  }),
   epub: () => import('./viewers/DesignViewer').then(({ DesignViewer }) => (descriptor) => h(DesignViewer, { descriptor })),
   design: () => import('./viewers/DesignViewer').then(({ DesignViewer }) => (descriptor) => h(DesignViewer, { descriptor })),
   font: () => import('./viewers/DesignViewer').then(({ DesignViewer }) => (descriptor) => h(DesignViewer, { descriptor })),

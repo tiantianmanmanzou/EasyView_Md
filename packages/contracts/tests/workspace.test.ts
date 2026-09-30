@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createWorkspaceNodeId,
   isWorkspaceOperationError,
+  collectVisibleWorkspaceTreeRelativePaths,
+  computeNextWorkspaceTreeSelection,
   normalizeWorkspaceViewRelativePath,
   parentOfWorkspaceViewRelativePath,
   resolveWorkspaceTreeDropMode,
@@ -110,5 +112,85 @@ describe('workspace contracts', () => {
     input.value = 'guide.md';
     input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
     expect([input.selectionStart, input.selectionEnd]).toEqual([0, 5]);
+  });
+
+  it('walks entriesByDirectory depth-first, descending only into expanded directories', () => {
+    const entriesByDirectory = new Map<string, { relativePath: string; kind: string }[]>([
+      ['', [
+        { relativePath: 'a', kind: 'directory' },
+        { relativePath: 'b.md', kind: 'file' },
+      ]],
+      ['a', [
+        { relativePath: 'a/nested', kind: 'directory' },
+        { relativePath: 'a/c.md', kind: 'file' },
+      ]],
+      ['a/nested', [{ relativePath: 'a/nested/d.md', kind: 'file' }]],
+    ]);
+
+    // Nothing expanded: only root entries are visible.
+    expect(collectVisibleWorkspaceTreeRelativePaths(entriesByDirectory, () => false)).toEqual(['a', 'b.md']);
+
+    // 'a' expanded but not 'a/nested': its children show, grandchildren don't.
+    const expandedA = new Set(['a']);
+    expect(collectVisibleWorkspaceTreeRelativePaths(entriesByDirectory, (p) => expandedA.has(p))).toEqual([
+      'a', 'a/nested', 'a/c.md', 'b.md',
+    ]);
+
+    // Both expanded: full depth-first order.
+    const expandedBoth = new Set(['a', 'a/nested']);
+    expect(collectVisibleWorkspaceTreeRelativePaths(entriesByDirectory, (p) => expandedBoth.has(p))).toEqual([
+      'a', 'a/nested', 'a/nested/d.md', 'a/c.md', 'b.md',
+    ]);
+  });
+
+  describe('computeNextWorkspaceTreeSelection (Desktop + Extension shared multi-select algorithm)', () => {
+    const visible = ['a', 'b', 'c', 'd', 'e'];
+
+    it('plain click replaces the selection and anchors on the target', () => {
+      const current = { selected: new Set(['a', 'b']), anchor: 'a' };
+      const next = computeNextWorkspaceTreeSelection(current, { target: 'c', visible });
+      expect([...next.selected]).toEqual(['c']);
+      expect(next.anchor).toBe('c');
+    });
+
+    it('toggle key adds an unselected target and keeps the rest', () => {
+      const current = { selected: new Set(['a']), anchor: 'a' };
+      const next = computeNextWorkspaceTreeSelection(current, { target: 'c', visible, toggleKey: true });
+      expect([...next.selected].sort()).toEqual(['a', 'c']);
+      expect(next.anchor).toBe('c');
+    });
+
+    it('toggle key removes an already-selected target', () => {
+      const current = { selected: new Set(['a', 'c']), anchor: 'c' };
+      const next = computeNextWorkspaceTreeSelection(current, { target: 'c', visible, toggleKey: true });
+      expect([...next.selected]).toEqual(['a']);
+      expect(next.anchor).toBe('c');
+    });
+
+    it('shift-click extends the range from the anchor and keeps the anchor fixed', () => {
+      const current = { selected: new Set(['b']), anchor: 'b' };
+      const forward = computeNextWorkspaceTreeSelection(current, { target: 'd', visible, shiftKey: true });
+      expect(forward.selected).toEqual(new Set(['b', 'c', 'd']));
+      expect(forward.anchor).toBe('b');
+
+      // Shift-clicking back past the anchor re-ranges from the same anchor (not the old target).
+      const backward = computeNextWorkspaceTreeSelection(forward, { target: 'a', visible, shiftKey: true });
+      expect(backward.selected).toEqual(new Set(['a', 'b']));
+      expect(backward.anchor).toBe('b');
+    });
+
+    it('shift-click with no anchor falls back to a plain single selection', () => {
+      const current = { selected: new Set<string>(), anchor: null };
+      const next = computeNextWorkspaceTreeSelection(current, { target: 'c', visible, shiftKey: true });
+      expect([...next.selected]).toEqual(['c']);
+      expect(next.anchor).toBe('c');
+    });
+
+    it('shift-click falls back to single selection when the anchor is no longer visible', () => {
+      const current = { selected: new Set(['stale']), anchor: 'stale' };
+      const next = computeNextWorkspaceTreeSelection(current, { target: 'c', visible, shiftKey: true });
+      expect([...next.selected]).toEqual(['c']);
+      expect(next.anchor).toBe('c');
+    });
   });
 });

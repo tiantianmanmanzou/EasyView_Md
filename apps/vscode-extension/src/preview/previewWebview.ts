@@ -211,6 +211,25 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function installHtmlPreviewHostBridge(): void {
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.source === 'easyview-html' && data.type === 'ready') {
+      vscode?.postMessage({
+        type: 'htmlPreviewReady',
+        title: typeof data.title === 'string' ? data.title : '',
+        text: typeof data.text === 'string' ? data.text : '',
+      });
+      return;
+    }
+    if (data.type === 'htmlPreviewClick' && typeof data.text === 'string') {
+      const frame = document.querySelector<HTMLIFrameElement>('.preview-html-frame');
+      frame?.contentWindow?.postMessage({ source: 'easyview-html', type: 'click', text: data.text }, '*');
+    }
+  });
+}
+
 function bootstrap(): void {
   const savedUiState = readPreviewUiState();
   installPreviewUiStatePersistence();
@@ -225,6 +244,7 @@ function bootstrap(): void {
     payload.descriptor.relativePath,
   );
   const host = new ExtensionPreviewHost(payload.descriptor);
+  installHtmlPreviewHostBridge();
   createRoot(rootEl).render(
     React.createElement(PreviewShell, {
       host,

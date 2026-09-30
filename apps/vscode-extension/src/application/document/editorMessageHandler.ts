@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
+import { insertIntoITerm } from '../terminal/insertIntoITerm';
 import * as path from 'path';
 import { type EditorSettings, computeMinimalDiff, repairSerializedMarkdownContent } from '../../adapters/vscode/providerUtils';
 import { SETTINGS_COMMENT_RE } from '@easyview/markdown-core/editor-settings';
@@ -26,6 +27,7 @@ import {
   savePastedImage,
   push as pushGitRepository,
   stageFile as stageGitFile,
+  stageFileContent as stageGitFileContent,
 } from '@easyview/node-runtime';
 import { isEasyViewThemeMode } from '@easyview/contracts';
 import { isDiskBackedMarkdownUri } from './markdownUri';
@@ -476,6 +478,41 @@ export async function handleVscodeEditorHostAction(
     return;
   }
 
+  if (message.type === 'vscode.insertIntoITerm') {
+    await insertIntoITerm(message.prompt, ctx.extensionContext.globalState);
+    return;
+  }
+
+  if (message.type === 'vscode.openChatWithPrompt') {
+    const selectedComposerIds = await vscode.commands.executeCommand<string[]>('composer.getOrderedSelectedComposerIds');
+    if (!selectedComposerIds?.length) {
+      await vscode.commands.executeCommand('workbench.action.chat.open', { query: message.prompt });
+      return;
+    }
+
+    const previousClipboard = await vscode.env.clipboard.readText();
+    let promptOnClipboard = false;
+    try {
+      await vscode.env.clipboard.writeText(message.prompt);
+      promptOnClipboard = true;
+      await vscode.commands.executeCommand('composer.focusComposer');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    } catch (error) {
+      vscode.window.showErrorMessage(`Could not fill the current Cursor Agent input: ${toErrorMessage(error)}`);
+    } finally {
+      if (promptOnClipboard) {
+        try {
+          await vscode.env.clipboard.writeText(previousClipboard);
+        } catch (error) {
+          vscode.window.showWarningMessage(`The Cursor prompt was filled, but clipboard restore failed: ${toErrorMessage(error)}`);
+        }
+      }
+    }
+    return;
+  }
+
   const request = message.request;
   enqueueOperation(
     ctx,
@@ -658,6 +695,45 @@ export async function handleWebviewMessage(
           webviewPanel.webview.postMessage({
             type: 'stageFileFailed',
             message: `Failed to stage file: ${messageText}`,
+          });
+        }
+      });
+      break;
+    }
+
+    case 'stageHunk': {
+      if (!isDiskBackedMarkdownUri(document.uri)) {
+        webviewPanel.webview.postMessage({
+          type: 'stageFileFailed',
+          message: 'Only files on disk can be staged.',
+        });
+        break;
+      }
+      if (typeof message.content !== 'string') {
+        webviewPanel.webview.postMessage({
+          type: 'stageFileFailed',
+          message: 'Stage block content is invalid.',
+        });
+        break;
+      }
+
+      enqueueOperation(ctx, 'stage markdown hunk', async () => {
+        await document.save();
+
+        try {
+          const repository = await findRepository(diskFsPath(document));
+          if (!repository) throw new Error('Current file is not in a Git repository.');
+          await stageGitFileContent(repository.rootPath, diskFsPath(document), message.content);
+          await ctx.refreshGitChanges?.();
+          webviewPanel.webview.postMessage({
+            type: 'stageFileCompleted',
+            message: `Staged block: ${path.basename(diskFsPath(document))}`,
+          });
+        } catch (error) {
+          const messageText = error instanceof Error ? error.message : String(error);
+          webviewPanel.webview.postMessage({
+            type: 'stageFileFailed',
+            message: `Failed to stage block: ${messageText}`,
           });
         }
       });

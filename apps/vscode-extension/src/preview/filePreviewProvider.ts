@@ -16,6 +16,7 @@ import {
   registerPreviewThemePanel,
   writePreviewFileTheme,
 } from '../theme/productThemeBridge';
+import { resolveHtmlPreviewRoot, startHtmlPreviewServer, type HtmlPreviewServer } from './htmlPreviewServer';
 
 const TEXT_READ_LIMIT = 4 * 1024 * 1024;
 const VIEW_TYPE = 'easyviewMd.filePreview';
@@ -28,7 +29,34 @@ class FilePreviewDocument implements vscode.CustomDocument {
 export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<FilePreviewDocument> {
   static readonly viewType = VIEW_TYPE;
   private static readonly activePanels = new Set<vscode.WebviewPanel>();
+  private static lastHtmlReady: { title: string; text: string } | null = null;
+  private static lastHtmlContentUrl: string | null = null;
   static readonly filenamePatterns = PHASE1_FILENAME_PATTERNS;
+
+  static getHtmlPreviewState(): {
+    title: string;
+    text: string;
+    contentUrl: string;
+    panels: number;
+    visible: number;
+  } | null {
+    const panels = [...FilePreviewProvider.activePanels];
+    return {
+      title: FilePreviewProvider.lastHtmlReady?.title ?? '',
+      text: FilePreviewProvider.lastHtmlReady?.text ?? '',
+      contentUrl: FilePreviewProvider.lastHtmlContentUrl ?? '',
+      panels: panels.length,
+      visible: panels.filter((panel) => panel.visible).length,
+    };
+  }
+
+  static async clickHtmlPreviewMenu(text: string): Promise<boolean> {
+    const panel = [...FilePreviewProvider.activePanels].find((item) => item.visible)
+      ?? [...FilePreviewProvider.activePanels][0];
+    if (!panel) return false;
+    await panel.webview.postMessage({ type: 'htmlPreviewClick', text });
+    return true;
+  }
 
   static getDiagnostics(): { previewSessions: number; visiblePreviews: number; hiddenPreviews: number } {
     const panels = [...FilePreviewProvider.activePanels];
@@ -63,6 +91,8 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     _token: vscode.CancellationToken,
   ): Promise<void> {
     FilePreviewProvider.activePanels.add(webviewPanel);
+    FilePreviewProvider.lastHtmlReady = null;
+    FilePreviewProvider.lastHtmlContentUrl = null;
     webviewPanel.onDidDispose(() => FilePreviewProvider.activePanels.delete(webviewPanel));
     const fileName = path.basename(document.uri.fsPath || document.uri.path);
     const route = resolvePreviewRoute(fileName);
@@ -71,6 +101,8 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
       vscode.Uri.joinPath(this.context.extensionUri, 'dist'),
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'preview'),
     ];
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (workspaceFolder) localRoots.push(workspaceFolder.uri);
     if (document.uri.scheme === 'file') {
       localRoots.push(vscode.Uri.file(path.dirname(document.uri.fsPath)));
     } else {
@@ -106,7 +138,26 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     }
 
     const sessionId = randomUUID();
-    const contentUrl = webviewPanel.webview.asWebviewUri(document.uri).toString();
+    let htmlServer: HtmlPreviewServer | undefined;
+    let contentUrl = webviewPanel.webview.asWebviewUri(document.uri).toString();
+    if (route.route === 'html' && document.uri.scheme === 'file') {
+      try {
+        htmlServer = await startHtmlPreviewServer(resolveHtmlPreviewRoot(document.uri));
+        contentUrl = await htmlServer.contentUrlFor(document.uri);
+      } catch {
+        htmlServer?.dispose();
+        htmlServer = undefined;
+      }
+    }
+    FilePreviewProvider.lastHtmlContentUrl = route.route === 'html' ? contentUrl : null;
+    if (route.route === 'html') {
+      try {
+        const text = await readPreviewText(document.uri, route.maxSourceBytes);
+        FilePreviewProvider.lastHtmlReady = { title: fileName, text: text.content };
+      } catch {
+        FilePreviewProvider.lastHtmlReady = { title: fileName, text: '' };
+      }
+    }
     const relativePath = vscode.workspace.asRelativePath(document.uri, false);
     const descriptor: PreviewDescriptor = {
       sessionId,
@@ -133,7 +184,14 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
       ).toString(),
     };
 
-    webviewPanel.webview.html = this.getHtml(webviewPanel.webview, descriptor, assets, productTheme, fileTheme);
+    webviewPanel.webview.html = this.getHtml(
+      webviewPanel.webview,
+      descriptor,
+      assets,
+      productTheme,
+      fileTheme,
+      previewFrameOrigins(contentUrl, htmlServer?.origin),
+    );
 
     const themePanelSub = registerPreviewThemePanel(webviewPanel);
     const messageSub = webviewPanel.webview.onDidReceiveMessage(async (message) => {
@@ -180,6 +238,13 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
         }
         return;
       }
+      if (message.type === 'htmlPreviewReady' && typeof message.text === 'string') {
+        FilePreviewProvider.lastHtmlReady = {
+          title: typeof message.title === 'string' ? message.title : '',
+          text: message.text,
+        };
+        return;
+      }
       if (
         message.type === 'writePreviewFileTheme'
         && typeof message.relativePath === 'string'
@@ -190,6 +255,7 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     });
 
     webviewPanel.onDidDispose(() => {
+      htmlServer?.dispose();
       themePanelSub.dispose();
       messageSub.dispose();
     });
@@ -201,6 +267,7 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     assets: { fileViewerAssetBaseUrl: string; pptAssetBaseUrl: string; docWorkerUrl: string },
     productTheme: EasyViewThemeMode,
     fileTheme: EasyViewThemeMode | null,
+    extraOrigins: string[] = [],
   ): string {
     const nonce = getNonce();
     const resourceVersion = getStableResourceVersion(this.context);
@@ -210,16 +277,17 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     const styleUri = withResourceVersion(webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'preview', 'preview.css'),
     ), resourceVersion);
+    const extra = extraOrigins.filter(Boolean).join(' ');
     const csp = [
       `default-src 'none'`,
-      `img-src ${webview.cspSource} data: blob:`,
-      `media-src ${webview.cspSource} blob:`,
-      `font-src ${webview.cspSource} data:`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}' ${webview.cspSource} 'wasm-unsafe-eval'`,
-      `worker-src ${webview.cspSource} blob:`,
-      `connect-src ${webview.cspSource} blob: data:`,
-      `frame-src ${webview.cspSource} blob: data:`,
+      `img-src ${webview.cspSource} data: blob: ${extra}`,
+      `media-src ${webview.cspSource} blob: ${extra}`,
+      `font-src ${webview.cspSource} data: ${extra}`,
+      `style-src ${webview.cspSource} 'unsafe-inline' ${extra}`,
+      `script-src 'nonce-${nonce}' ${webview.cspSource} 'unsafe-inline' 'wasm-unsafe-eval' ${extra}`,
+      `worker-src ${webview.cspSource} blob: ${extra}`,
+      `connect-src ${webview.cspSource} blob: data: ${extra}`,
+      `frame-src ${webview.cspSource} blob: data: about: ${extra}`,
     ].join('; ');
 
     const bootstrap = {
@@ -290,6 +358,18 @@ function decodePreviewBytes(bytes: unknown, encoding: unknown): Uint8Array | nul
   }
   if (bytes instanceof Uint8Array) return bytes;
   return null;
+}
+
+function previewFrameOrigins(contentUrl: string, origin?: string): string[] {
+  const origins = new Set<string>();
+  if (origin) origins.add(origin);
+  try {
+    const url = new URL(contentUrl);
+    origins.add(`${url.protocol}//${url.host}`);
+  } catch {
+    // Keep only the explicit server origin.
+  }
+  return [...origins];
 }
 
 function errorHtml(message: string): string {

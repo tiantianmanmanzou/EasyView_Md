@@ -5,7 +5,13 @@ import {
   filterWorkspaceEntriesByDotVisibility,
   normalizeWorkspaceViewRelativePath as normalizeRelativePath,
   parentOfWorkspaceViewRelativePath as parentRelativePath,
+  collectVisibleWorkspaceTreeRelativePaths,
+  computeNextWorkspaceTreeSelection,
+  resolveWorkspaceTreeKeyAction,
   resolveWorkspaceTreeDropMode,
+  isExternalWorkspaceFileDrag,
+  collectWorkspaceExternalDropSources,
+  workspaceTreeDropParentRelativePath,
   resolveWorkspaceTreeIcon,
   workspaceEntryNameSelectionRange,
   WORKSPACE_TREE_SORT_MODE_LABELS as SORT_MODE_LABELS,
@@ -65,6 +71,8 @@ export class WorkspaceExplorer {
     }));
     this.options.container.tabIndex = 0;
     this.options.container.addEventListener('keydown', this.handleKeyDown);
+    this.options.container.addEventListener('dragover', this.handleContainerDragOver);
+    this.options.container.addEventListener('drop', this.handleContainerDrop);
     this.render();
     if (this.state.rootPath) {
       await this.loadSortMode();
@@ -76,6 +84,8 @@ export class WorkspaceExplorer {
   dispose(): void {
     for (const subscription of this.subscriptions) subscription.unsubscribe();
     this.options.container.removeEventListener('keydown', this.handleKeyDown);
+    this.options.container.removeEventListener('dragover', this.handleContainerDragOver);
+    this.options.container.removeEventListener('drop', this.handleContainerDrop);
     this.hideTimestampTooltip();
     this.timestampTooltipEl?.remove();
     this.timestampTooltipEl = null;
@@ -140,28 +150,26 @@ export class WorkspaceExplorer {
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-    if ((event.key === 'F2' || event.key === 'Enter') && this.selectedRelativePath) {
-      event.preventDefault();
+    const action = resolveWorkspaceTreeKeyAction(event, {
+      targetIsEditable: event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement,
+      hasSelection: this.selectedRelativePaths.size > 0,
+      hasPrimarySelection: this.selectedRelativePath !== null,
+    });
+    if (!action) return;
+    event.preventDefault();
+    if (action === 'rename' && this.selectedRelativePath) {
       this.beginRename(this.selectedRelativePath);
       return;
     }
-    const modifier = event.metaKey || event.ctrlKey;
-    if (modifier && event.key.toLowerCase() === 'c' && this.selectedRelativePath) {
-      event.preventDefault();
+    if (action === 'copy' && this.selectedRelativePath) {
       void this.options.api.workspace.copyClipboard(this.selectedRelativePath);
       return;
     }
-    if (modifier && event.key.toLowerCase() === 'v') {
-      event.preventDefault();
+    if (action === 'paste') {
       void this.pasteEntry(this.selectedRelativePath ?? '');
       return;
     }
-    const deleteShortcut = event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey);
-    const deleteTargets = [...this.selectedRelativePaths];
-    if (!deleteShortcut || deleteTargets.length === 0) return;
-    event.preventDefault();
-    void this.deleteEntries(deleteTargets);
+    if (action === 'delete') void this.deleteEntries([...this.selectedRelativePaths]);
   };
 
   private async pasteEntry(targetRelativePath: string): Promise<void> {
@@ -210,51 +218,25 @@ export class WorkspaceExplorer {
     relativePath: string,
     options?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean },
   ): void {
-    const shiftKey = Boolean(options?.shiftKey);
-    const toggleKey = Boolean(options?.metaKey || options?.ctrlKey);
-
-    if (shiftKey && this.selectionAnchorRelativePath) {
-      const visible = this.visibleRelativePaths();
-      const anchorIndex = visible.indexOf(this.selectionAnchorRelativePath);
-      const targetIndex = visible.indexOf(relativePath);
-      if (anchorIndex >= 0 && targetIndex >= 0) {
-        const [from, to] = anchorIndex < targetIndex
-          ? [anchorIndex, targetIndex]
-          : [targetIndex, anchorIndex];
-        this.selectedRelativePaths = new Set(visible.slice(from, to + 1));
-      } else {
-        this.selectedRelativePaths = new Set([relativePath]);
-        this.selectionAnchorRelativePath = relativePath;
-      }
-    } else if (toggleKey) {
-      if (this.selectedRelativePaths.has(relativePath)) this.selectedRelativePaths.delete(relativePath);
-      else this.selectedRelativePaths.add(relativePath);
-      this.selectionAnchorRelativePath = relativePath;
-    } else {
-      this.selectedRelativePaths = new Set([relativePath]);
-      this.selectionAnchorRelativePath = relativePath;
-    }
-
+    const next = computeNextWorkspaceTreeSelection(
+      { selected: this.selectedRelativePaths, anchor: this.selectionAnchorRelativePath },
+      {
+        target: relativePath,
+        visible: this.visibleRelativePaths(),
+        shiftKey: Boolean(options?.shiftKey),
+        toggleKey: Boolean(options?.metaKey || options?.ctrlKey),
+      },
+    );
+    this.selectedRelativePaths = new Set(next.selected);
+    this.selectionAnchorRelativePath = next.anchor;
     this.selectedRelativePath = relativePath;
     this.options.container.focus({ preventScroll: true });
     this.render();
   }
 
   private visibleRelativePaths(): string[] {
-    const paths: string[] = [];
-    const walk = (directoryRelativePath: string): void => {
-      for (const entry of this.entriesByDirectory.get(directoryRelativePath) ?? []) {
-        paths.push(entry.relativePath);
-        if (
-          entry.kind === 'directory'
-          && this.state?.expandedRelativePaths.includes(entry.relativePath)
-        ) {
-          walk(entry.relativePath);
-        }
-      }
-    };
-    walk('');
-    return paths;
+    const expanded = new Set(this.state?.expandedRelativePaths ?? []);
+    return collectVisibleWorkspaceTreeRelativePaths(this.entriesByDirectory, (path) => expanded.has(path));
   }
 
   private updateState(patch: Partial<DesktopWorkspaceState>): void {
@@ -294,7 +276,7 @@ export class WorkspaceExplorer {
       ['⇅', 'Sort', () => { this.sortMenuOpen = !this.sortMenuOpen; this.render(); }],
       ['＋', 'New File', () => this.beginCreate('', 'file')],
       ['▣', 'New Folder', () => this.beginCreate('', 'directory')],
-      ['↻', 'Refresh', () => { this.entriesByDirectory.clear(); void this.refreshExpanded(); }],
+      ['↻', '刷新', () => { this.entriesByDirectory.clear(); void this.refreshExpanded(); }],
     ] as const) {
       const button = document.createElement('button');
       button.type = 'button'; button.className = 'workspace-action';
@@ -711,9 +693,11 @@ export class WorkspaceExplorer {
       this.clearDropVisuals();
     });
     row.addEventListener('dragover', (event) => {
-      if (!this.dragRelativePath || this.dragRelativePath === entry.relativePath) return;
+      const external = isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null);
+      if (!external && (!this.dragRelativePath || this.dragRelativePath === entry.relativePath)) return;
       if (
-        entry.kind === 'directory'
+        !external
+        && entry.kind === 'directory'
         && (
           this.dragRelativePath === entry.relativePath
           || entry.relativePath.startsWith(`${this.dragRelativePath}/`)
@@ -723,7 +707,7 @@ export class WorkspaceExplorer {
       }
       event.preventDefault();
       event.stopPropagation();
-      event.dataTransfer!.dropEffect = 'move';
+      event.dataTransfer!.dropEffect = external ? 'copy' : 'move';
       this.updateDropIntent(row, entry, event.clientY);
     });
     row.addEventListener('dragleave', (event) => {
@@ -736,13 +720,18 @@ export class WorkspaceExplorer {
     row.addEventListener('drop', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
+      const external = isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null);
       const intent = this.dropIntent;
-      this.clearDropVisuals();
-      if (!source || source === entry.relativePath) return;
       const mode = intent?.targetRelativePath === entry.relativePath
         ? intent.mode
         : this.resolveDropMode(entry, event.clientY, row);
+      this.clearDropVisuals();
+      if (external && event.dataTransfer) {
+        void this.importExternalDrop(event.dataTransfer, workspaceTreeDropParentRelativePath(entry, mode));
+        return;
+      }
+      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
+      if (!source || source === entry.relativePath) return;
       void this.handleDrop(source, entry, mode);
     });
   }
@@ -799,6 +788,51 @@ export class WorkspaceExplorer {
       node.classList.remove('is-drop-into', 'is-drop-target');
     });
     if (this.dropIndicator) this.dropIndicator.classList.remove('is-visible');
+  }
+
+  private readonly handleContainerDragOver = (event: DragEvent): void => {
+    if (!this.state?.rootPath || !isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  };
+
+  private readonly handleContainerDrop = (event: DragEvent): void => {
+    if (!this.state?.rootPath || !event.dataTransfer) return;
+    if (!isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null)) return;
+    event.preventDefault();
+    this.clearDropVisuals();
+    void this.importExternalDrop(event.dataTransfer, '');
+  };
+
+  private async importExternalDrop(dataTransfer: DataTransfer, targetParentRelativePath: string): Promise<void> {
+    if (!this.state?.rootPath) return;
+    const sources = await collectWorkspaceExternalDropSources(dataTransfer);
+    const items = sources.items.map((item) => ({
+      kind: item.kind,
+      relativePath: item.relativePath,
+      ...(item.bytes ? { dataBase64: bytesToBase64(item.bytes) } : {}),
+    }));
+    if (sources.sourcePaths.length === 0 && sources.sourceUris.length === 0 && items.length === 0) return;
+    const result = await this.options.api.workspace.importExternal({
+      targetParentRelativePath,
+      sourcePaths: sources.sourcePaths,
+      sourceUris: sources.sourceUris,
+      items,
+    });
+    if (!result.ok) {
+      window.alert(result.message);
+      return;
+    }
+    this.selectedRelativePath = result.value.relativePath;
+    this.selectedRelativePaths = new Set([result.value.relativePath]);
+    this.selectionAnchorRelativePath = result.value.relativePath;
+    if (targetParentRelativePath && this.state) {
+      const expanded = new Set(this.state.expandedRelativePaths);
+      expanded.add(targetParentRelativePath);
+      this.updateState({ expandedRelativePaths: [...expanded] });
+    }
+    await this.refreshChanged([targetParentRelativePath]);
+    this.render();
   }
 
   private async handleDrop(
@@ -903,6 +937,14 @@ export class WorkspaceExplorer {
     }
     await this.loadDirectory(parentRelativePathValue);
   }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  bytes.forEach((value) => {
+    binary += String.fromCharCode(value);
+  });
+  return btoa(binary);
 }
 
 function workspaceRelativePath(rootPath: string, targetPath: string): string | null {

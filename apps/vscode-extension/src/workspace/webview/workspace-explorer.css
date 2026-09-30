@@ -23,9 +23,14 @@ body {
   color: inherit;
   background: inherit;
   outline: none;
+  /* Match native Explorer: crisp vertical edge against the editor / TOC. */
+  border-right: 1px solid var(
+    --vscode-sideBar-border,
+    var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)))
+  );
   --easyview-list-selection-background: var(
-    --vscode-list-inactiveSelectionBackground,
-    var(--vscode-list-activeSelectionBackground, #37373d)
+    --vscode-list-activeSelectionBackground,
+    #094771
   );
 }
 
@@ -97,6 +102,7 @@ body {
 .workspace-sort-menu-item:hover,
 .workspace-sort-menu-item:focus-visible,
 .workspace-file-context-menu > button:hover:not(:disabled),
+.workspace-file-context-menu > button.is-hovered:not(:disabled),
 .workspace-file-context-menu > button:focus-visible:not(:disabled) {
   outline: none;
   color: var(--vscode-menu-selectionForeground, #ffffff);
@@ -151,7 +157,8 @@ body {
 }
 
 .workspace-sort-menu-item:hover .workspace-menu-item-shortcut,
-.workspace-file-context-menu > button:hover:not(:disabled) .workspace-menu-item-shortcut {
+.workspace-file-context-menu > button:hover:not(:disabled) .workspace-menu-item-shortcut,
+.workspace-file-context-menu > button.is-hovered:not(:disabled) .workspace-menu-item-shortcut {
   color: var(--vscode-menu-selectionForeground, #ffffff);
   opacity: 0.78;
 }
@@ -467,16 +474,10 @@ body {
   line-height: 1.4;
 }
 
-.workspace-entry.active {
-  background: color-mix(in srgb, var(--easyview-list-selection-background) 55%, transparent);
-}
-
 .workspace-entry.selected {
   background: var(--easyview-list-selection-background);
-}
-
-.workspace-entry.selected.active {
-  background: var(--easyview-list-selection-background);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
+  box-shadow: inset 2px 0 0 var(--vscode-focusBorder, #007fd4);
 }
 
 .workspace-entry:focus-within {

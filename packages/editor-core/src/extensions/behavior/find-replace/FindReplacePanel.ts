@@ -34,27 +34,61 @@ export interface FindPanelSourceEditor {
   focus(): void;
 }
 
+interface PanelPosition {
+  left: number;
+  top: number;
+}
+
+const POSITION_KEY = 'easyview-find-replace-position';
+const PANEL_MARGIN = 8;
+const DEFAULT_OFFSET = 16;
+
 export class FindAndReplacePanel {
   private view: EditorView;
+  private readonly ownerDocument: Document;
+  private readonly ownerWindow: Window;
   private panel: HTMLElement | null = null;
   private searchInput: HTMLInputElement | null = null;
   private replaceInput: HTMLInputElement | null = null;
   private counter: HTMLElement | null = null;
   private replaceSection: HTMLElement | null = null;
-  private caseSensitiveBtn: HTMLElement | null = null;
-  private regexBtn: HTMLElement | null = null;
+  private caseSensitiveBtn: HTMLButtonElement | null = null;
+  private regexBtn: HTMLButtonElement | null = null;
+  private toggleBtn: HTMLButtonElement | null = null;
 
   private caseSensitive = false;
   private regexEnabled = false;
-  private showReplace = false;
+  private showReplace = true;
+  private position: PanelPosition = { left: DEFAULT_OFFSET, top: DEFAULT_OFFSET };
+  private dragging = false;
+
+  private readonly onWindowResize = (): void => {
+    this.applyPosition(this.position, false);
+  };
+  private readonly onKeyDown = (e: KeyboardEvent): void => {
+    const isModKey = e.ctrlKey || e.metaKey;
+    if (isModKey && e.code === 'KeyF' && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      this.open();
+    }
+    if (isModKey && e.code === 'KeyH' && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      this.open(true);
+    }
+  };
 
   private _getSourceEditor: (() => FindPanelSourceEditor | null) | null = null;
   private _getIsSourceMode: (() => boolean) | null = null;
 
   constructor(view: EditorView) {
     this.view = view;
+    this.ownerDocument = view.dom.ownerDocument;
+    this.ownerWindow = this.ownerDocument.defaultView ?? window;
+    this.ensureStyles();
+    this.position = this.loadPosition() ?? this.position;
     this.createPanel();
     this.attachKeyboardShortcuts();
+    this.ownerWindow.addEventListener('resize', this.onWindowResize);
   }
 
   /** Set source mode callbacks for dual-mode find/replace */
@@ -71,138 +105,219 @@ export class FindAndReplacePanel {
     return this._getSourceEditor?.() ?? null;
   }
 
-  private createPanel() {
-    this.panel = document.createElement('div');
-    this.panel.className = 'find-replace-panel';
-    this.panel.style.display = 'none';
+  private ensureStyles(): void {
+    const styleId = 'easyview-find-replace-float-styles';
+    if (this.ownerDocument.getElementById(styleId)) return;
+    const style = this.ownerDocument.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .find-replace-panel {
+        position: fixed !important;
+        top: ${DEFAULT_OFFSET}px;
+        right: auto !important;
+        left: auto;
+        z-index: 1000;
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        width: max-content;
+        max-width: calc(100vw - ${PANEL_MARGIN * 2}px);
+        padding: 10px 12px;
+        background: var(--vscode-editorWidget-background, #252526);
+        border: 1px solid var(--vscode-editorWidget-border, #454545) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+        cursor: grab;
+        user-select: none;
+      }
+      .find-replace-panel.open { display: flex !important; }
+      .find-replace-panel.dragging { cursor: grabbing; }
+      .find-replace-content { display: flex; flex-direction: column; gap: 8px; }
+      .find-replace-row { display: flex; align-items: center; gap: 8px; }
+      .find-replace-input-group {
+        display: flex;
+        align-items: center;
+        flex: 0 0 220px;
+        width: 220px;
+        min-width: 220px;
+        max-width: 220px;
+        height: 28px;
+        box-sizing: border-box;
+        overflow: hidden;
+        background: var(--vscode-input-background, #3c3c3c);
+        border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+        border-radius: 8px;
+        padding: 0 8px;
+      }
+      .find-replace-input-group:focus-within {
+        border-color: var(--mdpre-accent, var(--vscode-focusBorder, #65aaf5));
+      }
+      .find-replace-input,
+      .find-replace-input:hover,
+      .find-replace-input:focus,
+      .find-replace-input:focus-visible,
+      .find-replace-input:active {
+        all: unset;
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        height: 26px;
+        color: var(--vscode-input-foreground, #cccccc);
+        font: inherit;
+        font-size: 13px;
+        line-height: 26px;
+        caret-color: var(--vscode-input-foreground, #cccccc);
+        cursor: text;
+        user-select: text;
+        appearance: none;
+        -webkit-appearance: none;
+        background: transparent;
+        border: 0;
+        outline: none;
+        box-shadow: none;
+      }
+      .find-replace-input::placeholder {
+        color: var(--vscode-input-placeholderForeground, #6c6c6c);
+      }
+      .find-replace-options { display: flex; gap: 2px; border-left: 0; padding-left: 0; margin-left: 0; }
+      .find-replace-panel button { cursor: pointer; user-select: none; }
+    `;
+    this.ownerDocument.head.appendChild(style);
+  }
 
-    const content = document.createElement('div');
+  private createPanel() {
+    this.panel = this.ownerDocument.createElement('div');
+    this.panel.className = 'find-replace-panel';
+    this.panel.setAttribute('role', 'dialog');
+    this.panel.setAttribute('aria-label', 'Find and replace');
+
+    const content = this.ownerDocument.createElement('div');
     content.className = 'find-replace-content';
 
-    // Search row
     const searchRow = this.createSearchRow();
     content.appendChild(searchRow);
 
-    // Replace row (initially hidden)
     this.replaceSection = this.createReplaceRow();
     content.appendChild(this.replaceSection);
 
     this.panel.appendChild(content);
-
-    // Close button
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'find-replace-close-btn';
-    closeBtn.textContent = '×';
-    closeBtn.title = 'Close (Escape)';
-    closeBtn.onclick = () => this.close();
-    this.panel.appendChild(closeBtn);
-
-    document.body.appendChild(this.panel);
+    this.panel.addEventListener('pointerdown', (event) => this.beginDrag(event));
+    this.ownerDocument.body.appendChild(this.panel);
+    this.syncReplaceVisibility();
+    this.applyPosition(this.position, false);
   }
 
   private createSearchRow(): HTMLElement {
-    const row = document.createElement('div');
+    const row = this.ownerDocument.createElement('div');
     row.className = 'find-replace-row';
 
-    // Input group
-    const inputGroup = document.createElement('div');
+    const inputGroup = this.ownerDocument.createElement('div');
     inputGroup.className = 'find-replace-input-group';
 
-    this.searchInput = document.createElement('input');
+    this.searchInput = this.ownerDocument.createElement('input');
     this.searchInput.type = 'text';
     this.searchInput.className = 'find-replace-input';
     this.searchInput.placeholder = 'Find';
     this.searchInput.addEventListener('input', () => this.handleSearch());
     this.searchInput.addEventListener('keydown', (e) => this.handleSearchKeyDown(e));
     inputGroup.appendChild(this.searchInput);
+    row.appendChild(inputGroup);
 
-    // Options
-    const options = document.createElement('div');
+    const options = this.ownerDocument.createElement('div');
     options.className = 'find-replace-options';
 
-    this.caseSensitiveBtn = document.createElement('button');
+    this.caseSensitiveBtn = this.ownerDocument.createElement('button');
+    this.caseSensitiveBtn.type = 'button';
     this.caseSensitiveBtn.className = 'find-replace-option-btn';
     this.caseSensitiveBtn.textContent = 'Aa';
     this.caseSensitiveBtn.title = 'Case Sensitive (Alt+C)';
     this.caseSensitiveBtn.onclick = () => this.toggleCaseSensitive();
     options.appendChild(this.caseSensitiveBtn);
 
-    this.regexBtn = document.createElement('button');
+    this.regexBtn = this.ownerDocument.createElement('button');
+    this.regexBtn.type = 'button';
     this.regexBtn.className = 'find-replace-option-btn';
     this.regexBtn.textContent = '.*';
     this.regexBtn.title = 'Use Regular Expression (Alt+R)';
     this.regexBtn.onclick = () => this.toggleRegex();
     options.appendChild(this.regexBtn);
 
-    inputGroup.appendChild(options);
-    row.appendChild(inputGroup);
+    row.appendChild(options);
 
-    // Navigation
-    const nav = document.createElement('div');
+    const nav = this.ownerDocument.createElement('div');
     nav.className = 'find-replace-navigation';
 
-    const prevBtn = document.createElement('button');
+    const prevBtn = this.ownerDocument.createElement('button');
+    prevBtn.type = 'button';
     prevBtn.className = 'find-replace-nav-btn';
     prevBtn.textContent = '↑';
     prevBtn.title = 'Previous Match (Shift+Enter)';
     prevBtn.onclick = () => this.handlePrev();
     nav.appendChild(prevBtn);
 
-    const nextBtn = document.createElement('button');
+    const nextBtn = this.ownerDocument.createElement('button');
+    nextBtn.type = 'button';
     nextBtn.className = 'find-replace-nav-btn';
     nextBtn.textContent = '↓';
     nextBtn.title = 'Next Match (Enter)';
     nextBtn.onclick = () => this.handleNext();
     nav.appendChild(nextBtn);
 
-    this.counter = document.createElement('span');
+    this.counter = this.ownerDocument.createElement('span');
     this.counter.className = 'find-replace-counter';
     this.counter.textContent = 'No results';
     nav.appendChild(this.counter);
-
     row.appendChild(nav);
 
-    // Toggle replace button
-    const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'find-replace-toggle-btn';
-    toggleBtn.textContent = '▶';
-    toggleBtn.title = 'Toggle Replace';
-    toggleBtn.onclick = () => this.toggleReplace();
-    row.appendChild(toggleBtn);
+    this.toggleBtn = this.ownerDocument.createElement('button');
+    this.toggleBtn.type = 'button';
+    this.toggleBtn.className = 'find-replace-toggle-btn';
+    this.toggleBtn.textContent = '▼';
+    this.toggleBtn.title = 'Toggle Replace';
+    this.toggleBtn.onclick = () => this.toggleReplace();
+    row.appendChild(this.toggleBtn);
+
+    const closeBtn = this.ownerDocument.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'find-replace-close-btn';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Close (Escape)';
+    closeBtn.onclick = () => this.close();
+    row.appendChild(closeBtn);
 
     return row;
   }
 
   private createReplaceRow(): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'find-replace-row';
-    row.style.display = 'none';
+    const row = this.ownerDocument.createElement('div');
+    row.className = 'find-replace-row find-replace-row-replace';
 
-    // Input group
-    const inputGroup = document.createElement('div');
+    const inputGroup = this.ownerDocument.createElement('div');
     inputGroup.className = 'find-replace-input-group';
 
-    this.replaceInput = document.createElement('input');
+    this.replaceInput = this.ownerDocument.createElement('input');
     this.replaceInput.type = 'text';
     this.replaceInput.className = 'find-replace-input';
     this.replaceInput.placeholder = 'Replace';
     this.replaceInput.addEventListener('keydown', (e) => this.handleReplaceKeyDown(e));
     inputGroup.appendChild(this.replaceInput);
-
     row.appendChild(inputGroup);
 
-    // Actions
-    const actions = document.createElement('div');
+    const actions = this.ownerDocument.createElement('div');
     actions.className = 'find-replace-actions';
 
-    const replaceBtn = document.createElement('button');
+    const replaceBtn = this.ownerDocument.createElement('button');
+    replaceBtn.type = 'button';
     replaceBtn.className = 'find-replace-action-btn';
     replaceBtn.textContent = 'Replace';
     replaceBtn.title = 'Replace (Enter)';
     replaceBtn.onclick = () => this.handleReplace();
     actions.appendChild(replaceBtn);
 
-    const replaceAllBtn = document.createElement('button');
+    const replaceAllBtn = this.ownerDocument.createElement('button');
+    replaceAllBtn.type = 'button';
     replaceAllBtn.className = 'find-replace-action-btn';
     replaceAllBtn.textContent = 'Replace All';
     replaceAllBtn.title = 'Replace All (Ctrl+Enter)';
@@ -210,7 +325,6 @@ export class FindAndReplacePanel {
     actions.appendChild(replaceAllBtn);
 
     row.appendChild(actions);
-
     return row;
   }
 
@@ -254,7 +368,6 @@ export class FindAndReplacePanel {
     const replaceTerm = this.replaceInput?.value || '';
     if (this.isSourceMode && this.sourceEditor) {
       this.sourceEditor.replaceCurrent(replaceTerm);
-      // Re-search after replace
       const searchTerm = this.searchInput?.value || '';
       if (searchTerm) this.sourceEditor.search(searchTerm, this.caseSensitive, this.regexEnabled);
     } else {
@@ -267,7 +380,6 @@ export class FindAndReplacePanel {
     const replaceTerm = this.replaceInput?.value || '';
     if (this.isSourceMode && this.sourceEditor) {
       this.sourceEditor.replaceAllMatches(replaceTerm);
-      // Re-search after replace
       const searchTerm = this.searchInput?.value || '';
       if (searchTerm) this.sourceEditor.search(searchTerm, this.caseSensitive, this.regexEnabled);
     } else {
@@ -290,12 +402,15 @@ export class FindAndReplacePanel {
 
   private toggleReplace() {
     this.showReplace = !this.showReplace;
+    this.syncReplaceVisibility();
+  }
+
+  private syncReplaceVisibility(): void {
     if (this.replaceSection) {
       this.replaceSection.style.display = this.showReplace ? 'flex' : 'none';
     }
-    const toggleBtn = this.panel?.querySelector('.find-replace-toggle-btn');
-    if (toggleBtn) {
-      toggleBtn.textContent = this.showReplace ? '▼' : '▶';
+    if (this.toggleBtn) {
+      this.toggleBtn.textContent = this.showReplace ? '▼' : '▶';
     }
   }
 
@@ -352,40 +467,108 @@ export class FindAndReplacePanel {
   }
 
   private attachKeyboardShortcuts() {
-    document.addEventListener('keydown', (e) => {
-      const isModKey = e.ctrlKey || e.metaKey;
+    this.ownerDocument.addEventListener('keydown', this.onKeyDown);
+  }
 
-      // Ctrl/Cmd+F: Open find
-      if (isModKey && e.code === 'KeyF' && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        this.open();
-      }
+  private isInteractiveTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest('input, textarea, button, select, a'));
+  }
 
-      // Ctrl/Cmd+H: Open with replace
-      if (isModKey && e.code === 'KeyH' && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        this.open(true);
-      }
-    });
+  private beginDrag(event: PointerEvent): void {
+    if (!this.panel || this.isInteractiveTarget(event.target)) return;
+    event.preventDefault();
+    this.dragging = true;
+    this.panel.classList.add('dragging');
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = this.position.left;
+    const startTop = this.position.top;
+
+    const onMove = (moveEvent: PointerEvent) => {
+      this.applyPosition({
+        left: startLeft + (moveEvent.clientX - startX),
+        top: startTop + (moveEvent.clientY - startY),
+      }, false);
+    };
+    const onUp = () => {
+      this.dragging = false;
+      this.panel?.classList.remove('dragging');
+      this.savePosition(this.position);
+      this.ownerWindow.removeEventListener('pointermove', onMove);
+      this.ownerWindow.removeEventListener('pointerup', onUp);
+    };
+
+    this.ownerWindow.addEventListener('pointermove', onMove);
+    this.ownerWindow.addEventListener('pointerup', onUp);
+  }
+
+  private loadPosition(): PanelPosition | null {
+    try {
+      const raw = this.ownerWindow.localStorage.getItem(POSITION_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Partial<PanelPosition>;
+      if (typeof parsed.left !== 'number' || typeof parsed.top !== 'number') return null;
+      if (!Number.isFinite(parsed.left) || !Number.isFinite(parsed.top)) return null;
+      return { left: parsed.left, top: parsed.top };
+    } catch {
+      return null;
+    }
+  }
+
+  private savePosition(position: PanelPosition): void {
+    try {
+      this.ownerWindow.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+    } catch {
+      // Webview storage can be unavailable in restricted environments.
+    }
+  }
+
+  private defaultPosition(): PanelPosition {
+    const width = this.panel?.offsetWidth || 420;
+    const viewportWidth = this.ownerWindow.innerWidth || 800;
+    return {
+      left: Math.max(PANEL_MARGIN, viewportWidth - width - DEFAULT_OFFSET),
+      top: DEFAULT_OFFSET,
+    };
+  }
+
+  private clampPosition(position: PanelPosition): PanelPosition {
+    const width = this.panel?.offsetWidth || 420;
+    const height = this.panel?.offsetHeight || 80;
+    const viewportWidth = this.ownerWindow.innerWidth || 800;
+    const viewportHeight = this.ownerWindow.innerHeight || 600;
+    const maxLeft = Math.max(PANEL_MARGIN, viewportWidth - width - PANEL_MARGIN);
+    const maxTop = Math.max(PANEL_MARGIN, viewportHeight - height - PANEL_MARGIN);
+    return {
+      left: Math.max(PANEL_MARGIN, Math.min(position.left, maxLeft)),
+      top: Math.max(PANEL_MARGIN, Math.min(position.top, maxTop)),
+    };
+  }
+
+  private applyPosition(position: PanelPosition, persist: boolean): void {
+    if (!this.panel) return;
+    this.position = this.clampPosition(position);
+    this.panel.style.left = `${this.position.left}px`;
+    this.panel.style.top = `${this.position.top}px`;
+    this.panel.style.right = 'auto';
+    if (persist) this.savePosition(this.position);
   }
 
   public open(withReplace = false) {
     if (!this.panel) return;
 
-    this.panel.style.display = 'flex';
+    if (withReplace) this.showReplace = true;
+    this.syncReplaceVisibility();
+    this.panel.classList.add('open');
+    const next = this.loadPosition() ?? this.defaultPosition();
+    this.applyPosition(next, false);
+    this.ownerWindow.requestAnimationFrame(() => {
+      if (!this.panel?.classList.contains('open')) return;
+      this.applyPosition(this.position, false);
+    });
 
-    if (withReplace) {
-      this.showReplace = true;
-      if (this.replaceSection) {
-        this.replaceSection.style.display = 'flex';
-      }
-      const toggleBtn = this.panel.querySelector('.find-replace-toggle-btn');
-      if (toggleBtn) {
-        toggleBtn.textContent = '▼';
-      }
-    }
-
-    // Focus and select search input
     if (this.searchInput) {
       this.searchInput.focus();
       this.searchInput.select();
@@ -397,7 +580,7 @@ export class FindAndReplacePanel {
   public close() {
     if (!this.panel) return;
 
-    this.panel.style.display = 'none';
+    this.panel.classList.remove('open');
     if (this.isSourceMode && this.sourceEditor) {
       this.sourceEditor.clearSearch();
       this.sourceEditor.focus();
@@ -409,6 +592,8 @@ export class FindAndReplacePanel {
   }
 
   public destroy() {
+    this.ownerDocument.removeEventListener('keydown', this.onKeyDown);
+    this.ownerWindow.removeEventListener('resize', this.onWindowResize);
     if (this.panel) {
       this.panel.remove();
       this.panel = null;

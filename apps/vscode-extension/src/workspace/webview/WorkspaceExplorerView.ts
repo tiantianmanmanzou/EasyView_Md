@@ -3,7 +3,13 @@ import {
   filterWorkspaceEntriesByDotVisibility,
   normalizeWorkspaceViewRelativePath as normalizeRelativePath,
   parentOfWorkspaceViewRelativePath as parentRelativePath,
+  collectVisibleWorkspaceTreeRelativePaths,
+  computeNextWorkspaceTreeSelection,
+  resolveWorkspaceTreeKeyAction,
   resolveWorkspaceTreeDropMode,
+  isExternalWorkspaceFileDrag,
+  collectWorkspaceExternalDropSources,
+  workspaceTreeDropParentRelativePath,
   resolveWorkspaceTreeIcon,
   workspaceEntryNameSelectionRange,
   WORKSPACE_TREE_SORT_MODE_LABELS as SORT_MODE_LABELS,
@@ -24,6 +30,8 @@ export interface WorkspaceExplorerVsCodeApi {
 
 type PendingOpResolve = (result: Extract<WorkspaceExplorerEvent, { type: 'opResult' }>) => void;
 type PendingListResolve = (result: Extract<WorkspaceExplorerEvent, { type: 'listChildrenResult' }>) => void;
+const DIRECTORY_LOAD_TIMEOUT_MS = 8_000;
+const DIRECTORY_LOAD_TIMEOUT_MESSAGE = 'Directory loading timed out.';
 
 interface ContextMenuItem {
   label: string;
@@ -47,6 +55,8 @@ function modKey(): string {
 export class WorkspaceExplorerView {
   private rootName: string | null = null;
   private rootUri: string | null = null;
+  private rootRevision = 0;
+  private rootLoadError: string | null = null;
   private readonly entriesByDirectory = new Map<string, WorkspaceExplorerEntry[]>();
   private readonly expanded = new Set<string>();
   private readonly selected = new Set<string>();
@@ -84,6 +94,15 @@ export class WorkspaceExplorerView {
       this.closeSortMenu();
     }
   };
+  private readonly handleContextMenuPointerMove = (event: PointerEvent): void => {
+    const menu = this.contextMenuEl;
+    if (!menu) return;
+    const hit = document.elementFromPoint(event.clientX, event.clientY);
+    const hovered = hit?.closest<HTMLButtonElement>('button');
+    for (const button of menu.querySelectorAll<HTMLButtonElement>(':scope > button')) {
+      button.classList.toggle('is-hovered', button === hovered && !button.disabled);
+    }
+  };
 
   constructor(
     private readonly container: HTMLElement,
@@ -93,12 +112,16 @@ export class WorkspaceExplorerView {
     this.container.tabIndex = 0;
     // Capture so Enter on a focused name <button> renames instead of activating click.
     this.container.addEventListener('keydown', this.handleKeyDown, true);
+    this.container.addEventListener('dragover', this.handleContainerDragOver);
+    this.container.addEventListener('drop', this.handleContainerDrop);
     window.addEventListener('pointerdown', this.handleWindowPointerDown, true);
     this.render();
   }
 
   dispose(): void {
     this.container.removeEventListener('keydown', this.handleKeyDown, true);
+    this.container.removeEventListener('dragover', this.handleContainerDragOver);
+    this.container.removeEventListener('drop', this.handleContainerDrop);
     window.removeEventListener('pointerdown', this.handleWindowPointerDown, true);
     this.closeContextMenu();
     this.closeSortMenu();
@@ -192,8 +215,10 @@ export class WorkspaceExplorerView {
   }
 
   private onBootstrap(event: Extract<WorkspaceExplorerEvent, { type: 'bootstrap' }>): void {
+    this.rootRevision += 1;
     this.rootName = event.rootName;
     this.rootUri = event.rootUri;
+    this.rootLoadError = null;
     this.applySortConfig(event.sort);
     this.hasClipboard = event.hasClipboard;
     this.entriesByDirectory.clear();
@@ -216,8 +241,10 @@ export class WorkspaceExplorerView {
   }
 
   private onRootChanged(): void {
+    this.rootRevision += 1;
     this.rootName = null;
     this.rootUri = null;
+    this.rootLoadError = null;
     this.entriesByDirectory.clear();
     this.expanded.clear();
     this.selected.clear();
@@ -320,17 +347,35 @@ export class WorkspaceExplorerView {
     return (this.entriesByDirectory.get(parent) ?? []).find((entry) => entry.relativePath === relativePath);
   }
 
-  private async loadDirectory(relativePath: string): Promise<void> {
+  private async loadDirectory(relativePath: string, attempt = 0): Promise<void> {
     if (!this.hasRoot()) return;
+    const revision = this.rootRevision;
     const requestId = this.nextRequestId();
     const result = await new Promise<Extract<WorkspaceExplorerEvent, { type: 'listChildrenResult' }>>((resolve) => {
-      this.pendingLists.set(requestId, resolve);
+      const timer = setTimeout(() => {
+        this.pendingLists.delete(requestId);
+        resolve({ type: 'listChildrenResult', requestId, ok: false, relativePath, message: DIRECTORY_LOAD_TIMEOUT_MESSAGE });
+      }, DIRECTORY_LOAD_TIMEOUT_MS);
+      this.pendingLists.set(requestId, (event) => {
+        clearTimeout(timer);
+        resolve(event);
+      });
       this.post({ type: 'listChildren', requestId, relativePath });
     });
+    if (revision !== this.rootRevision) return;
     if (!result.ok) {
+      if (relativePath === '' && attempt === 0 && result.message === DIRECTORY_LOAD_TIMEOUT_MESSAGE) {
+        await this.loadDirectory(relativePath, 1);
+        return;
+      }
+      if (relativePath === '') {
+        this.rootLoadError = result.message;
+        this.render();
+      }
       this.showError(result.message);
       return;
     }
+    if (relativePath === '') this.rootLoadError = null;
     this.entriesByDirectory.set(result.relativePath, result.entries);
     this.render();
   }
@@ -357,34 +402,18 @@ export class WorkspaceExplorerView {
     relativePath: string,
     options?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean },
   ): void {
-    const shiftKey = Boolean(options?.shiftKey);
-    const toggleKey = Boolean(options?.metaKey || options?.ctrlKey);
-
-    if (shiftKey && this.anchor) {
-      const visible = this.visibleRelativePaths();
-      const anchorIndex = visible.indexOf(this.anchor);
-      const targetIndex = visible.indexOf(relativePath);
-      if (anchorIndex >= 0 && targetIndex >= 0) {
-        const [from, to] = anchorIndex < targetIndex
-          ? [anchorIndex, targetIndex]
-          : [targetIndex, anchorIndex];
-        this.selected.clear();
-        for (const path of visible.slice(from, to + 1)) this.selected.add(path);
-      } else {
-        this.selected.clear();
-        this.selected.add(relativePath);
-        this.anchor = relativePath;
-      }
-    } else if (toggleKey) {
-      if (this.selected.has(relativePath)) this.selected.delete(relativePath);
-      else this.selected.add(relativePath);
-      this.anchor = relativePath;
-    } else {
-      this.selected.clear();
-      this.selected.add(relativePath);
-      this.anchor = relativePath;
-    }
-
+    const next = computeNextWorkspaceTreeSelection(
+      { selected: this.selected, anchor: this.anchor },
+      {
+        target: relativePath,
+        visible: this.visibleRelativePaths(),
+        shiftKey: Boolean(options?.shiftKey),
+        toggleKey: Boolean(options?.metaKey || options?.ctrlKey),
+      },
+    );
+    this.selected.clear();
+    for (const path of next.selected) this.selected.add(path);
+    this.anchor = next.anchor;
     this.primarySelected = relativePath;
     this.post({
       type: 'setSelection',
@@ -396,43 +425,31 @@ export class WorkspaceExplorerView {
   }
 
   private visibleRelativePaths(): string[] {
-    const paths: string[] = [];
-    const walk = (directoryRelativePath: string): void => {
-      for (const entry of this.entriesByDirectory.get(directoryRelativePath) ?? []) {
-        paths.push(entry.relativePath);
-        if (entry.kind === 'directory' && this.expanded.has(entry.relativePath)) {
-          walk(entry.relativePath);
-        }
-      }
-    };
-    walk('');
-    return paths;
+    return collectVisibleWorkspaceTreeRelativePaths(this.entriesByDirectory, (path) => this.expanded.has(path));
   }
 
   private onKeyDown(event: KeyboardEvent): void {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-    if ((event.key === 'F2' || event.key === 'Enter') && this.primarySelected) {
-      event.preventDefault();
-      event.stopPropagation();
+    const action = resolveWorkspaceTreeKeyAction(event, {
+      targetIsEditable: event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement,
+      hasSelection: this.selected.size > 0,
+      hasPrimarySelection: this.primarySelected !== null,
+    });
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (action === 'rename' && this.primarySelected) {
       this.beginRename(this.primarySelected);
       return;
     }
-    const modifier = event.metaKey || event.ctrlKey;
-    if (modifier && event.key.toLowerCase() === 'c' && this.selected.size > 0) {
-      event.preventDefault();
+    if (action === 'copy') {
       void this.copyEntries([...this.selected]);
       return;
     }
-    if (modifier && event.key.toLowerCase() === 'v') {
-      event.preventDefault();
+    if (action === 'paste') {
       void this.pasteAt(this.primarySelected ?? '');
       return;
     }
-    const deleteShortcut = event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey);
-    const deleteTargets = [...this.selected];
-    if (!deleteShortcut || deleteTargets.length === 0) return;
-    event.preventDefault();
-    void this.deleteEntries(deleteTargets);
+    if (action === 'delete') void this.deleteEntries([...this.selected]);
   }
 
   private showError(message: string): void {
@@ -446,7 +463,8 @@ export class WorkspaceExplorerView {
     this.clearDropVisuals();
     this.dropIndicator = null;
     this.hideTimestampTooltip();
-    this.closeContextMenu();
+    // Window activation refreshes the tree asynchronously. Keep its floating
+    // menu interactive while those directory responses rerender the rows.
     // Keep floating sort menu on body (outside overflow:hidden tree) while open.
     this.container.replaceChildren();
 
@@ -457,6 +475,25 @@ export class WorkspaceExplorerView {
       empty.className = 'workspace-empty';
       empty.textContent = 'Open a folder or workspace';
       this.container.appendChild(empty);
+      return;
+    }
+
+    if (!this.entriesByDirectory.has('')) {
+      const status = document.createElement('div');
+      status.className = 'workspace-empty';
+      status.textContent = this.rootLoadError ?? 'Loading files...';
+      if (this.rootLoadError) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = 'Retry';
+        retry.addEventListener('click', () => {
+          this.rootLoadError = null;
+          this.render();
+          void this.loadDirectory('');
+        });
+        status.appendChild(retry);
+      }
+      this.container.appendChild(status);
       return;
     }
 
@@ -549,15 +586,16 @@ export class WorkspaceExplorerView {
       row.className = `workspace-entry workspace-entry-${entry.kind}`;
       row.dataset.relativePath = entry.relativePath;
       row.style.paddingInlineStart = `${8 + depth * 16}px`;
-      row.classList.toggle('active', entry.relativePath === this.activeRelativePath);
       row.classList.toggle('selected', this.selected.has(entry.relativePath));
       row.setAttribute('role', 'treeitem');
       row.setAttribute('aria-selected', String(this.selected.has(entry.relativePath)));
       const expanded = entry.kind === 'directory' && this.expanded.has(entry.relativePath);
       if (entry.kind === 'directory') row.setAttribute('aria-expanded', String(expanded));
 
-      const name = document.createElement('button');
-      name.type = 'button';
+      // Inputs must not be nested in buttons: Space keyup activates the parent
+      // button, selecting/rerendering the row and committing the input on blur.
+      const name: HTMLElement = document.createElement(this.renamePath === entry.relativePath ? 'div' : 'button');
+      if (name instanceof HTMLButtonElement) name.type = 'button';
       name.className = 'workspace-entry-name';
       const chevron = document.createElement('span');
       chevron.className = 'workspace-chevron';
@@ -603,7 +641,7 @@ export class WorkspaceExplorerView {
         event.preventDefault();
         this.selectionFollowsActive = false;
         if (!this.selected.has(entry.relativePath)) this.select(entry.relativePath);
-        this.openContextMenu(event.clientX, event.clientY, entry);
+        void this.openContextMenu(event.clientX, event.clientY, entry);
       });
       this.attachDragHandlers(row, entry);
       row.appendChild(name);
@@ -742,8 +780,14 @@ export class WorkspaceExplorerView {
     menu.appendChild(button);
   }
 
-  private openContextMenu(x: number, y: number, entry: WorkspaceExplorerEntry): void {
+  private async openContextMenu(x: number, y: number, entry: WorkspaceExplorerEntry): Promise<void> {
     this.closeContextMenu();
+    const focused = await this.requestOp((requestId) => ({ type: 'focusContextMenu', requestId }));
+    if (!focused.ok) {
+      this.showError(focused.message);
+      return;
+    }
+    this.container.focus({ preventScroll: true });
     const items = this.buildContextMenuItems(entry);
     if (items.length === 0) return;
     const menu = document.createElement('div');
@@ -770,12 +814,14 @@ export class WorkspaceExplorerView {
     }
     document.body.appendChild(menu);
     this.contextMenuEl = menu;
+    window.addEventListener('pointermove', this.handleContextMenuPointerMove, true);
     const rect = menu.getBoundingClientRect();
     if (rect.right > window.innerWidth) menu.style.left = `${Math.max(0, x - rect.width)}px`;
     if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(0, y - rect.height)}px`;
   }
 
   private closeContextMenu(): void {
+    window.removeEventListener('pointermove', this.handleContextMenuPointerMove, true);
     this.contextMenuEl?.remove();
     this.contextMenuEl = null;
   }
@@ -1190,9 +1236,11 @@ export class WorkspaceExplorerView {
       this.clearDropVisuals();
     });
     row.addEventListener('dragover', (event) => {
-      if (!this.dragRelativePath || this.dragRelativePath === entry.relativePath) return;
+      const external = isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null);
+      if (!external && (!this.dragRelativePath || this.dragRelativePath === entry.relativePath)) return;
       if (
-        entry.kind === 'directory'
+        !external
+        && entry.kind === 'directory'
         && (
           this.dragRelativePath === entry.relativePath
           || entry.relativePath.startsWith(`${this.dragRelativePath}/`)
@@ -1202,7 +1250,7 @@ export class WorkspaceExplorerView {
       }
       event.preventDefault();
       event.stopPropagation();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      if (event.dataTransfer) event.dataTransfer.dropEffect = external ? 'copy' : 'move';
       this.updateDropIntent(row, entry, event.clientY);
     });
     row.addEventListener('dragleave', (event) => {
@@ -1215,13 +1263,18 @@ export class WorkspaceExplorerView {
     row.addEventListener('drop', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
+      const external = isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null);
       const intent = this.dropIntent;
-      this.clearDropVisuals();
-      if (!source || source === entry.relativePath) return;
       const mode = intent?.targetRelativePath === entry.relativePath
         ? intent.mode
         : this.resolveDropMode(entry, event.clientY, row);
+      this.clearDropVisuals();
+      if (external && event.dataTransfer) {
+        void this.importExternalDrop(event.dataTransfer, workspaceTreeDropParentRelativePath(entry, mode));
+        return;
+      }
+      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
+      if (!source || source === entry.relativePath) return;
       void this.handleDrop(source, entry, mode);
     });
   }
@@ -1292,6 +1345,52 @@ export class WorkspaceExplorerView {
     if (result.sort) this.applySortConfig(result.sort);
     else this.sortMode = 'custom';
     return true;
+  }
+
+  private readonly handleContainerDragOver = (event: DragEvent): void => {
+    if (!this.hasRoot() || !isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  };
+
+  private readonly handleContainerDrop = (event: DragEvent): void => {
+    if (!this.hasRoot() || !event.dataTransfer) return;
+    if (!isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null)) return;
+    event.preventDefault();
+    this.clearDropVisuals();
+    void this.importExternalDrop(event.dataTransfer, '');
+  };
+
+  private async importExternalDrop(dataTransfer: DataTransfer, targetParentRelativePath: string): Promise<void> {
+    const sources = await collectWorkspaceExternalDropSources(dataTransfer);
+    const items = sources.items.map((item) => ({
+      kind: item.kind,
+      relativePath: item.relativePath,
+      ...(item.bytes ? { dataBase64: bytesToBase64(item.bytes) } : {}),
+    }));
+    if (sources.sourceUris.length === 0 && items.length === 0) return;
+    const result = await this.requestOp((requestId) => ({
+      type: 'importExternal',
+      requestId,
+      targetParentRelativePath,
+      sourceUris: sources.sourceUris,
+      items,
+    }));
+    if (!result.ok) {
+      this.showError(result.message);
+      return;
+    }
+    if (result.entry) {
+      this.primarySelected = result.entry.relativePath;
+      this.selected.clear();
+      this.selected.add(result.entry.relativePath);
+      this.anchor = result.entry.relativePath;
+    }
+    if (targetParentRelativePath && !this.expanded.has(targetParentRelativePath)) {
+      this.expanded.add(targetParentRelativePath);
+      this.post({ type: 'setExpanded', relativePath: targetParentRelativePath, expanded: true });
+    }
+    await this.loadDirectory(targetParentRelativePath);
   }
 
   private async handleDrop(
@@ -1409,3 +1508,11 @@ export class WorkspaceExplorerView {
   }
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}

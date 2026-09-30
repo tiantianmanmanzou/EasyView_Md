@@ -50,6 +50,8 @@ export interface DesktopEditorTab extends PersistedEditorTab {
   fileName: string;
   dirty: boolean;
   /** Stable identity shared by every view of the same document. */
+  documentId?: string;
+  /** Normalized path key used only for same-file de-duplication. */
   documentKey: string;
 }
 
@@ -88,7 +90,7 @@ export interface DesktopTabSnapshot {
   layout: DesktopEditorGroupLayout;
   tabs: DesktopTab[];
   activeTabId: string | null;
-  /** False until editor-core accepts an explicit DOM root per instance. */
+  /** True once the renderer can mount one editor-core instance per visible pane. */
   splitRenderingAvailable: boolean;
 }
 
@@ -114,6 +116,13 @@ export interface WorkspaceCopyRequest {
 export interface WorkspacePasteRequest {
   /** Selected entry: directories paste into themselves; files paste into their parent. */
   targetRelativePath: string;
+}
+
+export interface WorkspaceImportExternalRequest {
+  targetParentRelativePath: string;
+  sourcePaths?: string[];
+  sourceUris?: string[];
+  items?: Array<{ kind: 'file' | 'directory'; relativePath: string; dataBase64?: string }>;
 }
 
 export interface WorkspaceResourcePaths {

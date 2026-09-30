@@ -33,11 +33,9 @@ interface EditorGroupState {
 }
 
 /**
- * Pure Desktop window model. It owns editor groups and the split layout, but it
- * deliberately does not render them. The renderer integration point is the
- * DesktopTabSnapshot.groups/layout contract. editor-core currently addresses
- * global DOM ids, so the host advertises splitRenderingAvailable=false and must
- * not create a hidden/fake split surface.
+ * Pure Desktop window model. It owns editor groups and the split layout; the
+ * renderer consumes DesktopTabSnapshot.groups/layout. editor-core instances are
+ * rooted per tab, so splitRenderingAvailable defaults to true.
  */
 export class DesktopTabRegistry {
   private readonly groups = new Map<string, EditorGroupState>();
@@ -47,7 +45,7 @@ export class DesktopTabRegistry {
   constructor(
     private readonly windowId = 'main-window',
     initialGroupId = 'group-1',
-    private readonly splitRenderingAvailable = false,
+    private readonly splitRenderingAvailable = true,
   ) {
     this.activeGroupId = initialGroupId;
     this.groups.set(initialGroupId, { id: initialGroupId, tabs: [], activeTabId: null });
@@ -81,6 +79,28 @@ export class DesktopTabRegistry {
 
   persistedLayout(): DesktopEditorGroupLayout { return cloneLayout(this.layout); }
 
+  restoreStructure(
+    groups: ReadonlyArray<{ id: string }>,
+    layout: DesktopEditorGroupLayout,
+    activeGroupId?: string,
+  ): void {
+    this.groups.clear();
+    for (const group of groups) {
+      this.groups.set(group.id, { id: group.id, tabs: [], activeTabId: null });
+    }
+    if (this.groups.size === 0) {
+      const groupId = 'group-1';
+      this.groups.set(groupId, { id: groupId, tabs: [], activeTabId: null });
+      this.activeGroupId = groupId;
+      this.layout = { kind: 'group', groupId };
+      return;
+    }
+    this.layout = cloneLayout(layout);
+    this.activeGroupId = activeGroupId && this.groups.has(activeGroupId)
+      ? activeGroupId
+      : firstGroupId(this.layout);
+  }
+
   active(): DesktopTab | null {
     const group = this.activeGroup();
     return group.tabs.find((tab) => tab.id === group.activeTabId) ?? null;
@@ -101,7 +121,13 @@ export class DesktopTabRegistry {
     return null;
   }
 
-  openEditor(filePath: string, fileName: string, id: string = randomUUID(), groupId = this.activeGroupId): DesktopEditorTab {
+  openEditor(
+    filePath: string,
+    fileName: string,
+    id: string = randomUUID(),
+    groupId = this.activeGroupId,
+    documentId?: string,
+  ): DesktopEditorTab {
     const key = editorKey(filePath);
     const requestedGroup = this.requireGroup(groupId);
     const existingInGroup = requestedGroup.tabs.find((tab) => tab.kind === 'editor' && tab.documentKey === key);
@@ -116,6 +142,7 @@ export class DesktopTabRegistry {
       filePath: path.resolve(filePath),
       fileName,
       dirty: existing?.dirty ?? false,
+      documentId: documentId ?? existing?.documentId,
       documentKey: key,
     };
     requestedGroup.tabs.push(tab);
@@ -156,6 +183,16 @@ export class DesktopTabRegistry {
     for (const group of this.groups.values()) {
       for (const tab of group.tabs) {
         if (tab.kind === 'editor' && tab.documentKey === selected.documentKey) tab.dirty = dirty;
+      }
+    }
+  }
+
+  setEditorDocumentId(tabId: string, documentId: string): void {
+    const selected = this.get(tabId);
+    if (selected?.kind !== 'editor') return;
+    for (const group of this.groups.values()) {
+      for (const tab of group.tabs) {
+        if (tab.kind === 'editor' && tab.documentKey === selected.documentKey) tab.documentId = documentId;
       }
     }
   }

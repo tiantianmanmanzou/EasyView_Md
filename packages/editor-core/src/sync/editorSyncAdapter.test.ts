@@ -22,6 +22,67 @@ describe('EditorSyncAdapter', () => {
     expect(applied).toEqual(['abc']);
   });
 
+  it('ignores a same-revision snapshot so tab reactivation does not wipe undo', () => {
+    const sent: any[] = [];
+    const applied: string[] = [];
+    const adapter = new EditorSyncAdapter({
+      postMessage: (message) => sent.push(message),
+      getSettings: () => ({ fullWidth: true, tocVisible: false, tableWrap: false }),
+      onSnapshot: (content) => applied.push(content),
+      onExternalContent: () => true,
+    });
+    adapter.handleMessage({ type: 'documentSnapshot', documentId: 'doc', revision: 3, content: '# live', contentHash: 'ignored', reason: 'initial' });
+    adapter.handleMessage({ type: 'documentSnapshot', documentId: 'doc', revision: 3, content: '# live', contentHash: 'ignored', reason: 'visible' });
+    expect(applied).toEqual(['# live']);
+    expect(sent.filter((message) => message.type === 'snapshotApplied')).toHaveLength(2);
+  });
+
+  it('applies a same-revision snapshot when the host asks for a reload', () => {
+    const applied: string[] = [];
+    const adapter = new EditorSyncAdapter({
+      postMessage: () => undefined,
+      getSettings: () => ({ fullWidth: true, tocVisible: false, tableWrap: false }),
+      onSnapshot: (content) => applied.push(content),
+      onExternalContent: () => true,
+    });
+    adapter.handleMessage({ type: 'documentSnapshot', documentId: 'doc', revision: 1, content: '# a', contentHash: 'ignored', reason: 'initial' });
+    adapter.handleMessage({ type: 'documentSnapshot', documentId: 'doc', revision: 1, content: '# a reloaded', contentHash: 'ignored', reason: 'reload' });
+    expect(applied).toEqual(['# a', '# a reloaded']);
+  });
+
+  it('acknowledges a matching documentActivate without replaying content', () => {
+    const sent: any[] = [];
+    const applied: string[] = [];
+    const adapter = new EditorSyncAdapter({
+      postMessage: (message) => sent.push(message),
+      getSettings: () => ({ fullWidth: true, tocVisible: false, tableWrap: false }),
+      onSnapshot: (content) => applied.push(content),
+      onExternalContent: () => true,
+    });
+    adapter.handleMessage({ type: 'documentSnapshot', documentId: 'doc', revision: 3, content: '# live', contentHash: hashContent('# live'), reason: 'initial' });
+    adapter.handleMessage({ type: 'documentActivate', documentId: 'doc', revision: 3, contentHash: hashContent('# live'), reason: 'visible' });
+    expect(applied).toEqual(['# live']);
+    expect(sent.filter((message) => message.type === 'snapshotApplied')).toHaveLength(2);
+    expect(sent.some((message) => message.type === 'requestResync')).toBe(false);
+  });
+
+  it('requests a resync when documentActivate cannot match a live session', () => {
+    const sent: any[] = [];
+    const adapter = new EditorSyncAdapter({
+      postMessage: (message) => sent.push(message),
+      getSettings: () => ({ fullWidth: true, tocVisible: false, tableWrap: false }),
+      onSnapshot: () => undefined,
+      onExternalContent: () => true,
+    });
+    adapter.handleMessage({ type: 'documentActivate', documentId: 'doc', revision: 1, contentHash: 'missing', reason: 'visible' });
+    expect(sent).toEqual([{
+      type: 'requestResync',
+      documentId: 'doc',
+      revision: 1,
+      reason: 'Activate without a live document session',
+    }]);
+  });
+
   it('applies external patches through the callback and reports the new revision', () => {
     const sent: any[] = [];
     const applied: string[] = [];

@@ -37,6 +37,18 @@ describe('DesktopTabRegistry', () => {
       { id: 'p', kind: 'preview', relativePath: 'docs/a.pdf' },
     ]);
   });
+
+  it('keeps the document identity when a file path changes', () => {
+    const registry = new DesktopTabRegistry('window-a');
+    registry.openEditor('/tmp/a.md', 'a.md', 'a');
+    registry.setEditorDocumentId('a', 'document-a');
+    registry.renameEditor('a', '/tmp/renamed.md', 'renamed.md');
+
+    expect(registry.get('a')).toMatchObject({
+      filePath: '/tmp/renamed.md',
+      documentId: 'document-a',
+    });
+  });
 });
 
 describe('DesktopTabRegistry editor groups', () => {
@@ -67,5 +79,20 @@ describe('DesktopTabRegistry editor groups', () => {
       first: { kind: 'group', groupId: 'group-1' },
       second: { kind: 'group', groupId: 'group-b' },
     });
+    expect(registry.snapshot().splitRenderingAvailable).toBe(true);
+  });
+
+  it('restores empty groups so a later open can target a split pane', () => {
+    const registry = new DesktopTabRegistry('window-a');
+    registry.restoreStructure(
+      [{ id: 'left' }, { id: 'right' }],
+      { kind: 'split', orientation: 'horizontal', first: { kind: 'group', groupId: 'left' }, second: { kind: 'group', groupId: 'right' } },
+      'right',
+    );
+    registry.openEditor('/tmp/a.md', 'a.md', 'a', 'left');
+    registry.openEditor('/tmp/b.md', 'b.md', 'b', 'right');
+    expect(registry.snapshot().activeGroupId).toBe('right');
+    expect(registry.snapshot().groups).toHaveLength(2);
+    expect(registry.snapshot().splitRenderingAvailable).toBe(true);
   });
 });

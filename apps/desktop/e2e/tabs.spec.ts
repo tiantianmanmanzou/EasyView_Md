@@ -80,7 +80,7 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
     await expect(page.locator('.desktop-tab')).toHaveCount(2);
     await expect(page.locator('.desktop-tab.active .desktop-tab-label')).toHaveText('preview.txt');
     await expect(page.locator('#file-preview-root')).toBeVisible();
-    await expect(page.locator('#editor-body')).toBeHidden();
+    await expect(page.locator('#desktop-editor-mount')).toBeHidden();
     await expect(page.locator('.preview-header')).toHaveCount(0);
     await expect(page.locator('.preview-text-viewer')).toContainText('Preview content.');
 
@@ -164,9 +164,10 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
     await expect(page.locator('.desktop-tab')).toHaveCount(2);
 
     await page.locator('.desktop-tab', { hasText: 'notes.md' }).locator('.desktop-tab-activate').click();
-    await expect(page.locator('#editor-body')).toBeVisible();
+    await expect(page.locator('#desktop-editor-mount')).toBeVisible();
+    await expect(page.locator('.desktop-editor-session:not([hidden]) .ProseMirror')).toBeVisible();
     await expect(page.locator('#file-preview-root')).toBeHidden();
-    await expect(page.locator('.ProseMirror')).toContainText('Unsaved tab content.');
+    await expect(page.locator('.desktop-editor-session:not([hidden]) .ProseMirror')).toContainText('Unsaved tab content.');
     await expect(aiPanel).toBeVisible();
     await expect(aiPanel.locator('[data-mode="agent"]')).toBeEnabled();
     const markdownLayout = await page.evaluate(() => {
@@ -182,15 +183,15 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
     });
     await expect(page.locator('.desktop-tab')).toHaveCount(3);
     await expect(page.locator('.desktop-tab.active .desktop-tab-label')).toHaveText('second.md');
-    await expect(page.locator('.ProseMirror')).toContainText('Second original.');
-    const secondParagraph = page.locator('.ProseMirror p').last();
+    await expect(page.locator('.desktop-editor-session:not([hidden]) .ProseMirror')).toContainText('Second original.');
+    const secondParagraph = page.locator('.desktop-editor-session:not([hidden]) .ProseMirror p').last();
     await secondParagraph.click();
     await page.keyboard.press('End');
     await page.keyboard.type(' Second saved.');
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
     await expect.poll(async () => readFile(secondMarkdownPath, 'utf8')).toContain('Second saved.');
     await page.locator('.desktop-tab', { hasText: 'notes.md' }).locator('.desktop-tab-activate').click();
-    await expect(page.locator('.ProseMirror')).toContainText('Unsaved tab content.');
+    await expect(page.locator('.desktop-editor-session:not([hidden]) .ProseMirror')).toContainText('Unsaved tab content.');
 
     await page.evaluate(async () => {
       const api = (window as typeof window & { easyViewDesktop: { tabs: { openWorkspaceEntry(path: string): Promise<unknown> } } }).easyViewDesktop;
@@ -198,7 +199,7 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
     });
     await expect(page.locator('.desktop-tab')).toHaveCount(3);
     await page.locator('.desktop-tab', { hasText: 'notes.md' }).locator('.desktop-tab-activate').click();
-    await page.locator('.ProseMirror').click();
+    await page.locator('.desktop-editor-session:not([hidden]) .ProseMirror').click();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
     await expect.poll(async () => readFile(markdownPath, 'utf8')).toContain('Unsaved tab content.');
 

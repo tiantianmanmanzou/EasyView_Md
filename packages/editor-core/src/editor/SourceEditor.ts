@@ -4,7 +4,7 @@
  */
 
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet, WidgetType, keymap, highlightActiveLine, lineNumbers } from '@codemirror/view';
-import { EditorState, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, StateField, StateEffect, Transaction, RangeSetBuilder, Compartment, type Extension } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
@@ -90,6 +90,30 @@ const vscodeHighlightStyle = HighlightStyle.define([
   { tag: tags.comment, color: '#6a9955', fontStyle: 'italic' },
 ]);
 
+const changeViewHighlightStyle = HighlightStyle.define([
+  // Keep the same syntax colors as the regular source editor so Change View
+  // remains readable while the diff background communicates the change.
+  { tag: tags.heading, fontWeight: 'bold', color: '#4fc1ff' },
+  { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], color: 'var(--mdpre-accent-text, var(--vscode-editor-foreground))' },
+  { tag: tags.strong, fontWeight: 'bold' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strikethrough, textDecoration: 'line-through', opacity: '0.7' },
+  { tag: tags.link, color: '#61afef', textDecoration: 'underline' },
+  { tag: tags.url, color: '#61afef' },
+  { tag: tags.monospace, color: '#d19a66', fontFamily: 'var(--vscode-editor-font-family, Consolas, monospace)' },
+  { tag: tags.quote, color: '#98c379', fontStyle: 'italic', fontSize: '1.05em' },
+  { tag: tags.processingInstruction, color: '#6b7280' },
+  // List/number tokens must stay on the editor foreground. The source-editor
+  // gold (`#e5c07b`) would otherwise paint `1.` / `1.1` / `（1）` yellow.
+  { tag: tags.list, color: 'var(--vscode-editor-foreground)', fontVariantNumeric: 'tabular-nums' },
+  { tag: [tags.integer, tags.number, tags.atom, tags.literal], color: 'var(--vscode-editor-foreground)', fontVariantNumeric: 'tabular-nums' },
+  { tag: tags.meta, color: '#7f848e' },
+  { tag: tags.contentSeparator, color: '#abb2bf' },
+  { tag: tags.keyword, color: '#c586c0' },
+  { tag: tags.string, color: 'var(--vscode-editor-foreground)' },
+  { tag: tags.comment, color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' },
+]);
+
 const stickyNoteCompactHighlightStyle = HighlightStyle.define([
   // Keep heading emphasis, but do not scale the font size in sticky note mode.
   { tag: tags.heading, fontWeight: 'bold', color: 'var(--easyview-source-heading-color, var(--mdpre-accent-text, var(--vscode-editor-foreground)))' },
@@ -108,6 +132,16 @@ const stickyNoteCompactHighlightStyle = HighlightStyle.define([
   { tag: tags.string, color: '#ce9178' },
   { tag: tags.comment, color: '#6a9955', fontStyle: 'italic' },
 ]);
+
+const changeViewTheme = EditorView.theme({
+  '.cm-change-list-marker, .cm-change-list-marker *, .easyview-change-numbering, .easyview-change-numbering *': {
+    color: 'var(--vscode-editor-foreground) !important',
+    fontWeight: '400',
+    fontStyle: 'normal',
+    fontVariantNumeric: 'tabular-nums',
+    fontVariantLigatures: 'none',
+  },
+}, { dark: true });
 
 const stickyNoteCompactTheme = EditorView.theme({
   '&': {
@@ -158,6 +192,8 @@ const CHECKBOX_CHECKED_RE = /^(\s*[-*+]\s+)\[x\]/i;   // - [x]
 const CHECKBOX_UNCHECKED_RE = /^(\s*[-*+]\s+)\[ \]/;   // - [ ]
 const HEADING_RE = /^(#{1,6})(\s+)(.*)$/;             // # heading
 const ORDERED_LIST_RE = /^(\s*)(\d+[.)])(\s+)/;       // 1. item / 1) item
+/** Markdown ordered, outline (1.1), Chinese enumeration, and parenthetical numbers. */
+const CHANGE_VIEW_NUMBERING_RE = /^(\s*)((?:[（(]\d+[）)]|\d+(?:\.\d+)+(?:[.)、．])?|\d+[.)、．]|[一二三四五六七八九十百千]+、))(\s+)/;
 const BULLET_LIST_RE = /^(\s*)([-*+])(\s+)/;          // - item
 const TOC_RE = /^\[\[toc\]\]$/i;                       // [[toc]]
 const STRIKETHROUGH_RE = /~~[^~]+~~/g;                  // ~~strikethrough~~
@@ -271,7 +307,9 @@ function buildMarkdownDecorations(view: EditorView, visualMode: SourceEditorOpti
     }
 
     // ── Table rows (line decoration) ──
-    if (TABLE_RE.test(text)) {
+    // Change View paints added/modified lines with a diff background. An inline
+    // table background would override that fill, so skip it in this mode.
+    if (visualMode !== 'changeViewMarkdown' && TABLE_RE.test(text)) {
       builder.add(line.from, line.from, Decoration.line({
         attributes: { style: 'background: rgba(255,255,255,0.03);' },
       }));
@@ -365,6 +403,21 @@ function buildMarkdownDecorations(view: EditorView, visualMode: SourceEditorOpti
             }),
           });
         }
+      }
+    } else if (visualMode === 'changeViewMarkdown') {
+      // Keep list/outline numbers visible and aligned, without the source
+      // editor's yellow list color on the numbering glyphs.
+      const numberingMatch = text.match(CHANGE_VIEW_NUMBERING_RE);
+      const bulletListMatch = numberingMatch ? null : text.match(BULLET_LIST_RE);
+      const listMatch = numberingMatch ?? bulletListMatch;
+      if (listMatch) {
+        const markerStart = line.from + listMatch[1].length;
+        const markerEnd = markerStart + listMatch[2].length;
+        marks.push({
+          from: markerStart,
+          to: markerEnd,
+          deco: Decoration.mark({ attributes: { class: 'cm-change-list-marker easyview-change-numbering' } }),
+        });
       }
     }
 
@@ -504,7 +557,10 @@ function searchSourceText(
 export interface SourceEditorOptions {
   parent: HTMLElement;
   onChange: (content: string) => void;
-  visualMode?: 'default' | 'stickyNoteCompactMarkdown';
+  visualMode?: 'default' | 'stickyNoteCompactMarkdown' | 'changeViewMarkdown';
+  extraExtensions?: Extension[];
+  enableWordWrapToggle?: boolean;
+  lineWrapping?: boolean;
   onSelectionOrDocChange?: () => void;
   onDocumentHistoryChange?: (update: import('@codemirror/view').ViewUpdate) => void;
   /** Called when native CM undo stack is exhausted — return true if cross-mode undo was handled */
@@ -582,12 +638,18 @@ export function createSourceEditor(options: SourceEditorOptions) {
   const visualMode = options.visualMode ?? 'default';
   const highlightStyle = visualMode === 'stickyNoteCompactMarkdown'
     ? stickyNoteCompactHighlightStyle
-    : vscodeHighlightStyle;
+    : visualMode === 'changeViewMarkdown'
+      ? changeViewHighlightStyle
+      : vscodeHighlightStyle;
   const visualTheme = visualMode === 'stickyNoteCompactMarkdown'
     ? stickyNoteCompactTheme
-    : [];
+    : visualMode === 'changeViewMarkdown'
+      ? changeViewTheme
+      : [];
   const markdownDecoPlugin = createMarkdownDecoPlugin(visualMode);
   let suppressChange = false;
+  const lineWrappingCompartment = new Compartment();
+  let wrappingEnabled = options.lineWrapping !== false;
   let tabCompletionInFlight = false;
   let previewRequestToken = 0;
   let previewTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -781,6 +843,14 @@ export function createSourceEditor(options: SourceEditorOptions) {
         syntaxHighlighting(highlightStyle),
         keymap.of([
           { key: 'Tab', run: (cmView) => indentWithTab.run?.(cmView) ?? false },
+          ...(options.enableWordWrapToggle ? [{
+            key: 'Alt-z',
+            run: (cmView: EditorView) => {
+              wrappingEnabled = !wrappingEnabled;
+              cmView.dispatch({ effects: lineWrappingCompartment.reconfigure(wrappingEnabled ? EditorView.lineWrapping : []) });
+              return true;
+            },
+          }] : []),
           indentWithTab,
           ...defaultKeymap,
           ...historyKeymap,
@@ -806,8 +876,9 @@ export function createSourceEditor(options: SourceEditorOptions) {
         ghostSuggestionField,
         sourceSearchField,
         sourceSearchDecorations,
-        EditorView.lineWrapping,
+        lineWrappingCompartment.of(options.lineWrapping === false ? [] : EditorView.lineWrapping),
         onChangeExtension,
+        ...(options.extraExtensions ?? []),
       ],
     }),
     parent: options.parent,
@@ -815,6 +886,10 @@ export function createSourceEditor(options: SourceEditorOptions) {
 
   return {
     view,
+    toggleLineWrapping: () => {
+      wrappingEnabled = !wrappingEnabled;
+      view.dispatch({ effects: lineWrappingCompartment.reconfigure(wrappingEnabled ? EditorView.lineWrapping : []) });
+    },
     getContent: () => view.state.doc.toString(),
     setContent: (text: string, options?: { addToHistory?: boolean }) => {
       suppressChange = true;

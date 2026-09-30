@@ -20,6 +20,7 @@ import type { Command } from 'prosemirror-state';
 import { setBlockType } from 'prosemirror-commands';
 import { findCollapsedNodes } from './FindCollapsedNodes';
 import { getHeadingAnchors, anchorPlugin } from './AnchorPlugin';
+import { headingPathActionLabels } from './HeadingPathActionLabels';
 import {
   Extension,
   type SerializerNodeHandler,
@@ -29,6 +30,8 @@ export interface HeadingExtensionOptions {
   document?: Document;
   onToast?: (message: string) => void;
   onCopyOutlinePath?: (headingPos: number) => void;
+  onInsertIntoITerm?: (headingPos: number) => void;
+  onSendHeadingToChat?: (headingPos: number) => void;
 }
 
 const OUTLINE_PATH_COPY_ICON =
@@ -332,7 +335,8 @@ function createHeadingWidgets(doc: ProsemirrorNode, options: HeadingExtensionOpt
             const copyBtn = ownerDocument.createElement('button');
             copyBtn.type = 'button';
             copyBtn.className = 'heading-copy-outline';
-            copyBtn.title = 'Copy outline path';
+            copyBtn.dataset.tooltip = headingPathActionLabels.clipboard;
+            copyBtn.setAttribute('aria-label', copyBtn.dataset.tooltip);
             copyBtn.tabIndex = -1;
             copyBtn.innerHTML = OUTLINE_PATH_COPY_ICON;
             copyBtn.addEventListener('mousedown', (event) => {
@@ -342,6 +346,40 @@ function createHeadingWidgets(doc: ProsemirrorNode, options: HeadingExtensionOpt
             });
 
             trailing.appendChild(copyBtn);
+
+            if (options.onSendHeadingToChat) {
+              const chatBtn = ownerDocument.createElement('button');
+              chatBtn.type = 'button';
+              chatBtn.className = 'heading-send-to-chat';
+              chatBtn.dataset.tooltip = headingPathActionLabels.cursorChat;
+              chatBtn.setAttribute('aria-label', chatBtn.dataset.tooltip);
+              chatBtn.tabIndex = -1;
+              chatBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/><path d="M8 10h8M8 14h5"/></svg>';
+              chatBtn.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.button !== 0) return;
+                options.onSendHeadingToChat?.(headingPos);
+              });
+              trailing.appendChild(chatBtn);
+            }
+
+            if (options.onInsertIntoITerm) {
+              const terminalBtn = ownerDocument.createElement('button');
+              terminalBtn.type = 'button';
+              terminalBtn.className = 'heading-copy-outline heading-insert-iterm';
+              terminalBtn.dataset.tooltip = headingPathActionLabels.iTerm2;
+              terminalBtn.setAttribute('aria-label', terminalBtn.dataset.tooltip);
+              terminalBtn.tabIndex = -1;
+              terminalBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="m6 8 4 4-4 4m7 0h5"/></svg>';
+              terminalBtn.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.button === 0) options.onInsertIntoITerm?.(headingPos);
+              });
+              trailing.appendChild(terminalBtn);
+            }
+
             return trailing;
           },
           {

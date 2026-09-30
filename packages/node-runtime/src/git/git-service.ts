@@ -319,6 +319,52 @@ export async function stageFile(
   return getFileStatus(resolved.repository.rootPath, resolved.absolutePath);
 }
 
+/**
+ * Write an arbitrary blob into the Git index for a path without changing the
+ * working tree. Used for stage-hunk: the working file stays as-is while the
+ * index advances to include only the selected hunk.
+ */
+export async function stageFileContent(
+  repositoryPath: string,
+  filePath: string,
+  content: string,
+): Promise<GitFileStatus> {
+  const resolved = await resolveRepositoryFile(repositoryPath, filePath);
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(path.join(tmpdir(), "easyview-stage-"));
+  const tempFile = path.join(dir, "content");
+  try {
+    await writeFile(tempFile, content, "utf8");
+    const objectId = (await runGit(resolved.repository.rootPath, ["hash-object", "-w", tempFile])).trim();
+    if (!/^[0-9a-f]{40,}$/i.test(objectId)) {
+      throw new GitServiceError("COMMAND_FAILED", `无法写入 Git 对象：${objectId}`);
+    }
+    let mode = "100644";
+    try {
+      const indexEntries = await runGit(resolved.repository.rootPath, [
+        "ls-files",
+        "--stage",
+        "--",
+        resolved.relativePath,
+      ]);
+      const match = indexEntries.split(/\r?\n/).find(Boolean)?.match(/^(\d+)\s+/);
+      if (match) mode = match[1];
+    } catch {
+      // Untracked files are staged as a normal non-executable blob.
+    }
+    await runGit(resolved.repository.rootPath, [
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `${mode},${objectId},${resolved.relativePath}`,
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  return getFileStatus(resolved.repository.rootPath, resolved.absolutePath);
+}
+
 export async function commitFile(
   repositoryPath: string,
   filePath: string,

@@ -56,11 +56,13 @@ import {
   refreshAiChangeMarkers,
 } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
-import { createPasteParser, extractTextblockLineMap } from './editor/lib/MarkdownParser';
+import { createPasteParser, extractTextblockLineMap, extractBlockLineMap } from './editor/lib/MarkdownParser';
 import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
 import { LazyExportController } from './controllers/lazyExportController';
 import { SourceModeController } from './controllers/SourceModeController';
 import { LayoutController } from './controllers/LayoutController';
+import { ChangeViewController } from './controllers/ChangeViewController';
+import { ExternalFollowController } from './controllers/ExternalFollowController';
 import { ShortcutController } from './controllers/ShortcutController';
 import { EditorBootstrap } from './controllers/EditorBootstrap';
 
@@ -81,7 +83,7 @@ import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
 import { createLazyTerminalModal, type TerminalAppearance } from './ui/lazyTerminalModal';
 import { createLazyAiChatPanel } from './ui/lazyAiChatPanel';
-import type { EditorHostTransport, EditorSourceDocumentRequest, HostToEditorMessage } from '@easyview/contracts';
+import type { EditorHostTransport, EditorSourceDocumentRequest, GitRefreshStatus, HostToEditorMessage } from '@easyview/contracts';
 import { EditorSyncAdapter } from './sync/editorSyncAdapter';
 import type { EasyViewEditorHostActions } from './hosts/host-actions';
 export type { EasyViewEditorHostActions } from './hosts/host-actions';
@@ -112,6 +114,7 @@ export interface EasyViewEditorUiState {
   outlineVisible: boolean;
   fullWidth: boolean;
   tableWrap: boolean;
+  viewChanges: boolean;
 }
 
 export type EasyViewThemeMode = 'light' | 'gray' | 'dark';
@@ -128,6 +131,7 @@ export interface EasyViewEditorInstance {
   subscribeUiState(listener: (state: EasyViewEditorUiState) => void): { unsubscribe(): void };
   setOutlineWidth(width: number): void;
   getThemeState(): EasyViewEditorThemeState;
+  setThemeMode(mode: EasyViewThemeMode): void;
   setThemeDepth(depth: number): void;
   getAccentTheme(): EasyViewAccentTheme;
   setAccentTheme(theme: EasyViewAccentTheme): void;
@@ -157,6 +161,15 @@ let currentContent = '';
 let currentFilePath = '';
 let documentActive = true;
 let autoFollowExternalEdits = true;
+let gitBaseContent = '';
+let gitHasChanges = false;
+let gitRefreshStatus: GitRefreshStatus = 'ready';
+let changeViewController: ChangeViewController | null = null;
+let externalFollowController: ExternalFollowController | null = null;
+// View Change is a per-document selection and must survive reused webviews.
+const rememberedChangeViewByPath = new Map<string, boolean>();
+let suppressChangeViewPersist = false;
+let restoreRememberedChangeView: () => void = () => undefined;
 let isFullWidth = true;
 let isTocVisible = false; // TOC sidebar starts closed; keep button state in sync
 let isTableWrap = false; // default: disabled
@@ -175,6 +188,7 @@ let executeCommandImpl: (command: EasyViewEditorCommand) => void = () => undefin
   outlineVisible: isTocVisible,
   fullWidth: isFullWidth,
   tableWrap: isTableWrap,
+  viewChanges: Boolean(changeViewController?.isActive()),
 });
 const notifyUiState = (): void => {
   const state = getUiState();
@@ -189,6 +203,7 @@ const notifyUiState = (): void => {
         tocVisible: state.outlineVisible,
         fullWidth: state.fullWidth,
         tableWrap: state.tableWrap,
+        viewChanges: state.viewChanges,
       },
     });
   }
@@ -220,6 +235,7 @@ let toolbarShortcuts: ToolbarShortcutConfig = {
   toggleStickyNote: 'Alt+N',
   toggleAiChat: 'Alt+I',
   openSourceMode: 'Alt+Q',
+  toggleViewChanges: 'Alt+V',
   copyOutlinePath: 'Alt+Shift+O',
   copyFullPath: 'Alt+Shift+P',
   stageFile: 'Alt+S',
@@ -1151,13 +1167,20 @@ async function copyTextToClipboard(text: string, successMessage: string): Promis
   host.postMessage({ type: 'copyTextToClipboard', text, successMessage });
 }
 
+function getOutlineContextText(outline: string): string {
+  if (!outline) return '';
+  const fileName = currentFilePath.split(/[\\/]/).pop()?.trim() || 'Unknown.md';
+  const path = [fileName, ...outline.split('》').filter(Boolean)].join('  》');
+  return `\n内容位置：${path}\n`;
+}
+
 async function copyOutlinePathText(outline: string): Promise<void> {
-  if (!outline) {
+  const text = getOutlineContextText(outline);
+  if (!text) {
     showToast('No outline path found');
     return;
   }
-  const fileName = currentFilePath.split(/[\\/]/).pop()?.trim() || 'Unknown.md';
-  await copyTextToClipboard(`文件：${fileName}\n内容位置：${outline}`, 'Copied outline path');
+  await copyTextToClipboard(text, 'Copied outline path');
 }
 
 async function copyOutlinePathForSelection(): Promise<void> {
@@ -1167,6 +1190,37 @@ async function copyOutlinePathForSelection(): Promise<void> {
 async function copyOutlinePathAtPos(pos: number): Promise<void> {
   await copyOutlinePathText(computeHeadingBreadcrumbForPos(pos));
 }
+
+async function sendHeadingContextToChat(pos: number): Promise<void> {
+  const prompt = getOutlineContextText(computeHeadingBreadcrumbForPos(pos));
+  if (!prompt) {
+    showToast('No outline path found');
+    return;
+  }
+  if (!hostActions.openChatWithPrompt) {
+    showToast('Cursor chat is unavailable');
+    return;
+  }
+  try {
+    await hostActions.openChatWithPrompt(prompt);
+  } catch (error) {
+    console.error('[EasyView_Md] Failed to open Cursor chat with heading context', error);
+    showToast('Could not open Cursor chat');
+  }
+}
+
+function insertHeadingContextIntoITerm(pos: number): void {
+  const text = getOutlineContextText(computeHeadingBreadcrumbForPos(pos));
+  if (text) hostActions.insertIntoITerm?.(text);
+}
+
+const headingPathActions = {
+  onCopyOutlinePath: (headingPos: number) => { void copyOutlinePathAtPos(headingPos); },
+  onSendHeadingToChat: hostActions.openChatWithPrompt
+    ? (headingPos: number) => { void sendHeadingContextToChat(headingPos); }
+    : undefined,
+  onInsertIntoITerm: hostActions.insertIntoITerm ? insertHeadingContextIntoITerm : undefined,
+};
 
 async function copyFullPathForSelection(): Promise<void> {
   const outline = getCurrentOutlinePath();
@@ -1278,6 +1332,24 @@ function initEditor() {
 
   // 1. Create extensions (order matters for keymap priority)
   const tExt = performance.now();
+  const aiChangesExtension = new AiChangesExtension(
+    () => autoFollowExternalEdits,
+    (pos, startLine, view) => {
+      if (changeViewController?.isActive()) {
+        let line = startLine;
+        if (!line) {
+          let blockIndex = 0;
+          view.state.doc.forEach((_node, offset, index) => { if (offset <= pos) blockIndex = index; });
+          line = extractBlockLineMap(currentContent)[blockIndex]?.startLine;
+        }
+        if (line) changeViewController.scrollToLine(line);
+        return;
+      }
+      const domNode = view.nodeDOM(pos);
+      if (domNode instanceof HTMLElement) domNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
+    () => gitRefreshStatus,
+  );
   const extensions = [
     new KeyboardOverridesExtension(),
     new ListsExtension(),
@@ -1286,7 +1358,7 @@ function initEditor() {
     new HeadingExtension({
       document: dom.document,
       onToast: showToast,
-      onCopyOutlinePath: (headingPos) => { void copyOutlinePathAtPos(headingPos); },
+      ...headingPathActions,
     }),
     new BlockquoteExtension(),
     new CodeBlockExtension(),
@@ -1319,7 +1391,7 @@ function initEditor() {
     new TrailingNodeExtension(),
     new PlaceholderExtension(),
     new ClipboardExtension(),
-    new AiChangesExtension(),
+    aiChangesExtension,
   ];
 
   console.log(`[EasyView_Md perf] create extensions: ${(performance.now() - tExt).toFixed(1)}ms`);
@@ -1356,6 +1428,17 @@ function initEditor() {
   });
   fileHeader.setExternalFollowHandler((enabled) => {
     autoFollowExternalEdits = enabled;
+    externalFollowController?.setEnabled(enabled);
+    if (!enabled) aiChangesExtension.hideJumpToast();
+    else aiChangesExtension.showCurrentJumpToast(globalEditorView);
+  });
+  fileHeader.setViewChangesHandler(() => {
+    if (!changeViewController) return;
+    if (!gitHasChanges) {
+      if (changeViewController.isActive()) changeViewController.close();
+      return;
+    }
+    changeViewController.toggle();
   });
   const editorBody = dom.getById('editor-body');
   if (editorBody && uiMode === 'standard') {
@@ -1492,8 +1575,22 @@ function initEditor() {
   editorSync = new EditorSyncAdapter({
     postMessage: (message) => host.postMessage(message),
     getSettings: () => ({ fullWidth: isFullWidth, tocVisible: isTocVisible, tableWrap: isTableWrap }),
-    onSnapshot: (content, _revision, message) => {
+    onSnapshot: (content, revision, message) => {
       const isInit = !canPostEditsToHost;
+      gitRefreshStatus = message.gitRefreshStatus ?? 'ready';
+      const previousContentForFollow = currentContent;
+      const previousPathForFollow = currentFilePath;
+      externalFollowController?.reset();
+      if (!isInit && message.filePath !== currentFilePath) {
+        const previousPath = currentFilePath;
+        const wasActive = Boolean(changeViewController?.isActive());
+        if (previousPath) rememberedChangeViewByPath.set(previousPath, wasActive);
+        suppressChangeViewPersist = true;
+        changeViewController?.close();
+        suppressChangeViewPersist = false;
+        gitHasChanges = false;
+        fileHeader.syncViewChangesState(false, false);
+      }
       initReceived = true;
       currentContent = content;
       stickyNote.setDocumentContent(content);
@@ -1514,11 +1611,15 @@ function initEditor() {
         aiChatPanel.setFilePath(documentActive ? currentFilePath : '');
         toc.setFilePath(currentFilePath);
       }
+      if (typeof message.uiState?.viewChanges === 'boolean' && currentFilePath) {
+        rememberedChangeViewByPath.set(currentFilePath, message.uiState.viewChanges);
+      }
       if (typeof message.fullWidth === 'boolean') { isFullWidth = message.fullWidth; dom.getById('editor')?.classList.toggle('full-width', isFullWidth); fileHeader.syncFullWidthState(isFullWidth); }
       if (typeof message.tocVisible === 'boolean' && uiMode !== 'desktop') { isTocVisible = message.tocVisible; isTocVisible ? toc.open() : toc.close(); fileHeader.syncTocState(isTocVisible); }
       if (typeof message.tableWrap === 'boolean') { isTableWrap = message.tableWrap; dom.getById('editor')?.classList.toggle('table-wrap', isTableWrap); fileHeader.syncTableWrapState(isTableWrap); }
       if (typeof message.tableFirstRowStickyDefault === 'boolean') setFirstRowStickyDefault(message.tableFirstRowStickyDefault);
       if (message.terminalAppearance) { terminalAppearance = message.terminalAppearance; terminalModal.updateAppearance(terminalAppearance); }
+      changeViewController?.setContent(content);
       if (isSourceMode && sourceEditor) {
         sourceEditor.setContent(content);
       } else {
@@ -1527,11 +1628,22 @@ function initEditor() {
       canPostEditsToHost = true;
       updateTocStatusBar();
       refreshChangeRailsAfterLayout();
+      restoreRememberedChangeView();
       notifyUiState();
+      if (
+        !isInit
+        && autoFollowExternalEdits
+        && previousPathForFollow
+        && previousPathForFollow === currentFilePath
+        && previousContentForFollow !== content
+      ) {
+        requestAnimationFrame(() => externalFollowController?.enqueue(previousContentForFollow, content, revision));
+      }
 
       if (isInit) {
         toolbar.update(view);
         toc.update(view);
+        aiChangesExtension.showCurrentJumpToast(editor.view);
         requestAnimationFrame(() => {
           const scrollArea = dom.getById('editor-scroll-area');
           if (scrollArea) {
@@ -1554,6 +1666,7 @@ function initEditor() {
       }
     },
     onExternalContent: (content, patches) => {
+      changeViewController?.setContent(content);
       if (isSourceMode && sourceEditor) {
         sourceEditor.setContent(content);
         currentContent = content;
@@ -1649,12 +1762,230 @@ function initEditor() {
     aiChatPanel.setFilePath(active ? currentFilePath : '');
   };
 
+  let previousTocClickHandler: typeof toc.sourceClickHandler = null;
+  const getVisibleSourceAnchor = (): { line: number; offsetFromTop: number } => {
+    const scrollArea = dom.getById('editor-scroll-area');
+    if (!scrollArea) return { line: 1, offsetFromTop: 0 };
+    const hostTop = scrollArea.getBoundingClientRect().top;
+    if (isSourceMode && sourceEditor) {
+      const doc = sourceEditor.view.state.doc;
+      for (let line = 1; line <= doc.lines; line++) {
+        try {
+          const coords = sourceEditor.view.coordsAtPos(doc.line(line).from);
+          if (coords && coords.bottom > hostTop + 4) {
+            return { line, offsetFromTop: Math.max(0, coords.top - hostTop) };
+          }
+        } catch { break; }
+      }
+      return { line: Math.max(1, sourceEditor.getTopLineNumber()), offsetFromTop: 0 };
+    }
+    const view = editor.view;
+    if (!view) return { line: 1, offsetFromTop: 0 };
+    const blocks = extractBlockLineMap(currentContent || editor.getMarkdown());
+    let pos = 0;
+    let fallback = { line: 1, offsetFromTop: 0 };
+    for (let index = 0; index < view.state.doc.childCount; index++) {
+      const child = view.state.doc.child(index);
+      const domNode = view.nodeDOM(pos);
+      pos += child.nodeSize;
+      const startLine = blocks[index]?.startLine ?? fallback.line;
+      if (!(domNode instanceof HTMLElement)) continue;
+      const rect = domNode.getBoundingClientRect();
+      if (rect.bottom > hostTop + 4) {
+        return { line: Math.max(1, startLine), offsetFromTop: Math.max(0, rect.top - hostTop) };
+      }
+      fallback = { line: Math.max(1, startLine), offsetFromTop: 0 };
+    }
+    return fallback;
+  };
+  const revealSourceAnchor = (anchor: { line: number; offsetFromTop: number }): void => {
+    const targetLine = Math.max(1, anchor.line);
+    const yMargin = Math.max(0, anchor.offsetFromTop);
+    const scrollArea = dom.getById('editor-scroll-area');
+    if (!scrollArea) return;
+    if (isSourceMode && sourceEditor) {
+      const docLine = sourceEditor.view.state.doc.line(
+        Math.min(targetLine, sourceEditor.view.state.doc.lines),
+      );
+      let nextTop: number | null = null;
+      try {
+        const coords = sourceEditor.view.coordsAtPos(docLine.from);
+        if (coords) nextTop = scrollArea.scrollTop + (coords.top - scrollArea.getBoundingClientRect().top) - yMargin;
+      } catch { /* jsdom */ }
+      if (nextTop === null) {
+        try { nextTop = sourceEditor.view.lineBlockAt(docLine.from).top - yMargin; } catch { return; }
+      }
+      if (typeof scrollArea.scrollTo === 'function') {
+        scrollArea.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
+      } else {
+        scrollArea.scrollTop = Math.max(0, nextTop);
+      }
+      return;
+    }
+    const view = editor.view;
+    if (!view) return;
+    try {
+      const blocks = extractBlockLineMap(currentContent || editor.getMarkdown());
+      let index = blocks.findIndex((block) => targetLine >= block.startLine && targetLine <= block.endLine);
+      if (index < 0 && blocks.length) {
+        index = blocks.reduce((best, block, i) => {
+          const dist = targetLine < block.startLine
+            ? block.startLine - targetLine
+            : targetLine > block.endLine ? targetLine - block.endLine : 0;
+          if (best < 0) return i;
+          const bestBlock = blocks[best];
+          const bestDist = targetLine < bestBlock.startLine
+            ? bestBlock.startLine - targetLine
+            : targetLine > bestBlock.endLine ? targetLine - bestBlock.endLine : 0;
+          return dist < bestDist ? i : best;
+        }, -1);
+      }
+      if (index >= 0 && index < view.state.doc.childCount) {
+        let pos = 0;
+        for (let i = 0; i < index; i++) pos += view.state.doc.child(i).nodeSize;
+        const domNode = view.nodeDOM(pos);
+        if (domNode instanceof HTMLElement) {
+          const nextTop = scrollArea.scrollTop
+            + (domNode.getBoundingClientRect().top - scrollArea.getBoundingClientRect().top)
+            - yMargin;
+          if (typeof scrollArea.scrollTo === 'function') {
+            scrollArea.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
+          } else {
+            scrollArea.scrollTop = Math.max(0, nextTop);
+          }
+          return;
+        }
+      }
+    } catch { /* fall through */ }
+    const totalLines = Math.max(1, (currentContent || editor.getMarkdown()).split('\n').length);
+    const ratio = Math.min(targetLine - 1, totalLines - 1) / Math.max(1, totalLines - 1);
+    const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+    const top = Math.round(maxScrollTop * ratio);
+    if (typeof scrollArea.scrollTo === 'function') scrollArea.scrollTo({ top, behavior: 'auto' });
+    else scrollArea.scrollTop = top;
+  };
+  changeViewController = new ChangeViewController({
+    scrollArea: dom.getById('editor-scroll-area')!,
+    editorElement,
+    currentContent: () => currentContent || editor.getMarkdown(),
+    setContent: (content) => {
+      currentContent = content;
+      if (isSourceMode && sourceEditor) sourceEditor.setContent(content, { addToHistory: true });
+      else editor.setContent(content, false, { addToHistory: true, scrollIntoView: false });
+      stickyNote.setDocumentContent(content);
+      updateTocStatusBar();
+    },
+    getBaseContent: () => gitBaseContent,
+    postEdit,
+    stageHunk: (content) => {
+      editor.flushSync();
+      host.postMessage({ type: 'stageHunk', content });
+    },
+    getVisibleSourceAnchor,
+    revealSourceAnchor,
+    onStateChange: (active) => {
+      if (!suppressChangeViewPersist && currentFilePath) rememberedChangeViewByPath.set(currentFilePath, active);
+      if (active) {
+        previousTocClickHandler = toc.sourceClickHandler;
+        const reveal = (heading: { level: number; text: string }) => changeViewController?.revealHeading(heading.level, heading.text);
+        toc.changeViewClickHandler = reveal;
+        toc.sourceClickHandler = reveal;
+        toc.enterSourceMode(
+          () => changeViewController?.getActiveHeadingPos(toc.getHeadings()) ?? -1,
+          dom.getById('editor-scroll-area')!,
+        );
+      } else {
+        toc.exitSourceMode();
+        toc.changeViewClickHandler = null;
+        toc.sourceClickHandler = previousTocClickHandler;
+        previousTocClickHandler = null;
+      }
+      fileHeader.syncViewChangesState(active, gitHasChanges);
+      if (toc.visible) toc.update(editor.view!);
+      if (!suppressChangeViewPersist) notifyUiState();
+    },
+  });
+  restoreRememberedChangeView = (): void => {
+    if (!changeViewController || !currentFilePath) {
+      fileHeader.syncViewChangesState(false, gitHasChanges);
+      return;
+    }
+    if (!gitHasChanges) {
+      if (changeViewController.isActive()) {
+        suppressChangeViewPersist = true;
+        changeViewController.close();
+        suppressChangeViewPersist = false;
+      }
+      fileHeader.syncViewChangesState(false, false);
+      return;
+    }
+    const remembered = Boolean(rememberedChangeViewByPath.get(currentFilePath));
+    if (remembered && !changeViewController.isActive()) changeViewController.open();
+    fileHeader.syncViewChangesState(Boolean(changeViewController.isActive()), true);
+  };
+  const restoreChangeViewTocHandler = (): void => {
+    if (!changeViewController?.isActive() || isSourceMode) return;
+    // SourceModeController clears the ToC source handler when leaving the
+    // embedded source editor. Reinstall the Change View handler afterwards so
+    // ToC clicks continue to reveal the matching line in the change editor.
+    toc.sourceClickHandler = (heading) => changeViewController?.revealHeading(heading.level, heading.text);
+    toc.enterSourceMode(
+      () => changeViewController?.getActiveHeadingPos(toc.getHeadings()) ?? -1,
+      dom.getById('editor-scroll-area')!,
+    );
+  };
   // 4. Initialize editor
   const tEditorInit = performance.now();
   editor.init(editorElement);
   console.log(`[EasyView_Md perf] editor.init(): ${(performance.now() - tEditorInit).toFixed(1)}ms`);
 
   const view = editor.view!;
+  const revealExternalFollowLine = (line: number): void => {
+    const targetLine = Math.max(1, line);
+    if (changeViewController?.isActive()) {
+      changeViewController.scrollToLine(targetLine);
+      return;
+    }
+    if (isSourceMode && sourceEditor) {
+      sourceEditor.scrollToLine(targetLine, 'smooth');
+      return;
+    }
+    const view = editor.view;
+    const scrollArea = dom.getById('editor-scroll-area');
+    if (!view || !scrollArea) return;
+    try {
+      const blockLines = extractBlockLineMap(currentContent);
+      let index = blockLines.findIndex((block) => targetLine >= block.startLine && targetLine <= block.endLine);
+      if (index < 0 && blockLines.length) {
+        index = blockLines.reduce((best, block, i) => {
+          const dist = targetLine < block.startLine
+            ? block.startLine - targetLine
+            : targetLine > block.endLine ? targetLine - block.endLine : 0;
+          if (best < 0) return i;
+          const bestBlock = blockLines[best];
+          const bestDist = targetLine < bestBlock.startLine
+            ? bestBlock.startLine - targetLine
+            : targetLine > bestBlock.endLine ? targetLine - bestBlock.endLine : 0;
+          return dist < bestDist ? i : best;
+        }, -1);
+      }
+      if (index >= 0 && index < view.state.doc.childCount) {
+        let pos = 0;
+        for (let i = 0; i < index; i++) pos += view.state.doc.child(i).nodeSize;
+        const domNode = view.nodeDOM(pos);
+        if (domNode instanceof HTMLElement) {
+          domNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return;
+        }
+      }
+    } catch { /* fall through to line-ratio scroll */ }
+    const totalLines = Math.max(1, currentContent.split('\n').length);
+    const ratio = Math.min(targetLine - 1, totalLines - 1) / Math.max(1, totalLines - 1);
+    const maxScrollTop = Math.max(0, scrollArea.scrollHeight - scrollArea.clientHeight);
+    scrollArea.scrollTo({ top: Math.round(maxScrollTop * ratio), behavior: 'smooth' });
+  };
+  externalFollowController = new ExternalFollowController(revealExternalFollowLine);
+  externalFollowController.setEnabled(autoFollowExternalEdits);
   globalEditorView = view;
   dom.eventTarget.addEventListener('resize', renderWysiwygGhost);
   dom.eventTarget.addEventListener('resize', updateGitChangeRailOffset);
@@ -1705,7 +2036,7 @@ function initEditor() {
   );
 
   // Create Table of Contents sidebar
-  const toc = new TableOfContents(view, { position: outlinePosition, dom });
+  const toc = new TableOfContents(view, { position: outlinePosition, dom, ...headingPathActions });
   toc.setFilePath(currentFilePath);
   setOutlineVisibleImpl = (visible) => {
     if (visible === toc.visible && visible === isTocVisible) return;
@@ -2100,7 +2431,10 @@ function initEditor() {
     getWysiwygApproxSourcePosition,
   });
 
-  fileHeader.setSourceHandler(() => openPreferredSourceMode());
+  fileHeader.setSourceHandler(() => {
+    openPreferredSourceMode();
+    restoreChangeViewTocHandler();
+  });
   if (host.capabilities.sourceMode === 'embedded') {
     fileHeader.getSourceBtn().title = 'Toggle source mode';
   }
@@ -2126,7 +2460,11 @@ function initEditor() {
         fileHeader.syncTocState(isTocVisible);
         notifyUiState();
         return;
-      case 'toggleSourceMode': openPreferredSourceMode(); notifyUiState(); return;
+      case 'toggleSourceMode':
+        openPreferredSourceMode();
+        restoreChangeViewTocHandler();
+        notifyUiState();
+        return;
       case 'toggleFullWidth':
         isFullWidth = !isFullWidth;
         dom.getById('editor')?.classList.toggle('full-width', isFullWidth);
@@ -2300,18 +2638,38 @@ function initEditor() {
 
     switch (message.type) {
       case 'documentSnapshot':
+      case 'documentActivate':
       case 'documentPatched':
       case 'editsApplied':
       case 'resyncRequired': {
+        const previousContent = currentContent;
         editorSync?.handleMessage(message);
+        if (message.type === 'documentPatched' && message.source === 'external' && currentContent !== previousContent) {
+          externalFollowController?.enqueue(previousContent, currentContent, message.revision);
+        }
         break;
       }
 
+      case 'gitRefreshStatus':
+        if (message.documentId === editorSync?.documentId && message.revision === editorSync.revision) {
+          gitRefreshStatus = message.status;
+          aiChangesExtension.refreshVisibleJumpToast(editor.view);
+        }
+        break;
+
       case 'gitStatusChanged':
         if (view && message.revision === (editorSync?.revision ?? message.revision)) {
+          gitRefreshStatus = 'ready';
+          gitBaseContent = message.snapshot?.baseContent ?? '';
+          gitHasChanges = Array.isArray(message.lineRanges) && message.lineRanges.length > 0;
+          restoreRememberedChangeView();
+          changeViewController?.setBaseContent(gitBaseContent);
           view.dispatch(view.state.tr.setMeta(GIT_CHANGE_META, {
+            revision: message.revision,
+            markdown: currentContent,
             lineRanges: Array.isArray(message.lineRanges) ? message.lineRanges : [],
           }));
+          aiChangesExtension.refreshVisibleJumpToast(view);
         }
         break;
 
@@ -2432,6 +2790,10 @@ function initEditor() {
       shortcutUnregister();
       exportController.dispose();
       sourceModeController?.dispose();
+      changeViewController?.dispose();
+      changeViewController = null;
+      externalFollowController?.dispose();
+      externalFollowController = null;
       imageToolbar.destroy();
       linkEditPopup.destroy();
       fileHeader.destroy();
@@ -2488,6 +2850,7 @@ function initEditor() {
       }
     },
     getThemeState: () => getThemeStateImpl(),
+    setThemeMode: (mode: EasyViewThemeMode) => setThemeModeImpl(mode),
     setThemeDepth: (depth: number) => setThemeDepthImpl(depth),
     getAccentTheme: () => getAccentThemeImpl(),
     setAccentTheme: (theme: EasyViewAccentTheme) => setAccentThemeImpl(theme),

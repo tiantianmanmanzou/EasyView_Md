@@ -69,4 +69,10 @@ describe('git change tracker', () => {
 
     expect(gitRuntime.getIndexFileContent).toHaveBeenCalledTimes(2);
   });
+
+  it('propagates Git read failures instead of reporting no changes', async () => {
+    gitRuntime.getIndexFileContent.mockRejectedValue(new Error('index unavailable'));
+    const uri = { scheme: 'file', fsPath: '/repo/note.md' } as never;
+    await expect(computeGitLineRanges(uri, '# changed\n', 7)).rejects.toThrow('index unavailable');
+  });
 });

@@ -25,6 +25,31 @@ function extractComment(html: string): string | null {
   return match ? match[1].trim() : null;
 }
 
+/**
+ * Keep raw HTML as the serialized document value, but render only inert HTML
+ * in the editor surface. This preserves formatting and details/summary blocks
+ * while preventing scripts, event-handler attributes, navigation containers,
+ * and javascript URLs from becoming part of the trusted editor DOM.
+ */
+export function sanitizeHtmlBlockForEditor(source: string): string {
+  const template = document.createElement('template');
+  template.innerHTML = source;
+  template.content.querySelectorAll('script, iframe, object, embed, form, base, link').forEach((element) => element.remove());
+  template.content.querySelectorAll<HTMLElement>('*').forEach((element) => {
+    for (const attribute of element.attributes) {
+      if (/^on/i.test(attribute.name)) {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+      if ((attribute.name === 'href' || attribute.name === 'src' || attribute.name === 'action')
+        && /^(?:javascript|vbscript):/i.test(attribute.value.trim())) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  });
+  return template.innerHTML;
+}
+
 /** Flag set by slash menu to auto-start editing on newly created comments */
 export let autoEditNextComment = false;
 
@@ -166,7 +191,7 @@ function createStandardHtmlNodeView(node: ProsemirrorNode, view: EditorView, get
   // Rendered HTML in a scoped container (style containment)
   const rendered = document.createElement('div');
   rendered.className = 'html-block-rendered';
-  rendered.innerHTML = node.attrs.html;
+  rendered.innerHTML = sanitizeHtmlBlockForEditor(node.attrs.html);
   dom.appendChild(rendered);
 
   // Label
@@ -300,7 +325,7 @@ function createStandardHtmlNodeView(node: ProsemirrorNode, view: EditorView, get
       if (newComment !== null) return false; // Let ProseMirror recreate as comment view
       dom.setAttribute('data-html', updatedNode.attrs.html);
       if (!isEditing) {
-        rendered.innerHTML = updatedNode.attrs.html;
+        rendered.innerHTML = sanitizeHtmlBlockForEditor(updatedNode.attrs.html);
       }
       return true;
     },

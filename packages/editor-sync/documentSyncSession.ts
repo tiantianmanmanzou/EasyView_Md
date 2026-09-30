@@ -67,6 +67,7 @@ export class DocumentSyncSession {
   private state: DocumentSyncState = 'synced';
   private inFlight: InFlight | null = null;
   private bufferedEditCount = 0;
+  private readonly retiredClientEditIds = new Set<string>();
   private nextEditId = 1;
   private readonly onSend?: (message: SyncOutboundMessage) => void;
 
@@ -104,6 +105,12 @@ export class DocumentSyncSession {
 
   handleAck(ack: EditsAppliedAck): void {
     this.assertActive();
+    // An external patch can supersede an edit that was already sent. Its ACK
+    // may still arrive after the rebased edit is in flight; it is stale, not a
+    // protocol failure, and must not trigger an unnecessary resync.
+    if (this.retiredClientEditIds.has(ack.clientEditId)) {
+      return;
+    }
     if (ack.documentId !== this.documentId || !this.inFlight || ack.clientEditId !== this.inFlight.message.clientEditId) {
       this.requestResync('Unexpected edit acknowledgement');
       return;
@@ -138,6 +145,9 @@ export class DocumentSyncSession {
         const localDelta = minimalTextPatch(this.confirmedContent, this.optimisticContent);
         const rebased = rebasePatches(localDelta, message.edits);
         if (rebased.conflict) {
+          if (this.inFlight) this.retire(this.inFlight.message.clientEditId);
+          this.inFlight = null;
+          this.bufferedEditCount = 0;
           this.state = 'conflict';
           return;
         }
@@ -145,6 +155,7 @@ export class DocumentSyncSession {
         this.revision = message.revision;
         this.optimisticContent = applyTextPatches(nextConfirmed, rebased.patches);
         if (this.inFlight) {
+          this.retire(this.inFlight.message.clientEditId);
           this.inFlight = null;
           this.bufferedEditCount = 0;
           this.sendPendingEdits();
@@ -204,6 +215,15 @@ export class DocumentSyncSession {
     return message;
   }
 
+  private retire(clientEditId: string): void {
+    this.retiredClientEditIds.add(clientEditId);
+    while (this.retiredClientEditIds.size > 64) {
+      const oldest = this.retiredClientEditIds.values().next().value as string | undefined;
+      if (!oldest) break;
+      this.retiredClientEditIds.delete(oldest);
+    }
+  }
+
   private optimisticContentForInFlight(): string {
     return applyTextPatches(this.inFlight!.contentBefore, this.inFlight!.message.edits);
   }
@@ -212,4 +232,3 @@ export class DocumentSyncSession {
     if (this.state === 'disposed') throw new Error('DocumentSyncSession is disposed');
   }
 }
-

@@ -89,6 +89,34 @@ describe('DesktopWorkspaceCore', () => {
     await expect(core.copy({ sourceRelativePath: 'docs', targetParentRelativePath: 'docs' })).rejects.toThrow('自身');
   });
 
+  it('imports an external file into the workspace with a unique name on conflict', async () => {
+    const root = await fs.realpath(await tempWorkspace());
+    const outside = await tempWorkspace();
+    await fs.writeFile(path.join(outside, 'notes.md'), 'from outside');
+    const core = new DesktopWorkspaceCore();
+    await core.bindRoot(root);
+    await fs.mkdir(path.join(root, 'docs'));
+    const first = await core.importExternal(path.join(outside, 'notes.md'), 'docs');
+    expect(first).toMatchObject({ name: 'notes.md', relativePath: 'docs/notes.md', kind: 'file' });
+    expect(await fs.readFile(path.join(root, 'docs', 'notes.md'), 'utf8')).toBe('from outside');
+    const second = await core.importExternal(path.join(outside, 'notes.md'), 'docs');
+    expect(second.name).toBe('notes copy.md');
+  });
+
+  it('imports dropped file bytes into the target directory when no source path is available', async () => {
+    const root = await fs.realpath(await tempWorkspace());
+    const core = new DesktopWorkspaceCore();
+    await core.bindRoot(root);
+    await fs.mkdir(path.join(root, 'docs'));
+    const imported = await core.importExternalItems('docs', [{
+      kind: 'file',
+      relativePath: 'dropped.md',
+      data: Buffer.from('from explorer'),
+    }]);
+    expect(imported).toMatchObject({ name: 'dropped.md', relativePath: 'docs/dropped.md', kind: 'file' });
+    expect(await fs.readFile(path.join(root, 'docs', 'dropped.md'), 'utf8')).toBe('from explorer');
+  });
+
   it('deletes through the shared operation service using trash handler', async () => {
     const root = await fs.realpath(await tempWorkspace());
     const trashed: string[] = [];

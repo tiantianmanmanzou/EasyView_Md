@@ -8,6 +8,7 @@ export interface EditorSettings {
   fullWidth: boolean;
   tocVisible: boolean;
   tableWrap: boolean;
+  viewChanges?: boolean;
 }
 
 /**

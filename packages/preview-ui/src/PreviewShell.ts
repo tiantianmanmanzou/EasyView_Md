@@ -89,6 +89,12 @@ function loadViewer(
         if (!host.readText) throw new Error('当前宿主未提供文本读取能力');
         return React.createElement(SvgViewer, { descriptor, readText: host.readText.bind(host) });
       });
+    case 'html':
+      return import('./viewers/HtmlViewer').then(({ HtmlViewer }) => (descriptor, host) =>
+        React.createElement(HtmlViewer, {
+          descriptor,
+          ...(host.readText ? { readText: host.readText.bind(host) } : {}),
+        }));
     case 'pdf':
       return import('./viewers/PdfViewer').then(({ PdfViewer }) => (descriptor) =>
         React.createElement(PdfViewer, { descriptor }));

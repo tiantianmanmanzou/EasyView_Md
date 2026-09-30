@@ -66,4 +66,38 @@ describe('HeadingExtension instance callbacks', () => {
       second.view.destroy();
     }
   });
+
+  it('places the Cursor chat action after copy and routes the heading position', () => {
+    const sendHeadingToChat = vi.fn();
+    const { view, mount } = createHeadingView({ document, onSendHeadingToChat: sendHeadingToChat });
+
+    try {
+      const actions = [...mount.querySelectorAll('.heading-trailing button')];
+      expect(actions.map((button) => button.className)).toEqual(['heading-copy-outline', 'heading-send-to-chat']);
+      dispatchMouseDown(mount, '.heading-send-to-chat');
+      expect(sendHeadingToChat).toHaveBeenCalledWith(0);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it('shows immediate tooltip labels on all heading path actions', () => {
+    const { view, mount } = createHeadingView({
+      document,
+      onSendHeadingToChat: vi.fn(),
+      onInsertIntoITerm: vi.fn(),
+    });
+    try {
+      const buttons = [...mount.querySelectorAll<HTMLButtonElement>('.heading-trailing button')];
+      expect(buttons.map((button) => button.dataset.tooltip)).toEqual([
+        'Copy outline path to clipboard',
+        'Copy outline path to Cursor chat',
+        'Copy outline path to iTerm2',
+      ]);
+      expect(buttons.every((button) => !button.hasAttribute('title')
+        && button.getAttribute('aria-label') === button.dataset.tooltip)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
 });

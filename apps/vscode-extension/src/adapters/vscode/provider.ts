@@ -33,7 +33,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       MarkdownEditorProvider.viewType,
       provider,
       {
-        webviewOptions: { retainContextWhenHidden: false },
+        // Keep the ProseMirror instance alive when switching Markdown tabs.
+        // false destroys the iframe on hide, so every tab switch reloads
+        // webview.js, re-parses the document, and waits behind inlinemd-booting.
+        webviewOptions: { retainContextWhenHidden: true },
         supportsMultipleEditorsPerDocument: false,
       }
     );
@@ -148,6 +151,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       fullWidth: stored?.fullWidth ?? legacySettings.fullWidth,
       tocVisible: stored?.tocVisible ?? legacySettings.tocVisible,
       tableWrap: stored?.tableWrap ?? legacySettings.tableWrap,
+      viewChanges: stored?.viewChanges ?? false,
     };
   }
 

@@ -45,6 +45,15 @@ export {
 export { TextViewer, type TextViewerProps } from './viewers/TextViewer';
 export { ImageViewer } from './viewers/ImageViewer';
 export { SvgViewer, type SvgViewerProps } from './viewers/SvgViewer';
+export {
+  HtmlViewer,
+  htmlDocumentWithBase,
+  htmlPreviewBaseHref,
+  htmlRewriteRelativeUrls,
+  isHtmlPreviewAssetHref,
+  isLocalHttpPreviewUrl,
+  type HtmlViewerProps,
+} from './viewers/HtmlViewer';
 export { PdfViewer } from './viewers/PdfViewer';
 export { SpreadsheetViewer } from './viewers/SpreadsheetViewer';
 export { DocViewer } from './viewers/DocViewer';

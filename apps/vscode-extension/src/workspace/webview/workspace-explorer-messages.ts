@@ -15,6 +15,7 @@ export interface WorkspaceExplorerSortConfig {
 
 export type WorkspaceExplorerRequest =
   | { type: 'ready' }
+  | { type: 'focusContextMenu'; requestId: string }
   | { type: 'listChildren'; requestId: string; relativePath: string }
   | { type: 'setExpanded'; relativePath: string; expanded: boolean }
   | { type: 'setSelection'; relativePaths: string[]; anchorRelativePath: string | null }
@@ -36,6 +37,13 @@ export type WorkspaceExplorerRequest =
     }
   | { type: 'copy'; requestId: string; relativePaths: string[] }
   | { type: 'paste'; requestId: string; targetParentRelativePath: string }
+  | {
+      type: 'importExternal';
+      requestId: string;
+      targetParentRelativePath: string;
+      sourceUris?: string[];
+      items?: Array<{ kind: 'file' | 'directory'; relativePath: string; dataBase64?: string }>;
+    }
   | { type: 'copyPath'; relativePaths: string[] }
   | { type: 'copyRelativePath'; relativePaths: string[] }
   | { type: 'getSortConfig'; requestId: string }

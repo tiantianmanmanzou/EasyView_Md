@@ -48,7 +48,15 @@ export class EditorSyncAdapter {
   handleMessage(message: HostToEditorMessage): boolean {
     switch (message.type) {
       case 'documentSnapshot': {
-        if (!this.session || this.session.documentId !== message.documentId) {
+        const sameDocument = this.session?.documentId === message.documentId;
+        const sameRevision = sameDocument && this.session?.snapshot.revision === message.revision;
+        const forceReload = message.reason === 'reload' || message.reason === 'resync';
+        if (sameRevision && !forceReload) {
+          // Tab reactivation of a live instance: keep native + DualModeHistory undo.
+          this.options.postMessage({ type: 'snapshotApplied', documentId: message.documentId, revision: message.revision, contentHash: hashContent(message.content) });
+          return true;
+        }
+        if (!this.session || !sameDocument) {
           this.session = new DocumentSyncSession({ documentId: message.documentId, initialContent: message.content, initialRevision: message.revision, onSend: (outbound) => this.send(outbound) });
         } else {
           this.session.applySnapshot(message.content, message.revision);
@@ -72,6 +80,30 @@ export class EditorSyncAdapter {
         if (!this.options.onExternalContent(snapshot.canonicalContent, visiblePatches, message.revision)) {
           this.session.requestResync('External patch requires a structural snapshot');
         }
+        return true;
+      }
+      case 'documentActivate': {
+        const session = this.session;
+        if (!session || session.documentId !== message.documentId) {
+          this.options.postMessage({
+            type: 'requestResync',
+            documentId: message.documentId,
+            revision: message.revision,
+            reason: 'Activate without a live document session',
+          });
+          return true;
+        }
+        const currentHash = hashContent(session.snapshot.canonicalContent);
+        if (session.snapshot.revision === message.revision && currentHash === message.contentHash) {
+          this.options.postMessage({
+            type: 'snapshotApplied',
+            documentId: message.documentId,
+            revision: message.revision,
+            contentHash: currentHash,
+          });
+          return true;
+        }
+        session.requestResync('Activate revision or hash mismatch');
         return true;
       }
       case 'resyncRequired':

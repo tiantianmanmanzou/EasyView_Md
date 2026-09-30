@@ -4,4 +4,6 @@ import type { EditorSourceDocumentRequest } from '@easyview/contracts';
 export interface EasyViewEditorHostActions {
   openSourceDocument?(request: EditorSourceDocumentRequest): void;
   persistOpenEditorShortcut?(shortcut: string): void;
+  insertIntoITerm?(text: string): void;
+  openChatWithPrompt?(prompt: string): void;
 }

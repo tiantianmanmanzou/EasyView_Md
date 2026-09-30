@@ -14,6 +14,7 @@ import {
 } from '@easyview/contracts';
 import {
   joinWorkspaceRelativePath,
+  normalizeWorkspaceRelativePath,
   parentWorkspaceRelativePath,
   validateWorkspaceEntryName as validateSharedWorkspaceEntryName,
   WORKSPACE_TREE_ORDER_RELATIVE_PATH,
@@ -382,6 +383,94 @@ export class WorkspaceTreeService {
     };
   }
 
+  async importExternalUri(
+    root: vscode.Uri,
+    source: vscode.Uri,
+    targetParentRelativePath: string,
+  ): Promise<VscodeWorkspaceEntry> {
+    const rootId = this.gateway.registerRoot(root);
+    const parent = this.gateway.uriFor(rootId, targetParentRelativePath);
+    const sourceStat = await vscode.workspace.fs.stat(source);
+    if ((sourceStat.type & vscode.FileType.SymbolicLink) !== 0) {
+      throw new WorkspaceOperationError('SYMLINK_NOT_TRAVERSABLE', 'Importing symbolic links is not supported.');
+    }
+    const isDirectory = (sourceStat.type & vscode.FileType.Directory) !== 0;
+    const target = await uniqueCopyTargetUri(parent, workspaceBasename(source), isDirectory);
+    try {
+      await vscode.workspace.fs.copy(source, target, { overwrite: false });
+    } catch (error) {
+      throw new WorkspaceOperationError(
+        'IO_ERROR',
+        `Unable to import ${workspaceBasename(source)}.`,
+        { cause: error },
+      );
+    }
+    const relativePath = joinWorkspaceRelativePath(targetParentRelativePath, workspaceBasename(target));
+    this.orderState.noteCreated(relativePath);
+    this.model.invalidateDirectory(rootId, targetParentRelativePath);
+    this.schedulePersistOrderConfig();
+    return {
+      id: createWorkspaceNodeId(rootId, relativePath),
+      rootId,
+      relativePath,
+      name: workspaceBasename(target),
+      kind: isDirectory ? 'directory' : 'file',
+      uri: target,
+      writable: vscode.workspace.fs.isWritableFileSystem(root.scheme) !== false,
+    };
+  }
+
+  async importExternalItems(
+    root: vscode.Uri,
+    targetParentRelativePath: string,
+    items: ReadonlyArray<{ kind: 'file' | 'directory'; relativePath: string; data?: Uint8Array }>,
+  ): Promise<VscodeWorkspaceEntry | undefined> {
+    const rootId = this.gateway.registerRoot(root);
+    const parent = this.gateway.uriFor(rootId, targetParentRelativePath);
+    const rename = new Map<string, string>();
+    const topLevels = [...new Set(items.map((item) => item.relativePath.split('/')[0] ?? item.relativePath))];
+    for (const name of topLevels) {
+      const isDirectory = items.some((item) => (
+        (item.relativePath === name && item.kind === 'directory')
+        || item.relativePath.startsWith(`${name}/`)
+      ));
+      const unique = await uniqueCopyTargetUri(parent, name, isDirectory);
+      rename.set(name, workspaceBasename(unique));
+    }
+
+    const remapped = items
+      .map((item) => ({ ...item, relativePath: applyTopLevelRename(item.relativePath, rename) }))
+      .sort((left, right) => {
+        if (left.kind === right.kind) return left.relativePath.localeCompare(right.relativePath);
+        return left.kind === 'directory' ? -1 : 1;
+      });
+
+    let lastEntry: VscodeWorkspaceEntry | undefined;
+    for (const item of remapped) {
+      const relativePath = normalizeWorkspaceRelativePath(item.relativePath);
+      const createdRelativePath = [targetParentRelativePath, relativePath].filter(Boolean).join('/');
+      const target = this.gateway.uriFor(rootId, createdRelativePath);
+      if (item.kind === 'directory') {
+        await vscode.workspace.fs.createDirectory(target);
+      } else {
+        await vscode.workspace.fs.writeFile(target, item.data ?? new Uint8Array());
+      }
+      this.orderState.noteCreated(createdRelativePath);
+      lastEntry = {
+        id: createWorkspaceNodeId(rootId, createdRelativePath),
+        rootId,
+        relativePath: createdRelativePath,
+        name: relativePath.split('/').at(-1) ?? relativePath,
+        kind: item.kind,
+        uri: target,
+        writable: vscode.workspace.fs.isWritableFileSystem(root.scheme) !== false,
+      };
+    }
+    this.model.invalidateDirectory(rootId, targetParentRelativePath);
+    this.schedulePersistOrderConfig();
+    return lastEntry;
+  }
+
   async create(
     root: vscode.Uri,
     request: WorkspaceCreateRequest,
@@ -506,6 +595,12 @@ function fileTypeToEntryKind(fileType: vscode.FileType): WorkspaceEntryKind {
 function normalizeUriPath(uriPath: string): string {
   const normalized = path.posix.normalize(uriPath);
   return normalized.length > 1 ? normalized.replace(/\/$/, '') : normalized;
+}
+
+function applyTopLevelRename(relativePath: string, rename: ReadonlyMap<string, string>): string {
+  const top = relativePath.split('/')[0] ?? relativePath;
+  const next = rename.get(top) ?? top;
+  return relativePath === top ? next : `${next}${relativePath.slice(top.length)}`;
 }
 
 async function uniqueCopyTargetUri(

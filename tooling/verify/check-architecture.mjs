@@ -131,6 +131,17 @@ for (const required of [
   'tests/e2e/desktop',
   'tests/fixtures/editor',
 ]) await requirePath(required);
+try {
+  await access(path.join(root, 'renderer.js'));
+  violations.push('root renderer.js must not exist; it is a leftover build artifact and belongs in .gitignore');
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+const gitignore = await readFile(path.join(root, '.gitignore'), 'utf8');
+if (!/(?:^|\n)\/renderer\.js(?:\n|$)/.test(gitignore)) {
+  violations.push('.gitignore must ignore /renderer.js so the root leftover cannot re-enter the working tree');
+}
+
 for (const obsolete of ['src/host', 'e2e', 'test', 'esbuild.mjs', '.vscodeignore', '.vscode-test.mjs', 'assets', 'media']) {
   try {
     await readFile(path.join(root, obsolete));
@@ -147,6 +158,11 @@ for (const obsolete of ['packages/shared', 'packages/node-services', 'apps/vscod
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
+}
+
+const desktopHostSource = await readFile(path.join(root, 'apps/desktop/src/main/adapters/electron/desktopHost.ts'), 'utf8');
+if (/\bfrom ['"]node:fs['"]/.test(desktopHostSource) || /\bfs\.(readFile|writeFile|stat|lstat|realpath|watch)\b/.test(desktopHostSource) || /\bchild_process\b/.test(desktopHostSource)) {
+  violations.push('apps/desktop/src/main/adapters/electron/desktopHost.ts must not call the filesystem or child_process directly; move that work to application services');
 }
 
 if (violations.length > 0) {

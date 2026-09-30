@@ -48,6 +48,12 @@ const editor = createEasyViewEditor({
     persistOpenEditorShortcut(shortcut) {
       vscodeApi.postMessage({ type: 'vscode.persistOpenEditorShortcut', shortcut });
     },
+    insertIntoITerm(prompt) {
+      vscodeApi.postMessage({ type: 'vscode.insertIntoITerm', prompt });
+    },
+    openChatWithPrompt(prompt) {
+      vscodeApi.postMessage({ type: 'vscode.openChatWithPrompt', prompt });
+    },
   },
 });
 

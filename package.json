@@ -14,7 +14,7 @@
     "install:both": "node apps/vscode-extension/scripts/reinstall-local.mjs --target=both",
     "apply:local": "npm run install:both && npm run install:desktop",
     "install:desktop": "node apps/desktop/scripts/install-local.mjs",
-    "test:unit": "vitest run apps/vscode-extension/src packages/markdown-core/src packages/editor-core/src packages/contracts/tests packages/editor-sync/tests packages/preview-ui/tests packages/node-runtime/tests apps/desktop/src/main/**/*.test.ts",
+    "test:unit": "vitest run apps/vscode-extension/src packages/markdown-core/src packages/editor-core/src packages/contracts/tests packages/editor-sync/tests packages/preview-ui/tests packages/node-runtime/tests apps/desktop/src/main/**/*.test.ts apps/desktop/src/renderer/**/*.test.ts",
     "test:unit:watch": "vitest",
     "test:e2e": "vscode-test --config apps/vscode-extension/.vscode-test.mjs",
     "test:e2e:pw": "playwright test",

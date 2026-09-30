@@ -32,12 +32,6 @@ function assertString(value: unknown, name: string): asserts value is string {
   }
 }
 
-function assertMtime(value: unknown): asserts value is number | null {
-  if (value !== null && (typeof value !== 'number' || !Number.isFinite(value))) {
-    throw new TypeError('expectedMtimeMs must be a finite number or null');
-  }
-}
-
 function assertRelativePath(value: unknown): asserts value is string {
   if (typeof value !== 'string' || value.includes('\0')) throw new TypeError('relativePath 无效');
 }
@@ -49,20 +43,22 @@ function subscription(unsubscribe: () => void): EditorHostSubscription {
 const api: EasyViewDesktopApi = {
   document: {
     open: () => ipcRenderer.invoke('document.open') as Promise<OperationResult<DocumentOpenResult | null>>,
-    save: (content, expectedMtimeMs) => {
+    save: (content, sessionId) => {
       assertString(content, 'content');
-      assertMtime(expectedMtimeMs);
-      return ipcRenderer.invoke('document.save', { content, expectedMtimeMs }) as Promise<OperationResult<SaveDocumentResult | null>>;
+      assertString(sessionId, 'sessionId');
+      return ipcRenderer.invoke('document.save', { content, sessionId }) as Promise<OperationResult<SaveDocumentResult | null>>;
     },
-    saveAs: (content, suggestedFileName, lineEnding) => {
+    saveAs: (content, suggestedFileName, lineEnding, sessionId) => {
       assertString(content, 'content');
       assertString(suggestedFileName, 'suggestedFileName');
+      assertString(sessionId, 'sessionId');
       if (lineEnding !== '\n' && lineEnding !== '\r\n') throw new TypeError('invalid lineEnding');
-      return ipcRenderer.invoke('document.saveAs', { content, suggestedFileName, lineEnding }) as Promise<OperationResult<SaveDocumentResult | null>>;
+      return ipcRenderer.invoke('document.saveAs', { content, suggestedFileName, lineEnding, sessionId }) as Promise<OperationResult<SaveDocumentResult | null>>;
     },
-    rename: (fileName) => {
+    rename: (fileName, sessionId) => {
       assertString(fileName, 'fileName');
-      return ipcRenderer.invoke('document.rename', { fileName }) as Promise<OperationResult<SaveDocumentResult>>;
+      assertString(sessionId, 'sessionId');
+      return ipcRenderer.invoke('document.rename', { fileName, sessionId }) as Promise<OperationResult<SaveDocumentResult>>;
     },
     onChanged: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: DocumentOpenResult) => listener(payload);
@@ -87,6 +83,7 @@ const api: EasyViewDesktopApi = {
   },
   app: {
     getTheme: () => ipcRenderer.invoke('app.getTheme') as Promise<OperationResult<DesktopThemeMode>>,
+    newWindow: () => ipcRenderer.invoke('app.newWindow') as Promise<OperationResult<boolean>>,
     onThemeChanged: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, theme: DesktopThemeMode) => listener(theme);
       ipcRenderer.on('app.themeChanged', handler);
@@ -161,6 +158,10 @@ const api: EasyViewDesktopApi = {
     pasteClipboard: (request: WorkspacePasteRequest) => {
       assertRelativePath(request?.targetRelativePath);
       return ipcRenderer.invoke('workspace.pasteClipboard', request) as Promise<OperationResult<WorkspaceEntry>>;
+    },
+    importExternal: (request) => {
+      assertRelativePath(request?.targetParentRelativePath);
+      return ipcRenderer.invoke('workspace.importExternal', request) as Promise<OperationResult<WorkspaceEntry>>;
     },
     getResourcePaths: (relativePath: string) => {
       assertRelativePath(relativePath);

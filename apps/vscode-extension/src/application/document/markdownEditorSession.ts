@@ -61,6 +61,7 @@ export class MarkdownEditorSession implements vscode.Disposable {
   private lastSnapshotReason: 'initial' | 'visible' | 'resync' | 'reload' = 'initial';
   private lastConflictReason = '';
   private gitInFlight = false;
+  private initialGitReady = false;
 
   constructor(private readonly options: MarkdownEditorSessionOptions) {
     this.documentId = options.document.uri.toString();
@@ -87,12 +88,15 @@ export class MarkdownEditorSession implements vscode.Disposable {
       panel.onDidChangeViewState((event) => {
         this.visible = event.webviewPanel.visible;
         if (event.webviewPanel.active) this.options.onActive();
-        if (this.visible) this.scheduleGit();
+        if (this.visible) {
+          this.postActivate();
+          this.scheduleGit(0);
+        }
       }),
       panel.onDidDispose(() => this.dispose()),
       vscode.workspace.onDidChangeTextDocument((event) => this.onDocumentChanged(event)),
       vscode.workspace.onDidSaveTextDocument((document) => {
-        if (document.uri.toString() === this.document.uri.toString()) this.scheduleGit();
+        if (document.uri.toString() === this.document.uri.toString()) this.scheduleGit(0);
       }),
       watchEasyViewMarkdownDiskFile(this.document.uri),
       registerMarkdownThemePanel(panel),
@@ -106,7 +110,6 @@ export class MarkdownEditorSession implements vscode.Disposable {
     }
     panel.webview.html = this.options.getHtml(panel.webview);
     this.options.onActive();
-    this.scheduleGit();
     void this.registerGitRepositoryListener();
   }
 
@@ -127,7 +130,7 @@ export class MarkdownEditorSession implements vscode.Disposable {
     getTableFirstRowStickyDefault: this.options.getTableFirstRowStickyDefault,
     setTableFirstRowStickyDefault: this.options.setTableFirstRowStickyDefault,
     enqueueOperation: (name, operation, onError) => this.enqueue(name, operation, onError),
-    refreshGitChanges: () => this.scheduleGit(),
+    refreshGitChanges: () => this.scheduleGit(0),
   });
 
   private async onMessage(message: unknown): Promise<void> {
@@ -144,6 +147,7 @@ export class MarkdownEditorSession implements vscode.Disposable {
         fullWidth: this.uiState.fullWidth ?? current.fullWidth,
         tocVisible: this.uiState.tocVisible ?? current.tocVisible,
         tableWrap: this.uiState.tableWrap ?? current.tableWrap,
+        viewChanges: this.uiState.viewChanges ?? current.viewChanges ?? false,
       });
       return;
     }
@@ -152,6 +156,9 @@ export class MarkdownEditorSession implements vscode.Disposable {
       if (applied.documentId !== this.documentId || applied.revision !== this.sync.snapshot.revision || applied.contentHash !== hashContent(this.adapter.content)) {
         this.lastConflictReason = 'Snapshot acknowledgement mismatch';
         this.post({ type: 'resyncRequired', documentId: this.documentId, revision: this.sync.snapshot.revision, reason: this.lastConflictReason });
+      } else if (!this.initialGitReady) {
+        this.initialGitReady = true;
+        void this.scheduleGit(0);
       }
       return;
     }
@@ -194,7 +201,9 @@ export class MarkdownEditorSession implements vscode.Disposable {
       imagePathMap: buildImagePathMap(current, this.panel.webview, this.diskUri),
       skipAutoScroll: source !== 'external',
     };
-    if (this.visible) this.post(message);
+    // Keep the live webview in sync even while the tab is hidden so that
+    // documentActivate on show can skip a full snapshot replay.
+    this.post(message);
     this.scheduleGit();
   }
 
@@ -257,12 +266,38 @@ export class MarkdownEditorSession implements vscode.Disposable {
     if (contentOverride !== undefined) {
       const canonical = createCanonicalDocument(repairSerializedMarkdownContent(contentOverride)).content;
       await this.applyCanonicalReplacement(canonical, 'external');
+      this.postSnapshot(reason === 'visible' ? 'reload' : reason);
+      return;
     }
     this.postSnapshot(reason);
   }
 
+  /** Tab became visible: the webview is still live, so skip a full snapshot. */
+  private postActivate(): void {
+    const content = this.adapter.content;
+    this.lastSnapshotReason = 'visible';
+    this.post({
+      type: 'documentActivate',
+      documentId: this.documentId,
+      revision: this.sync.snapshot.revision,
+      contentHash: hashContent(content),
+      reason: 'visible',
+    });
+  }
+
   private postSnapshot(reason: 'initial' | 'visible' | 'resync' | 'reload' = 'initial'): void {
     this.lastSnapshotReason = reason;
+    if (reason === 'visible') {
+      this.postActivate();
+      this.post({ type: 'setProductTheme', mode: readProductTheme(this.options.context) });
+      return;
+    }
+    this.initialGitReady = false;
+    if (this.gitTimer) clearTimeout(this.gitTimer);
+    this.gitTimer = undefined;
+    this.gitTimerResolve?.();
+    this.gitTimerResolve = undefined;
+    this.gitTask++;
     const settings = this.readSettings();
     const pendingCursor = consumePendingCursorForUri(this.document.uri);
     const editor = vscode.window.visibleTextEditors.find((candidate) => candidate.document.uri.toString() === this.document.uri.toString());
@@ -274,8 +309,10 @@ export class MarkdownEditorSession implements vscode.Disposable {
       tableFirstRowStickyDefault: this.options.getTableFirstRowStickyDefault(),
       initialCursorLine: pendingCursor?.line ?? editor?.selection.active.line ?? 0,
       initialCursorCharacter: pendingCursor?.character ?? editor?.selection.active.character ?? 0,
-      initialTotalLines: Math.max(1, this.document.lineCount), terminalAppearance: terminalAppearance(),
-      imagePathMap: buildImagePathMap(content, this.panel.webview, this.diskUri), uiState: this.uiState, reason,
+      initialTotalLines: Math.max(1, this.document.lineCount), gitRefreshStatus: 'loading', terminalAppearance: terminalAppearance(),
+      imagePathMap: buildImagePathMap(content, this.panel.webview, this.diskUri),
+      uiState: { ...this.uiState, viewChanges: this.uiState.viewChanges ?? settings.viewChanges ?? false },
+      reason,
     });
     this.post({ type: 'setProductTheme', mode: readProductTheme(this.options.context) });
   }
@@ -293,17 +330,23 @@ export class MarkdownEditorSession implements vscode.Disposable {
     });
     return this.operationQueue;
   }
-  private scheduleGit(): Promise<void> {
+  private scheduleGit(delayMs = 500): Promise<void> {
+    if (!this.initialGitReady || !this.visible || this.disposed) return Promise.resolve();
     if (this.gitTimer) clearTimeout(this.gitTimer);
+    this.gitTimer = undefined;
     this.gitTimerResolve?.();
+    this.gitTimerResolve = undefined;
+    const taskId = ++this.gitTask;
+    this.post({ type: 'gitRefreshStatus', documentId: this.documentId, revision: this.sync.snapshot.revision, status: 'loading' });
+    if (delayMs === 0) return this.refreshGit(taskId);
     return new Promise((resolve) => {
       this.gitTimerResolve = resolve;
       this.gitTimer = setTimeout(() => {
         this.gitTimer = undefined;
         const finish = this.gitTimerResolve;
         this.gitTimerResolve = undefined;
-        void this.refreshGit().finally(() => finish?.());
-      }, 500);
+        void this.refreshGit(taskId).finally(() => finish?.());
+      }, delayMs);
     });
   }
 
@@ -315,7 +358,7 @@ export class MarkdownEditorSession implements vscode.Disposable {
       const attach = (repository: any) => {
         const rootUri = repository?.rootUri as vscode.Uri | undefined;
         if (!rootUri || !this.diskUri.fsPath.startsWith(rootUri.fsPath)) return;
-        const disposable = repository.state?.onDidChange?.(() => this.scheduleGit());
+        const disposable = repository.state?.onDidChange?.(() => this.scheduleGit(0));
         if (disposable) this.disposables.push(disposable);
       };
       for (const repository of api?.repositories ?? []) attach(repository);
@@ -325,18 +368,33 @@ export class MarkdownEditorSession implements vscode.Disposable {
       // Git extension is optional; document/save events still drive refreshes.
     }
   }
-  private async refreshGit(): Promise<void> {
+  private async refreshGit(taskId: number): Promise<void> {
     if (!this.visible || this.disposed) return;
     const revision = this.sync.snapshot.revision;
-    const taskId = ++this.gitTask;
     try {
       this.gitInFlight = true;
       const startedAt = performance.now();
       const result = await computeGitLineRanges(this.diskUri, this.document.getText(), revision, String(taskId));
       this.lastGitMs = performance.now() - startedAt;
       if (this.disposed || !this.visible || result.revision !== this.sync.snapshot.revision || result.taskId !== String(this.gitTask)) return;
-      this.post({ type: 'gitStatusChanged', documentId: this.documentId, revision, lineRanges: result.lineRanges });
-    } catch (error) { console.warn('[EasyView_Md] Git status refresh failed', error); } finally { this.gitInFlight = false; }
+      this.post({
+        type: 'gitStatusChanged',
+        documentId: this.documentId,
+        revision,
+        lineRanges: result.lineRanges,
+        snapshot: {
+          indexObjectId: result.indexObjectId,
+          baseContent: result.baseContent,
+          currentContentHash: result.currentContentHash,
+          isUntracked: result.isUntracked,
+        },
+      });
+    } catch (error) {
+      console.warn('[EasyView_Md] Git status refresh failed', error);
+      if (!this.disposed && this.visible && taskId === this.gitTask && revision === this.sync.snapshot.revision) {
+        this.post({ type: 'gitRefreshStatus', documentId: this.documentId, revision, status: 'error' });
+      }
+    } finally { this.gitInFlight = false; }
   }
 
   getDiagnostics(): Record<string, unknown> {

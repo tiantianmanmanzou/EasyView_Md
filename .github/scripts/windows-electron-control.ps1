@@ -5,7 +5,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Resolve logs dir against workspace before changing into controlDir.
+if (-not [System.IO.Path]::IsPathRooted($LogsDir)) {
+  $LogsDir = Join-Path $env:GITHUB_WORKSPACE $LogsDir
+}
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+$LogsDir = (Resolve-Path $LogsDir).Path
 
 $controlDir = Join-Path $env:GITHUB_WORKSPACE ".github\electron-control"
 Set-Location $controlDir

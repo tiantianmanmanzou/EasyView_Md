@@ -1,4 +1,5 @@
 import { app, BrowserWindow, nativeTheme, protocol } from 'electron';
+import squirrelStartup from 'electron-squirrel-startup';
 import { createAppStateStore } from '../../application/document/appState';
 import { createDesktopAiChatHost } from '../../application/ai/createDesktopAiChatHost';
 import { readDocument, requestOpenDocument, restoreWorkspace } from '../../application/document/documentWorkflow';
@@ -22,9 +23,9 @@ import {
 import { registerDesktopIpc } from './registerDesktopIpc';
 import { registerPreviewProtocol, registerPreviewScheme } from './previewProtocol';
 
-registerPreviewScheme();
+if (!squirrelStartup) registerPreviewScheme();
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const hasSingleInstanceLock = !squirrelStartup && app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {

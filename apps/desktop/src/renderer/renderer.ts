@@ -1,11 +1,7 @@
 import type { HostToEditorMessage, EditorToHostMessage } from '@easyview/contracts';
-import {
-  isEasyViewThemeMode,
-  readLocalProductTheme,
-  type EasyViewThemeMode,
-} from '@easyview/contracts';
-import { cycleDesktopProductTheme } from './productThemeControl';
-import { createEasyViewEditor, type EasyViewEditorInstance } from '@easyview/editor-core';
+import { readLocalProductTheme } from '@easyview/contracts';
+import { applyDesktopProductAppearance } from './productThemeControl';
+import { createEasyViewEditor, EditorAppearanceStore, type EasyViewEditorInstance } from '@easyview/editor-core';
 import type { DesktopEditorTab, DesktopTab, DesktopThemeMode } from '../contracts';
 import type { EasyViewDesktopApi } from '../preload/desktopApi';
 import type { EasyViewAccentTheme } from '@easyview/editor-core';
@@ -40,32 +36,14 @@ const sharedEditorHost = createDesktopEditorHostTransport({
     api.editor.subscribe(listener),
 });
 
-function stampProductTheme(mode: EasyViewThemeMode): void {
-  document.documentElement.dataset.easyviewTheme = mode;
-  document.body.dataset.easyviewTheme = mode;
-  const desktopRoot = document.getElementById('desktop-root');
-  if (desktopRoot) desktopRoot.dataset.easyviewTheme = mode;
-  document.documentElement.dataset.theme = mode === 'dark' ? 'dark' : 'light';
-  document.body.classList.toggle('vscode-dark', mode === 'dark');
-  document.body.classList.toggle('vscode-light', mode !== 'dark');
-}
+const productAppearance = new EditorAppearanceStore(
+  window.localStorage,
+  window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+);
+applyDesktopProductAppearance(productAppearance.state, document);
 
 function applyOsTheme(theme: DesktopThemeMode): void {
-  // Prefer EasyView product theme when present; OS theme only fills gaps.
-  const product = readLocalProductTheme(window.localStorage, theme === 'dark' ? 'dark' : 'light');
-  stampProductTheme(product);
-  window.dispatchEvent(new CustomEvent('inlinemd:themeChanged', {
-    detail: { mode: product, isDark: product === 'dark' },
-  }));
-  window.dispatchEvent(new CustomEvent('easyview:productThemeChanged', {
-    detail: { mode: product, isDark: product === 'dark' },
-  }));
-}
-
-function applyProductThemeFromEditor(): void {
-  const mode = activeEditor()?.getThemeState().mode;
-  if (!mode || !isEasyViewThemeMode(mode)) return;
-  stampProductTheme(mode);
+  productAppearance.setMode(readLocalProductTheme(window.localStorage, theme === 'dark' ? 'dark' : 'light'), false);
 }
 
 window.systemLocale = navigator.language || 'en-US';
@@ -103,6 +81,7 @@ const editors = new DesktopEditorInstanceRegistry({
     host,
     initialMessage,
     uiMode: 'desktop',
+    appearance: productAppearance,
     outlinePosition: 'right',
     aiChatContainer: document.getElementById('desktop-ai-chat-host'),
     root,
@@ -225,10 +204,7 @@ window.addEventListener('easyview-ai-chat-visibility-change', (event) => {
   aiChatToggle?.classList.toggle('active', (event as CustomEvent<boolean>).detail);
 });
 function syncThemeControl(): void {
-  const theme = {
-    mode: readLocalProductTheme(window.localStorage),
-    depth: activeEditor()?.getThemeState().depth ?? 0.5,
-  };
+  const theme = productAppearance.state;
   const themeDisplay = {
     light: { icon: '☀', label: '亮色主题' },
     gray: { icon: '◐', label: '灰色主题' },
@@ -246,26 +222,14 @@ function syncThemeControl(): void {
 }
 accentToggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17h1.1a1.9 1.9 0 0 0 0-3.8h-.8a1.2 1.2 0 1 1 0-2.4H14a6.5 6.5 0 0 0-2-12.8Z"></path><circle cx="7.7" cy="11" r="1"></circle><circle cx="10.7" cy="7.4" r="1"></circle><circle cx="15.2" cy="8.2" r="1"></circle></svg>';
 function syncAccentControl(): void {
-  const accent = activeEditor()?.getAccentTheme() ?? 'default';
+  const accent = productAppearance.state.accent;
   accentToggle.dataset.accent = accent;
   accentControl.querySelectorAll<HTMLButtonElement>('[data-accent]').forEach((button) => {
     button.classList.toggle('active', button.dataset.accent === accent);
   });
 }
-themeToggle.addEventListener('click', () => {
-  const next = cycleDesktopProductTheme(window.localStorage);
-  editors.applyProductTheme(next);
-  stampProductTheme(next);
-  const depth = activeEditor()?.getThemeState().depth ?? 0.5;
-  const detail = { mode: next, isDark: next === 'dark', depth };
-  window.dispatchEvent(new CustomEvent('inlinemd:themeChanged', { detail }));
-  window.dispatchEvent(new CustomEvent('easyview:productThemeChanged', { detail }));
-  syncThemeControl();
-});
-themeDepth.addEventListener('input', () => {
-  activeEditor()?.setThemeDepth(Number(themeDepth.value) / 100);
-  syncThemeControl();
-});
+themeToggle.addEventListener('click', () => productAppearance.cycleMode());
+themeDepth.addEventListener('input', () => productAppearance.setDepth(Number(themeDepth.value) / 100));
 const openThemePanel = (): void => {
   if (themePanelCloseTimer !== undefined) window.clearTimeout(themePanelCloseTimer);
   themePanelCloseTimer = undefined;
@@ -282,17 +246,11 @@ themeControl.addEventListener('pointerenter', openThemePanel);
 themeControl.addEventListener('pointerleave', scheduleThemePanelClose);
 themeControl.addEventListener('focusin', openThemePanel);
 themeControl.addEventListener('focusout', scheduleThemePanelClose);
-window.addEventListener('inlinemd:themeChanged', () => {
-  applyProductThemeFromEditor();
-  syncThemeControl();
-});
-window.addEventListener('easyview:productThemeChanged', applyProductThemeFromEditor);
 accentToggle.addEventListener('click', () => accentControl.classList.toggle('is-open'));
 accentControl.querySelectorAll<HTMLButtonElement>('[data-accent]').forEach((button) => {
   button.addEventListener('click', () => {
-    activeEditor()?.setAccentTheme(button.dataset.accent as EasyViewAccentTheme);
+    productAppearance.setAccent(button.dataset.accent as EasyViewAccentTheme);
     accentControl.classList.remove('is-open');
-    syncAccentControl();
   });
 });
 
@@ -313,6 +271,10 @@ window.addEventListener('easyview-toc-width-change', (event) => {
 });
 
 api.menu.onCommand((command) => {
+  if (command === 'toggleTheme') {
+    productAppearance.cycleMode();
+    return;
+  }
   if (command === 'toggleExplorer') {
     workspaceExplorer.toggle();
     return;
@@ -328,6 +290,14 @@ api.menu.onCommand((command) => {
   activeEditor()?.executeCommand(command);
 });
 
+const appearanceSubscription = productAppearance.subscribe((state) => {
+  applyDesktopProductAppearance(state, document);
+  syncThemeControl();
+  syncAccentControl();
+});
+syncThemeControl();
+syncAccentControl();
+
 void workspaceExplorer.initialize().then(async (state) => {
   lastOutlineVisible = state.outlineVisible;
   lastOutlineWidth = state.outlineWidth;
@@ -336,19 +306,16 @@ void workspaceExplorer.initialize().then(async (state) => {
   activeEditor()?.setOutlineWidth(state.outlineWidth);
   await tabController.initialize();
   publishMenuState();
-  applyProductThemeFromEditor();
-  syncThemeControl();
-  syncAccentControl();
 });
 
 const themeSubscription = api.app.onThemeChanged(applyOsTheme);
 void api.app.getTheme().then((result) => {
   if (result.ok) applyOsTheme(result.value);
-  else applyProductThemeFromEditor();
 });
 
 window.addEventListener('unload', () => {
   themeSubscription.unsubscribe();
+  appearanceSubscription.unsubscribe();
   editorStateSubscription?.unsubscribe();
   if (themePanelCloseTimer !== undefined) window.clearTimeout(themePanelCloseTimer);
   tabController.dispose();

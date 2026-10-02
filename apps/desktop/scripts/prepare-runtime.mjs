@@ -18,11 +18,6 @@ await Promise.all([
       return !entry.endsWith('.map') && !entry.endsWith('.test.js');
     },
   }),
-  cp(
-    path.join(source, 'node_modules', 'node-addon-api'),
-    path.join(target, 'node_modules', 'node-addon-api'),
-    { recursive: true },
-  ),
   cp(path.join(source, 'prebuilds'), path.join(target, 'prebuilds'), {
     recursive: true,
     filter(entry) {

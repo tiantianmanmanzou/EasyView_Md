@@ -302,7 +302,7 @@ export async function publishSaveOutcome(
   const session = documentSessions.get(sessionId);
   if (outcome.kind === 'saved' && session) {
     tabRegistry.renameEditor(session.tabId, outcome.value.filePath, outcome.value.fileName);
-    tabRegistry.setEditorDirty(session.tabId, false);
+    tabRegistry.setEditorDirty(session.tabId, session.dirty);
     await watchDocumentSession(session);
     syncTabState();
     if (sessionIsActive(session)) sendToWindow('document.changed', documentResult(session));
@@ -394,7 +394,7 @@ export async function confirmCloseSession(session: DocumentSession): Promise<boo
     await dialog.showMessageBox(getMainWindow()!, { type: 'error', message: result.message });
     return false;
   }
-  return result.value !== null;
+  return result.value !== null && !session.dirty;
 }
 
 export async function confirmCloseAll(): Promise<boolean> {
@@ -431,7 +431,7 @@ export async function confirmCloseAll(): Promise<boolean> {
     tabRegistry.activate(originalActiveId);
   }
   syncTabState();
-  return true;
+  return !documentSessions.hasDirty();
 }
 
 export async function releaseEditorTabs(tabIds: readonly string[]): Promise<boolean> {

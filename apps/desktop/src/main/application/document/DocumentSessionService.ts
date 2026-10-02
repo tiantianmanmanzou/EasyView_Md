@@ -405,18 +405,15 @@ export class DocumentSessionService {
         await this.fileSystem.writeFileAtomically(filePath, raw);
       }
       const stats = await this.fileSystem.stat(filePath);
-      const savedAdapter = session.documentAdapter.replaceRaw(raw);
       session.filePath = filePath;
       session.fileName = path.basename(filePath);
-      session.rawContent = savedAdapter.rawContent;
-      session.content = savedAdapter.canonicalContent;
-      session.diskContent = savedAdapter.canonicalContent;
+      // A save commits its immutable snapshot to disk; edits accepted while it
+      // waits in the queue or writes remain owned by the live document session.
+      session.diskContent = content;
       session.diskContentHash = hashContent(raw);
-      session.lineEnding = session.documentAdapter.lineEnding;
-      session.sync.applySnapshot(session.content, session.sync.snapshot.revision);
       session.diskMtimeMs = stats.mtimeMs;
       session.externalConflict = null;
-      session.dirty = false;
+      session.dirty = session.content !== session.diskContent;
       return {
         kind: 'saved',
         value: { filePath, fileName: session.fileName, mtimeMs: stats.mtimeMs },

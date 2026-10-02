@@ -3,12 +3,15 @@
  * Extracted from index.ts as a standalone UI component.
  */
 
-import type { EditorHostCapabilities } from '@easyview/contracts';
+import { nextEasyViewThemeMode, type EditorHostCapabilities, type EasyViewThemeMode as ThemeModeName } from '@easyview/contracts';
+import { applyEditorAppearance, EditorAppearanceStore, type EditorAppearanceState, type EasyViewAccentTheme } from './EditorAppearance';
+export type { EasyViewAccentTheme } from './EditorAppearance';
 import type { EditorToHostMessage } from '@easyview/contracts/protocol';
 import { createEditorDomContext, type EditorDomContext } from '../runtime/editorDomContext';
 
 export interface FileHeaderDeps {
   dom?: EditorDomContext;
+  appearance?: EditorAppearanceStore;
   postMessage: (msg: EditorToHostMessage) => void;
   getState: () => { isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean; currentContent: string };
   setState: (patch: Partial<{ isFullWidth: boolean; isTocVisible: boolean; isTableWrap: boolean }>) => void;
@@ -437,125 +440,6 @@ function ensureFileHeaderCompactStyles(): void {
   document.head.appendChild(style);
 }
 
-type ThemeModeName = 'light' | 'gray' | 'dark';
-export type EasyViewAccentTheme = 'default' | 'blue' | 'orangeRed' | 'green' | 'purple' | 'cherryRed';
-type RgbTuple = [number, number, number];
-
-const THEME_DEPTH_STORAGE_KEY = 'mdpre-zalman-theme-depth';
-const THEME_DEPTH_DEFAULT = 0.5;
-
-/** Per-mode bg/fg anchors at depth 0 (top/light), 0.5 (default), 1 (bottom/deep). */
-const THEME_DEPTH_AXIS: Record<ThemeModeName, { bg: [string, string, string]; fg: [string, string, string] }> = {
-  light: {
-    bg: ['#ffffff', '#ffffff', '#8b929e'],
-    fg: ['#050608', '#1f2328', '#f3f5f7'],
-  },
-  gray: {
-    bg: ['#e4e7ec', '#b0b6c0', '#5c6470'],
-    fg: ['#020304', '#050608', '#f5f6f8'],
-  },
-  dark: {
-    bg: ['#3c3c3c', '#1e1e1e', '#0a0a0a'],
-    fg: ['#9a9a9a', '#d4d4d4', '#ffffff'],
-  },
-};
-
-function parseHexColor(hex: string): RgbTuple {
-  const h = hex.replace('#', '');
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-function rgbToHex([r, g, b]: RgbTuple): string {
-  return `#${[r, g, b]
-    .map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0'))
-    .join('')}`;
-}
-
-function lerpRgb(a: RgbTuple, b: RgbTuple, t: number): RgbTuple {
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-}
-
-function lerpHex(a: string, b: string, t: number): string {
-  return rgbToHex(lerpRgb(parseHexColor(a), parseHexColor(b), t));
-}
-
-function axisLerp(low: string, mid: string, high: string, depth: number): string {
-  if (depth <= 0.5) return lerpHex(low, mid, depth / 0.5);
-  return lerpHex(mid, high, (depth - 0.5) / 0.5);
-}
-
-function mixHex(a: string, b: string, amountTowardB: number): string {
-  return lerpHex(a, b, amountTowardB);
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
-function readStoredThemeDepth(): number {
-  try {
-    const raw = localStorage.getItem(THEME_DEPTH_STORAGE_KEY);
-    if (raw == null) return THEME_DEPTH_DEFAULT;
-    const value = Number(raw);
-    return Number.isFinite(value) ? clamp01(value) : THEME_DEPTH_DEFAULT;
-  } catch {
-    return THEME_DEPTH_DEFAULT;
-  }
-}
-
-function writeStoredThemeDepth(depth: number): void {
-  try {
-    localStorage.setItem(THEME_DEPTH_STORAGE_KEY, String(clamp01(depth)));
-  } catch {
-    // Webview storage can be unavailable in restricted contexts.
-  }
-}
-
-function applyThemeDepthColors(mode: ThemeModeName, depth: number, themeRoot: HTMLElement): void {
-  const axis = THEME_DEPTH_AXIS[mode];
-  const t = clamp01(depth);
-  const bg = axisLerp(axis.bg[0], axis.bg[1], axis.bg[2], t);
-  const fg = axisLerp(axis.fg[0], axis.fg[1], axis.fg[2], t);
-  const widget = mixHex(bg, fg, 0.1);
-  const input = mixHex(bg, fg, 0.06);
-  const border = mixHex(bg, fg, 0.28);
-  const desc = mixHex(fg, bg, 0.38);
-  const icon = mixHex(fg, bg, 0.22);
-  const selection = mixHex(bg, fg, 0.18);
-  const hover = mixHex(bg, fg, 0.12);
-  const body = themeRoot;
-  body.style.setProperty('--vscode-editor-background', bg);
-  body.style.setProperty('--vscode-editor-foreground', fg);
-  body.style.setProperty('--vscode-foreground', fg);
-  body.style.setProperty('--vscode-icon-foreground', icon);
-  body.style.setProperty('--vscode-descriptionForeground', desc);
-  body.style.setProperty('--vscode-input-background', input);
-  body.style.setProperty('--vscode-input-foreground', fg);
-  body.style.setProperty('--vscode-input-border', border);
-  body.style.setProperty('--vscode-input-placeholderForeground', mixHex(desc, bg, 0.15));
-  body.style.setProperty('--vscode-editorWidget-background', widget);
-  body.style.setProperty('--vscode-editorWidget-foreground', fg);
-  body.style.setProperty('--vscode-editorWidget-border', border);
-  body.style.setProperty('--vscode-menu-background', input);
-  body.style.setProperty('--vscode-menu-foreground', fg);
-  body.style.setProperty('--vscode-menu-border', border);
-  body.style.setProperty('--vscode-menu-selectionBackground', selection);
-  body.style.setProperty('--vscode-menu-selectionForeground', fg);
-  body.style.setProperty('--vscode-list-hoverBackground', hover);
-  body.style.setProperty('--vscode-list-activeSelectionBackground', mixHex(bg, '#0969da', 0.35));
-  body.style.setProperty('--vscode-list-activeSelectionForeground', fg);
-  body.style.setProperty('--vscode-textCodeBlock-background', mixHex(bg, fg, 0.1));
-  body.style.setProperty('--vscode-textBlockQuote-border', border);
-  body.style.setProperty('--vscode-textBlockQuote-background', widget);
-  body.style.setProperty('--vscode-dropdown-background', input);
-  body.style.setProperty('--vscode-dropdown-foreground', fg);
-  body.style.setProperty('--vscode-dropdown-border', border);
-  body.style.setProperty('--vscode-toolbar-hoverBackground', mixHex(bg, fg, 0.1));
-  body.style.setProperty('--vscode-scrollbarSlider-background', mixHex(fg, bg, 0.55) + '66');
-  body.style.setProperty('--vscode-scrollbarSlider-hoverBackground', mixHex(fg, bg, 0.45) + '99');
-  body.style.setProperty('--vscode-scrollbarSlider-activeBackground', mixHex(fg, bg, 0.35) + 'b3');
-}
-
 function ensureCommitModalStyles(): void {
   const styleId = 'easyview-commit-modal-styles';
   if (document.getElementById(styleId)) return;
@@ -790,8 +674,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const window = dom.window;
   ensureFileHeaderCompactStyles();
   ensureCommitModalStyles();
-  type ThemeMode = 'light' | 'gray' | 'dark';
-  const THEME_CYCLE: ThemeMode[] = ['light', 'gray', 'dark'];
+  type ThemeMode = ThemeModeName;
   const accentThemes: Array<{ value: EasyViewAccentTheme; label: string }> = [
     { value: 'default', label: 'Default text' },
     { value: 'blue', label: 'Blue' },
@@ -801,39 +684,10 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     { value: 'cherryRed', label: 'Cherry red' },
   ];
 
-  function readStoredThemeMode(): ThemeMode | null {
-    try {
-      const primary = localStorage.getItem('easyview.themeMode');
-      if (primary === 'light' || primary === 'gray' || primary === 'dark') return primary;
-      const stored = localStorage.getItem('mdpre-zalman-theme');
-      return stored === 'light' || stored === 'gray' || stored === 'dark' ? stored : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function nextThemeMode(current: ThemeMode): ThemeMode {
-    const index = THEME_CYCLE.indexOf(current);
-    return THEME_CYCLE[(index + 1) % THEME_CYCLE.length];
-  }
-
-  function detectThemeMode(): ThemeMode {
-    const stored = readStoredThemeMode();
-    if (stored) return stored;
-    if (dom.themeRoot.classList.contains('vscode-light')) return 'light';
-    if (dom.themeRoot.classList.contains('vscode-dark')) return 'dark';
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-
-  function readStoredAccentTheme(): EasyViewAccentTheme {
-    try {
-      const stored = localStorage.getItem('mdpre-zalman-accent-theme') as EasyViewAccentTheme | null;
-      if (accentThemes.some((theme) => theme.value === stored)) return stored!;
-    } catch {
-      // Webview storage can be unavailable in restricted contexts.
-    }
-    return 'default';
-  }
+  const defaultMode = dom.themeRoot.classList.contains('vscode-dark')
+    || (!dom.themeRoot.classList.contains('vscode-light') && window.matchMedia?.('(prefers-color-scheme: dark)').matches)
+    ? 'dark' : 'light';
+  const appearance = deps.appearance ?? new EditorAppearanceStore(window.localStorage, defaultMode);
 
   const bar = document.createElement('div');
   bar.className = 'file-header-bar';
@@ -1095,9 +949,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   const themeToggleBtn = document.createElement('button');
   themeToggleBtn.className = 'file-header-btn';
   themeToggleBtn.type = 'button';
-  let themeMode: ThemeMode = detectThemeMode();
-  let themeDepth = readStoredThemeDepth();
-  let accentThemeUiSync: (() => void) | null = null;
+
   let depthDragging = false;
   let suppressThemeClick = false;
   let depthCloseTimer: number | null = null;
@@ -1127,52 +979,35 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   depthPanel.appendChild(depthTrack);
 
   function syncDepthThumb(): void {
-    depthThumb.style.top = `${themeDepth * 100}%`;
+    depthThumb.style.top = `${appearance.state.depth * 100}%`;
   }
 
-  function applyThemeDepth(depth: number, persist = true): void {
-    themeDepth = clamp01(depth);
-    applyThemeDepthColors(themeMode, themeDepth, dom.themeRoot);
+  function applyThemeDepth(depth: number): void {
+    appearance.setDepth(depth);
+  }
+
+  function renderAppearance(state: Readonly<EditorAppearanceState>): void {
+    applyEditorAppearance(dom.themeRoot, state);
+    if (!deps.appearance) document.documentElement.dataset.easyviewTheme = state.mode;
+    themeToggleBtn.classList.toggle('active', state.mode !== 'light');
+    setTitleWithShortcut(themeToggleBtn, THEME_TITLES[state.mode], 'toggleTheme');
+    themeToggleBtn.innerHTML = THEME_ICONS[state.mode];
     syncDepthThumb();
-    if (persist) writeStoredThemeDepth(themeDepth);
+    syncAccentTheme(state.accent);
+    const detail = { mode: state.mode, isDark: state.mode === 'dark', depth: state.depth };
+    dom.eventTarget.dispatchEvent(new CustomEvent('inlinemd:themeChanged', { detail }));
+    if (!deps.appearance) window.dispatchEvent(new CustomEvent('easyview:productThemeChanged', { detail }));
   }
 
-  function applyThemeMode(mode: ThemeMode, options?: { notifyHost?: boolean }) {
-    themeMode = mode;
-    dom.themeRoot.classList.toggle('mdpre-light', mode === 'light');
-    dom.themeRoot.classList.toggle('mdpre-gray', mode === 'gray');
-    dom.themeRoot.classList.toggle('mdpre-dark', mode === 'dark');
-    const stampRoots: Array<HTMLElement | null> = [
-      document.documentElement,
-      dom.themeRoot,
-      document.getElementById('desktop-root'),
-    ];
-    for (const root of stampRoots) {
-      if (root) root.dataset.easyviewTheme = mode;
-    }
-    try {
-      localStorage.setItem('easyview.themeMode', mode);
-      localStorage.setItem('mdpre-zalman-theme', mode);
-    } catch {
-      // Webview storage can be unavailable in restricted contexts.
-    }
-    themeToggleBtn.classList.toggle('active', mode !== 'light');
-    setTitleWithShortcut(themeToggleBtn, THEME_TITLES[mode], 'toggleTheme');
-    themeToggleBtn.innerHTML = THEME_ICONS[mode];
-    applyThemeDepth(themeDepth, false);
-    const detail = { mode, isDark: mode === 'dark', depth: themeDepth };
-    dom.eventTarget.dispatchEvent(new CustomEvent('inlinemd:themeChanged', { detail }));
-    window.dispatchEvent(new CustomEvent('easyview:productThemeChanged', { detail }));
-    if (options?.notifyHost !== false) {
-      postMessage({ type: 'productThemeChanged', mode });
-    }
-    accentThemeUiSync?.();
+  function applyThemeMode(mode: ThemeMode, options?: { notifyHost?: boolean }): void {
+    appearance.setMode(mode);
+    if (options?.notifyHost !== false) postMessage({ type: 'productThemeChanged', mode });
   }
 
   function depthFromClientY(clientY: number): number {
     const rect = depthTrack.getBoundingClientRect();
-    if (rect.height <= 0) return themeDepth;
-    return clamp01((clientY - rect.top) / rect.height);
+    if (rect.height <= 0) return appearance.state.depth;
+    return (clientY - rect.top) / rect.height;
   }
 
   function clearDepthCloseTimer(): void {
@@ -1257,10 +1092,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       event.stopPropagation();
       return;
     }
-    applyThemeMode(nextThemeMode(themeMode), { notifyHost: true });
+    applyThemeMode(nextEasyViewThemeMode(appearance.state.mode), { notifyHost: true });
   });
-  applyThemeMode(themeMode, { notifyHost: false });
-  syncDepthThumb();
   themeWrap.appendChild(themeToggleBtn);
   themeWrap.appendChild(depthPanel);
   rightGroup.appendChild(themeWrap);
@@ -1324,10 +1157,9 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
   };
   function accentOptionColor(theme: EasyViewAccentTheme): string {
     if (theme === 'default') return '';
-    return accentThemeColors[theme][themeMode];
+    return accentThemeColors[theme][appearance.state.mode];
   }
-  function applyAccentTheme(theme: EasyViewAccentTheme) {
-    dom.themeRoot.dataset.mdpreAccent = theme;
+  function syncAccentTheme(theme: EasyViewAccentTheme) {
     const selected = accentThemes.find((item) => item.value === theme) ?? accentThemes[0];
     accentLabel.textContent = selected.label;
     accentSelect.style.color = accentOptionColor(theme);
@@ -1336,11 +1168,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       if (!optionEl) continue;
       optionEl.classList.toggle('active', item.value === theme);
       optionEl.style.color = accentOptionColor(item.value);
-    }
-    try {
-      localStorage.setItem('mdpre-zalman-accent-theme', theme);
-    } catch {
-      // Webview storage can be unavailable in restricted contexts.
     }
   }
   for (const theme of accentThemes) {
@@ -1351,7 +1178,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     option.textContent = theme.label;
     option.addEventListener('click', (event) => {
       event.stopPropagation();
-      applyAccentTheme(theme.value);
+      appearance.setAccent(theme.value);
       accentMenu.classList.remove('open');
     });
     accentOptionEls.set(theme.value, option);
@@ -1362,10 +1189,8 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     exportDropdown.classList.remove('open');
     accentMenu.classList.toggle('open');
   });
-  accentThemeUiSync = () => {
-    applyAccentTheme((dom.themeRoot.dataset.mdpreAccent as EasyViewAccentTheme) || readStoredAccentTheme());
-  };
-  applyAccentTheme(readStoredAccentTheme());
+  const appearanceSubscription = appearance.subscribe(renderAppearance);
+  renderAppearance(appearance.state);
   accentWrap.appendChild(accentSelect);
   accentWrap.appendChild(accentMenu);
   rightGroup.appendChild(accentWrap);
@@ -1652,7 +1477,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       'toggleViewChanges',
     );
     syncExternalFollowButton(externalFollowEnabled);
-    setTitleWithShortcut(themeToggleBtn, THEME_TITLES[themeMode], 'toggleTheme');
+    setTitleWithShortcut(themeToggleBtn, THEME_TITLES[appearance.state.mode], 'toggleTheme');
   };
 
   refreshShortcutAwareTitles();
@@ -1792,10 +1617,10 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       viewChangesBtn.click();
     },
     getThemeState() {
-      return { mode: themeMode, depth: themeDepth };
+      return { mode: appearance.state.mode, depth: appearance.state.depth };
     },
     cycleTheme() {
-      applyThemeMode(nextThemeMode(themeMode), { notifyHost: true });
+      applyThemeMode(nextEasyViewThemeMode(appearance.state.mode), { notifyHost: true });
     },
     setThemeMode(mode: ThemeMode) {
       applyThemeMode(mode, { notifyHost: false });
@@ -1804,10 +1629,10 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
       applyThemeDepth(depth);
     },
     getAccentTheme() {
-      return (dom.themeRoot.dataset.mdpreAccent as EasyViewAccentTheme) || readStoredAccentTheme();
+      return appearance.state.accent;
     },
     setAccentTheme(theme: EasyViewAccentTheme) {
-      applyAccentTheme(theme);
+      appearance.setAccent(theme);
     },
     openCommitModal,
 
@@ -1874,6 +1699,7 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      appearanceSubscription.unsubscribe();
       if (depthCloseTimer != null) {
         window.clearTimeout(depthCloseTimer);
         depthCloseTimer = null;

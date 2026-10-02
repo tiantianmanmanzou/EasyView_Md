@@ -40,6 +40,9 @@ interface ContextMenuItem {
   action: () => void;
 }
 
+type WorkspaceDisplayMode = 'list' | 'icons';
+interface SavedDisplayState { displayMode?: WorkspaceDisplayMode; iconDirectory?: string; rootUri?: string | null }
+
 const IS_MAC =
   /mac|iphone|ipad/i.test(navigator.platform)
   || (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform === 'macOS';
@@ -63,6 +66,8 @@ export class WorkspaceExplorerView {
   private anchor: string | null = null;
   private primarySelected: string | null = null;
   private sortMode: WorkspaceTreeSortMode = 'name';
+  private displayMode: WorkspaceDisplayMode = 'list';
+  private iconDirectory = '';
   private showCreatedAt = false;
   private showUpdatedAt = false;
   private showDotEntries = true;
@@ -108,6 +113,8 @@ export class WorkspaceExplorerView {
     private readonly container: HTMLElement,
     private readonly vscodeApi: WorkspaceExplorerVsCodeApi,
   ) {
+    const saved = this.vscodeApi.getState() as SavedDisplayState | undefined;
+    if (saved?.displayMode === 'icons') this.displayMode = 'icons';
     this.container.classList.add('workspace-explorer');
     this.container.tabIndex = 0;
     // Capture so Enter on a focused name <button> renames instead of activating click.
@@ -214,10 +221,18 @@ export class WorkspaceExplorerView {
     this.showTimestampHover = sort.showTimestampHover !== false;
   }
 
+  private saveDisplayState(): void {
+    const previous = this.vscodeApi.getState();
+    const state = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {};
+    this.vscodeApi.setState({ ...state, displayMode: this.displayMode, iconDirectory: this.iconDirectory, rootUri: this.rootUri });
+  }
+
   private onBootstrap(event: Extract<WorkspaceExplorerEvent, { type: 'bootstrap' }>): void {
     this.rootRevision += 1;
     this.rootName = event.rootName;
     this.rootUri = event.rootUri;
+    const saved = this.vscodeApi.getState() as SavedDisplayState | undefined;
+    this.iconDirectory = saved?.rootUri === event.rootUri ? normalizeRelativePath(saved?.iconDirectory ?? '') : '';
     this.rootLoadError = null;
     this.applySortConfig(event.sort);
     this.hasClipboard = event.hasClipboard;
@@ -234,7 +249,8 @@ export class WorkspaceExplorerView {
     this.sortMenuOpen = false;
     this.render();
     if (this.rootUri !== null || this.rootName !== null) {
-      void this.loadDirectory('').then(() => {
+      void this.loadDirectory('').then(async () => {
+        if (this.displayMode === 'icons' && this.iconDirectory) await this.loadDirectory(this.iconDirectory);
         if (event.revealRelativePath) void this.onReveal(event.revealRelativePath);
       });
     }
@@ -244,6 +260,7 @@ export class WorkspaceExplorerView {
     this.rootRevision += 1;
     this.rootName = null;
     this.rootUri = null;
+    this.iconDirectory = '';
     this.rootLoadError = null;
     this.entriesByDirectory.clear();
     this.expanded.clear();
@@ -264,7 +281,7 @@ export class WorkspaceExplorerView {
     if (!this.hasRoot()) return;
     if (this.editing || this.pendingCreate || this.renamePath) return;
     const targets = [...new Set(relativePaths.map(normalizeRelativePath))].filter(
-      (value) => value === '' || this.expanded.has(value),
+      (value) => value === '' || this.expanded.has(value) || (this.displayMode === 'icons' && value === this.iconDirectory),
     );
     if (targets.length === 0) return;
     await Promise.all(targets.map((relativePath) => this.loadDirectory(relativePath)));
@@ -272,8 +289,16 @@ export class WorkspaceExplorerView {
 
   private async onReveal(relativePath: string): Promise<void> {
     if (!this.hasRoot() || !relativePath) return;
-    if (this.activeRelativePath === relativePath) return;
+    if (this.activeRelativePath === relativePath
+      && (this.displayMode !== 'icons' || this.iconDirectory === parentRelativePath(relativePath))) return;
     this.activeRelativePath = relativePath;
+    if (this.displayMode === 'icons') {
+      this.iconDirectory = parentRelativePath(relativePath);
+      this.saveDisplayState();
+      await this.loadDirectory(this.iconDirectory);
+      this.select(relativePath);
+      return;
+    }
     this.selectionFollowsActive = true;
     const segments = relativePath.split('/').filter(Boolean);
     segments.pop();
@@ -304,13 +329,13 @@ export class WorkspaceExplorerView {
         if (this.primarySelected) this.beginRename(this.primarySelected);
         break;
       case 'paste':
-        await this.pasteAt(this.primarySelected ?? '');
+        await this.pasteAt(this.primarySelected ?? (this.displayMode === 'icons' ? this.iconDirectory : ''));
         break;
       case 'beginCreateFile':
-        this.beginCreate(relativePath ?? this.primarySelectedDirectory() ?? '', 'file');
+        this.beginCreate(relativePath ?? this.primarySelectedDirectory() ?? (this.displayMode === 'icons' ? this.iconDirectory : ''), 'file');
         break;
       case 'beginCreateFolder':
-        this.beginCreate(relativePath ?? this.primarySelectedDirectory() ?? '', 'directory');
+        this.beginCreate(relativePath ?? this.primarySelectedDirectory() ?? (this.displayMode === 'icons' ? this.iconDirectory : ''), 'directory');
         break;
       case 'toggleSortMenu':
         this.sortMenuOpen = !this.sortMenuOpen;
@@ -382,7 +407,8 @@ export class WorkspaceExplorerView {
 
   private async refreshExpanded(): Promise<void> {
     if (!this.hasRoot()) return;
-    await Promise.all(['', ...this.expanded].map((relativePath) => this.loadDirectory(relativePath)));
+    await Promise.all([...new Set(['', ...this.expanded, ...(this.displayMode === 'icons' ? [this.iconDirectory] : [])])]
+      .map((relativePath) => this.loadDirectory(relativePath)));
   }
 
   private toggleDirectory(relativePath: string): void {
@@ -401,6 +427,7 @@ export class WorkspaceExplorerView {
   private select(
     relativePath: string,
     options?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean },
+    rerender = true,
   ): void {
     const next = computeNextWorkspaceTreeSelection(
       { selected: this.selected, anchor: this.anchor },
@@ -420,11 +447,20 @@ export class WorkspaceExplorerView {
       relativePaths: [...this.selected],
       anchorRelativePath: this.anchor,
     });
-    this.render();
+    if (rerender) this.render();
+    else this.container.querySelectorAll<HTMLElement>('.workspace-icon-tile').forEach((tile) => {
+      const selected = this.selected.has(tile.dataset.relativePath ?? '');
+      tile.classList.toggle('selected', selected);
+      tile.setAttribute('aria-selected', String(selected));
+    });
     this.container.focus({ preventScroll: true });
   }
 
   private visibleRelativePaths(): string[] {
+    if (this.displayMode === 'icons') {
+      return filterWorkspaceEntriesByDotVisibility(this.entriesByDirectory.get(this.iconDirectory) ?? [], this.showDotEntries)
+        .map((entry) => entry.relativePath);
+    }
     return collectVisibleWorkspaceTreeRelativePaths(this.entriesByDirectory, (path) => this.expanded.has(path));
   }
 
@@ -446,7 +482,7 @@ export class WorkspaceExplorerView {
       return;
     }
     if (action === 'paste') {
-      void this.pasteAt(this.primarySelected ?? '');
+      void this.pasteAt(this.primarySelected ?? (this.displayMode === 'icons' ? this.iconDirectory : ''));
       return;
     }
     if (action === 'delete') void this.deleteEntries([...this.selected]);
@@ -498,9 +534,13 @@ export class WorkspaceExplorerView {
     }
 
     const tree = document.createElement('div');
-    tree.className = 'workspace-tree';
-    tree.setAttribute('role', 'tree');
-    tree.appendChild(this.renderDirectory('', 0));
+    tree.className = `workspace-tree${this.displayMode === 'icons' ? ' workspace-icon-view' : ''}`;
+    if (this.displayMode === 'icons') {
+      tree.appendChild(this.renderIconDirectory());
+    } else {
+      tree.setAttribute('role', 'tree');
+      tree.appendChild(this.renderDirectory('', 0));
+    }
     this.container.appendChild(tree);
     tree.scrollTop = previousScrollTop;
     tree.scrollLeft = previousScrollLeft;
@@ -539,6 +579,20 @@ export class WorkspaceExplorerView {
     menu.className = 'workspace-sort-menu';
     menu.setAttribute('role', 'menu');
 
+    this.appendSortMenuItem(menu, {
+      label: 'View as List',
+      checked: this.displayMode === 'list',
+      onClick: () => { void this.changeDisplayMode('list'); },
+    });
+    this.appendSortMenuItem(menu, {
+      label: 'View as Icons',
+      checked: this.displayMode === 'icons',
+      onClick: () => { void this.changeDisplayMode('icons'); },
+    });
+    const viewSeparator = document.createElement('div');
+    viewSeparator.className = 'workspace-sort-menu-separator';
+    menu.appendChild(viewSeparator);
+
     for (const mode of ['created', 'name', 'custom'] as const) {
       this.appendSortMenuItem(menu, {
         label: SORT_MODE_LABELS[mode],
@@ -573,6 +627,203 @@ export class WorkspaceExplorerView {
       onClick: () => { void this.changeShowDotEntries(!this.showDotEntries); },
     });
     return menu;
+  }
+
+  private async navigateIconDirectory(relativePath: string): Promise<void> {
+    const scroll = this.container.querySelector<HTMLElement>('.workspace-tree');
+    if (scroll) scroll.scrollTop = 0;
+    this.iconDirectory = normalizeRelativePath(relativePath);
+    this.selected.clear();
+    this.anchor = null;
+    this.primarySelected = null;
+    this.post({ type: 'setSelection', relativePaths: [], anchorRelativePath: null });
+    this.saveDisplayState();
+    await this.loadDirectory(this.iconDirectory);
+  }
+
+  private renderIconDirectory(): HTMLElement {
+    const content = document.createElement('div');
+    content.className = 'workspace-icon-content';
+    const navigation = document.createElement('div');
+    navigation.className = 'workspace-icon-navigation';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'workspace-icon-back';
+    back.textContent = '‹';
+    back.title = 'Back to parent folder';
+    back.setAttribute('aria-label', back.title);
+    back.disabled = this.iconDirectory === '';
+    back.addEventListener('click', () => { void this.navigateIconDirectory(parentRelativePath(this.iconDirectory)); });
+    const pathLabel = document.createElement('span');
+    pathLabel.className = 'workspace-icon-path';
+    pathLabel.textContent = this.iconDirectory.split('/').at(-1) || this.rootName || 'Files';
+    pathLabel.title = this.iconDirectory || this.rootName || 'Files';
+    navigation.append(back, pathLabel);
+    content.appendChild(navigation);
+
+    const grid = document.createElement('div');
+    grid.className = 'workspace-icon-grid';
+    grid.setAttribute('role', 'grid');
+    grid.setAttribute('aria-label', `Files in ${pathLabel.textContent}`);
+    const entries = filterWorkspaceEntriesByDotVisibility(
+      this.entriesByDirectory.get(this.iconDirectory) ?? [], this.showDotEntries,
+    );
+    if (entries.length === 0 && !this.pendingCreate) {
+      const empty = document.createElement('p');
+      empty.className = 'workspace-icon-empty';
+      empty.textContent = 'Folder is empty';
+      grid.appendChild(empty);
+    }
+    for (const entry of entries) {
+      const tile = document.createElement('div');
+      tile.className = 'workspace-icon-tile';
+      tile.dataset.relativePath = entry.relativePath;
+      tile.tabIndex = 0;
+      tile.setAttribute('role', 'gridcell');
+      tile.setAttribute('aria-selected', String(this.selected.has(entry.relativePath)));
+      tile.classList.toggle('selected', this.selected.has(entry.relativePath));
+      const icon = document.createElement('span');
+      icon.className = entry.kind === 'directory' ? 'workspace-icon-large is-folder' : 'workspace-icon-large';
+      if (entry.kind !== 'directory') {
+        const descriptor = resolveWorkspaceTreeIcon({ kind: entry.kind, name: entry.name });
+        icon.dataset.icon = descriptor.id;
+        icon.innerHTML = descriptor.svg;
+      }
+      tile.appendChild(icon);
+      if (this.renamePath === entry.relativePath) tile.appendChild(this.renderRenameInput(entry));
+      else {
+        const label = document.createElement('span');
+        label.className = 'workspace-icon-label';
+        label.textContent = entry.name;
+        label.title = entry.name;
+        tile.appendChild(label);
+      }
+      this.appendEntryTimestamps(tile, entry);
+      tile.addEventListener('click', (event) => {
+        this.selectionFollowsActive = false;
+        this.select(entry.relativePath, {
+          shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey,
+        }, false);
+      });
+      tile.addEventListener('dblclick', (event) => {
+        event.preventDefault();
+        if (entry.kind === 'directory') void this.navigateIconDirectory(entry.relativePath);
+        else {
+          this.selectionFollowsActive = true;
+          this.activeRelativePath = entry.relativePath;
+          this.post({ type: 'open', relativePath: entry.relativePath });
+        }
+      });
+      tile.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        this.selectionFollowsActive = false;
+        if (!this.selected.has(entry.relativePath)) this.select(entry.relativePath, undefined, false);
+        void this.openContextMenu(event.clientX, event.clientY, entry);
+      });
+      this.attachIconDragHandlers(tile, entry);
+      grid.appendChild(tile);
+    }
+    if (this.pendingCreate?.parentRelativePath === this.iconDirectory) {
+      grid.appendChild(this.renderCreateInput(0));
+    }
+    grid.addEventListener('dragover', (event) => {
+      if (this.dragRelativePath && parentRelativePath(this.dragRelativePath) === this.iconDirectory) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      } else if (isExternalWorkspaceFileDrag(event.dataTransfer, this.dragRelativePath !== null)) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    grid.addEventListener('drop', (event) => {
+      if (this.dragRelativePath && parentRelativePath(this.dragRelativePath) === this.iconDirectory) {
+        if (event.target instanceof Element && event.target.closest('.workspace-icon-tile')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void this.reorderIcon(this.dragRelativePath);
+      } else if (event.dataTransfer && isExternalWorkspaceFileDrag(event.dataTransfer, false)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.importExternalDrop(event.dataTransfer, this.iconDirectory);
+      }
+    });
+    content.appendChild(grid);
+    return content;
+  }
+
+  private attachIconDragHandlers(tile: HTMLElement, entry: WorkspaceExplorerEntry): void {
+    if (!entry.writable) return;
+    tile.draggable = true;
+    tile.addEventListener('dragstart', (event) => {
+      this.dragRelativePath = entry.relativePath;
+      event.dataTransfer?.setData('text/plain', entry.relativePath);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+      tile.classList.add('is-dragging');
+    });
+    tile.addEventListener('dragend', () => {
+      this.dragRelativePath = null;
+      tile.classList.remove('is-dragging');
+      this.container.querySelectorAll('.workspace-icon-tile').forEach((item) => item.classList.remove('is-drop-before', 'is-drop-after'));
+    });
+    tile.addEventListener('dragover', (event) => {
+      if (!this.dragRelativePath || this.dragRelativePath === entry.relativePath
+        || parentRelativePath(this.dragRelativePath) !== this.iconDirectory) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.container.querySelectorAll('.workspace-icon-tile').forEach((item) => item.classList.remove('is-drop-before', 'is-drop-after'));
+      tile.classList.add(event.clientX < tile.getBoundingClientRect().left + tile.getBoundingClientRect().width / 2
+        ? 'is-drop-before' : 'is-drop-after');
+    });
+    tile.addEventListener('drop', (event) => {
+      if (!this.dragRelativePath || this.dragRelativePath === entry.relativePath
+        || parentRelativePath(this.dragRelativePath) !== this.iconDirectory) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const after = tile.classList.contains('is-drop-after');
+      void this.reorderIcon(this.dragRelativePath, entry.name, after);
+    });
+  }
+
+  private async reorderIcon(sourceRelativePath: string, targetName?: string, after = false): Promise<void> {
+    if (!(await this.ensureCustomSort())) return;
+    const siblings = (this.entriesByDirectory.get(this.iconDirectory) ?? []).map((entry) => entry.name);
+    const targetIndex = targetName ? siblings.indexOf(targetName) : -1;
+    const beforeName = targetIndex < 0 ? undefined : after ? siblings[targetIndex + 1] : targetName;
+    const result = await this.requestOp((requestId) => ({
+      type: 'reorder', requestId, parentRelativePath: this.iconDirectory,
+      movedName: sourceRelativePath.split('/').at(-1)!, siblingNames: siblings, beforeName,
+    }));
+    if (!result.ok) this.showError(result.message);
+    else await this.loadDirectory(this.iconDirectory);
+  }
+
+  private async changeDisplayMode(mode: WorkspaceDisplayMode): Promise<void> {
+    this.sortMenuOpen = false;
+    this.closeSortMenu();
+    if (mode === this.displayMode) return;
+    this.displayMode = mode;
+    if (mode === 'icons') {
+      this.iconDirectory = this.primarySelectedDirectory() ?? '';
+      if (this.primarySelected && parentRelativePath(this.primarySelected) !== this.iconDirectory) {
+        this.selected.clear();
+        this.primarySelected = null;
+        this.anchor = null;
+        this.post({ type: 'setSelection', relativePaths: [], anchorRelativePath: null });
+      }
+      this.saveDisplayState();
+      await this.loadDirectory(this.iconDirectory);
+    } else {
+      this.saveDisplayState();
+      const segments = this.iconDirectory.split('/').filter(Boolean);
+      for (let index = 1; index <= segments.length; index += 1) {
+        const path = segments.slice(0, index).join('/');
+        if (!this.expanded.has(path)) {
+          this.expanded.add(path);
+          this.post({ type: 'setExpanded', relativePath: path, expanded: true });
+        }
+      }
+      await this.refreshExpanded();
+    }
   }
 
   private renderDirectory(relativePath: string, depth: number): DocumentFragment {
@@ -836,6 +1087,9 @@ export class WorkspaceExplorerView {
         { label: 'Open Preview', action: () => this.post({ type: 'open', relativePath: entry.relativePath }) },
         { label: 'Open with Default Application', action: () => this.post({ type: 'openExternal', relativePath: entry.relativePath }) },
       );
+      if (/\.(pdf|docx|doc)$/i.test(entry.name)) {
+        items.push({ label: 'Export to Markdown (.md)', action: () => this.post({ type: 'convertToMarkdown', relativePath: entry.relativePath }) });
+      }
     } else if (writable) {
       items.push(
         { label: 'New File', action: () => this.beginCreate(entry.relativePath, 'file') },

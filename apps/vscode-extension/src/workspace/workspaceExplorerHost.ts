@@ -548,6 +548,9 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       case 'openExternal':
         await this.handleOpenExternal(message.relativePath);
         return;
+      case 'convertToMarkdown':
+        await this.handleConvertToMarkdown(message.relativePath);
+        return;
       case 'revealInOS':
         await this.handleRevealInOS(message.relativePath);
         return;
@@ -709,6 +712,19 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
     if (!opened) {
       throw new Error(`Unable to open ${workspaceBasename(uri)} with the default application.`);
     }
+  }
+
+  private async handleConvertToMarkdown(relativePath: string): Promise<void> {
+    const root = this.requireRoot();
+    const uri = uriFromRelativePath(root, relativePath);
+    if (uri.scheme !== 'file' || workspaceRelativePath(root, uri) !== relativePath) {
+      throw new Error('Only local PDF and Word files inside the workspace can be converted.');
+    }
+    const extension = path.extname(uri.fsPath).toLowerCase();
+    const command = extension === '.pdf' ? 'easyviewMd.convertPdfToMarkdown'
+      : extension === '.docx' || extension === '.doc' ? 'easyviewMd.convertWordToMarkdown' : null;
+    if (!command) throw new Error('Select a PDF, DOCX or DOC file.');
+    await vscode.commands.executeCommand(command, uri);
   }
 
   private async handleRevealInOS(relativePath: string): Promise<void> {

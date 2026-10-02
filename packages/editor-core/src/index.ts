@@ -79,6 +79,8 @@ import { EditOperationLog } from './editor/EditOperationLog';
 import { describeProseMirrorTransaction, describeSourceDocChange } from './editor/describeEditOperation';
 import { createFileHeader, type EasyViewAccentTheme, type ToolbarShortcutAction, type ToolbarShortcutConfig } from './ui/FileHeader';
 export type { EasyViewAccentTheme } from './ui/FileHeader';
+import type { EditorAppearanceStore } from './ui/EditorAppearance';
+export { EditorAppearanceStore, applyEditorAppearance, type EditorAppearanceState } from './ui/EditorAppearance';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { createStickyNoteModal } from './ui/StickyNoteModal';
 import { createLazyTerminalModal, type TerminalAppearance } from './ui/lazyTerminalModal';
@@ -99,6 +101,8 @@ export interface EasyViewEditorOptions {
   aiChatContainer?: HTMLElement | null;
   /** DOM subtree owned by this editor instance. Defaults to the current document. */
   root?: EasyViewEditorRoot;
+  /** Product appearance owned by the host; omitted for a standalone webview. */
+  appearance?: EditorAppearanceStore;
 }
 
 export type EasyViewEditorCommand =
@@ -140,7 +144,7 @@ export interface EasyViewEditorInstance {
 }
 
 /** Creates one editor instance for the current document/page. */
-export function createEasyViewEditor({ host, initialMessage, hostActions = {}, uiMode = 'standard', outlinePosition = 'left', aiChatContainer = null, root = document }: EasyViewEditorOptions): EasyViewEditorInstance {
+export function createEasyViewEditor({ host, initialMessage, hostActions = {}, uiMode = 'standard', outlinePosition = 'left', aiChatContainer = null, root = document, appearance }: EasyViewEditorOptions): EasyViewEditorInstance {
   const dom = createEditorDomContext(root);
 
   if (host.capabilities.sourceMode === 'native' && !hostActions.openSourceDocument) {
@@ -1400,6 +1404,7 @@ function initEditor() {
   const tUI = performance.now();
   const fileHeader = createFileHeader({
     dom,
+    appearance,
     capabilities: host.capabilities,
     postMessage: (msg) => host.postMessage(msg),
     getState: () => ({

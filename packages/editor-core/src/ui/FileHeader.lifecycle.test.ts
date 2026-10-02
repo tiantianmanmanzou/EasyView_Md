@@ -1,7 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createFileHeader } from './FileHeader';
+import { createFileHeader, type FileHeaderDeps } from './FileHeader';
+import { EditorAppearanceStore } from './EditorAppearance';
+import { createEditorDomContext } from '../runtime/editorDomContext';
 
 const DEFAULT_CAPABILITIES = {
   sourceMode: 'native' as const,
@@ -13,7 +15,7 @@ const DEFAULT_CAPABILITIES = {
   shortcutPersistence: true,
 };
 
-function createHeader(capabilities: Partial<typeof DEFAULT_CAPABILITIES> = {}) {
+function createHeader(capabilities: Partial<typeof DEFAULT_CAPABILITIES> = {}, options: Pick<FileHeaderDeps, 'dom' | 'appearance'> = {}) {
   return createFileHeader({
     postMessage: vi.fn(),
     getState: () => ({
@@ -25,6 +27,7 @@ function createHeader(capabilities: Partial<typeof DEFAULT_CAPABILITIES> = {}) {
     setState: vi.fn(),
     onSettingsChange: vi.fn(),
     capabilities: { ...DEFAULT_CAPABILITIES, ...capabilities },
+    ...options,
   });
 }
 
@@ -34,6 +37,35 @@ afterEach(() => {
 });
 
 describe('FileHeader lifecycle', () => {
+  it('shares product appearance across existing and new editor roots without resetting it on disposal', () => {
+    const appearance = new EditorAppearanceStore(localStorage);
+    const roots = [document.createElement('section'), document.createElement('section')];
+    document.body.append(...roots);
+    const first = createHeader({}, { dom: createEditorDomContext(roots[0]!), appearance });
+    const second = createHeader({}, { dom: createEditorDomContext(roots[1]!), appearance });
+
+    first.setThemeMode('gray');
+    first.setThemeDepth(0.7);
+    first.setAccentTheme('green');
+    expect(second.getThemeState()).toEqual({ mode: 'gray', depth: 0.7 });
+    expect(second.getAccentTheme()).toBe('green');
+    expect(roots[0]?.style.getPropertyValue('--vscode-editor-background')).toBe(roots[1]?.style.getPropertyValue('--vscode-editor-background'));
+    expect(roots[1]?.dataset.mdpreAccent).toBe('green');
+
+    first.destroy();
+    appearance.setMode('dark');
+    expect(second.getThemeState().mode).toBe('dark');
+    expect(roots[0]?.dataset.easyviewTheme).toBe('gray');
+    const thirdRoot = document.createElement('section');
+    document.body.append(thirdRoot);
+    const third = createHeader({}, { dom: createEditorDomContext(thirdRoot), appearance });
+    expect(third.getThemeState()).toEqual({ mode: 'dark', depth: 0.7 });
+    expect(third.getAccentTheme()).toBe('green');
+    expect(new EditorAppearanceStore(localStorage).state).toEqual(appearance.state);
+    second.destroy();
+    third.destroy();
+  });
+
   it('destroy removes the header, modal roots, and document listeners idempotently', () => {
     const header = createHeader();
     document.body.appendChild(header.el);

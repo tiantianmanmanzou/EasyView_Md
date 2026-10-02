@@ -4,7 +4,7 @@ import type {
   EditorToHostMessage,
   HostToEditorMessage,
 } from '@easyview/contracts';
-import type { EasyViewEditorInstance, EasyViewThemeMode } from '@easyview/editor-core';
+import type { EasyViewEditorInstance } from '@easyview/editor-core';
 import type { DesktopEditorTab } from '../contracts';
 
 export const DESKTOP_EDITOR_RETAIN_LIMIT = 5;
@@ -96,11 +96,6 @@ export class DesktopEditorInstanceRegistry {
 
   size(): number {
     return this.sessions.size;
-  }
-
-  /** Push the product theme onto every live Markdown instance. Preview file themes are untouched. */
-  applyProductTheme(mode: EasyViewThemeMode): void {
-    for (const session of this.sessions.values()) session.editor.setThemeMode(mode);
   }
 
   activate(tab: DesktopEditorTab): EasyViewEditorInstance {

@@ -61,6 +61,8 @@ module.exports = {
         name: 'easyview_md',
         authors: 'EasyView_Md',
         description: 'EasyView_Md Markdown Editor',
+        setupIcon: path.resolve(appDir, 'assets/icon.ico'),
+        iconUrl: 'https://easyview.wonderxy.art/assets/icon.ico',
       },
       ['win32'],
     ),

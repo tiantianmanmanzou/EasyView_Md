@@ -93,17 +93,6 @@ describe('DesktopEditorInstanceRegistry', () => {
     expect(document.body.classList.contains('inlinemd-booting')).toBe(false);
   });
 
-  it('applies the product theme to every live editor and does not require the active tab', () => {
-    const editors: EasyViewEditorInstance[] = [];
-    const { registry } = createRegistry({ editors });
-    registry.activate(editorTab('a', '/tmp/a.md'));
-    registry.activate(editorTab('b', '/tmp/b.md'));
-    registry.applyProductTheme('dark');
-    expect(editors).toHaveLength(2);
-    expect(editors[0]?.setThemeMode).toHaveBeenCalledWith('dark');
-    expect(editors[1]?.setThemeMode).toHaveBeenCalledWith('dark');
-  });
-
   it('creates a rooted instance per tab and does not reuse it when switching away and back within the retain window', () => {
     const { registry, created } = createRegistry({ retainLimit: 5 });
     registry.activate(editorTab('a', '/tmp/a.md'));

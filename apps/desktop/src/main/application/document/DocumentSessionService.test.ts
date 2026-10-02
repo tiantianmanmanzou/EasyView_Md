@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashContent } from '@easyview/editor-sync';
+import { hashContent, minimalTextPatch } from '@easyview/editor-sync';
 import {
   DocumentSessionService,
   toOperationResult,
@@ -80,6 +80,79 @@ function openTwoSessions(fs: FakeDocumentFileSystem): DocumentSessionService {
   service.open({ tabId: 'tab-b', filePath: '/tmp/b.md', fileName: 'b.md', raw: '# B\n', mtimeMs: 1 });
   return service;
 }
+
+function editSession(service: DocumentSessionService, sessionId: string, content: string): void {
+  const session = service.get(sessionId)!;
+  expect(service.applyEdits(sessionId, {
+    documentId: session.documentId,
+    baseRevision: session.sync.snapshot.revision,
+    edits: minimalTextPatch(session.content, content),
+    resultHash: hashContent(content),
+  }).ok).toBe(true);
+}
+
+describe('DocumentSessionService save snapshots', () => {
+  it.each(['save', 'save-as'] as const)('preserves edits made while %s writes its snapshot', async (operation) => {
+    const fs = new FakeDocumentFileSystem();
+    const rawPrefix = '<!-- fullWidth: true tocVisible: false -->\r\n';
+    const raw = `${rawPrefix}# A\r\n`;
+    fs.seed('/tmp/a.md', raw);
+    const service = new DocumentSessionService(fs);
+    const session = service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw, mtimeMs: 1 });
+    const savedContent = '# A saved\n';
+    const latestContent = '# A saved later\n';
+    editSession(service, session.tabId, savedContent);
+    fs.holdNextWrites();
+    const started = new Promise<void>((resolve) => { fs.writeStarted = resolve; });
+    const targetPath = operation === 'save' ? '/tmp/a.md' : '/tmp/saved-as.md';
+    const saving = operation === 'save'
+      ? service.save(session.tabId, savedContent)
+      : service.writeToPath(session.tabId, targetPath, savedContent, '\r\n');
+    await started;
+    editSession(service, session.tabId, latestContent);
+    fs.releaseWrites();
+
+    expect((await saving).kind).toBe('saved');
+    expect(fs.files.get(targetPath)?.raw).toBe(`${rawPrefix}# A saved\r\n`);
+    expect(session.filePath).toBe(targetPath);
+    expect(session.content).toBe(latestContent);
+    expect(session.rawContent).toBe(`${rawPrefix}# A saved later\r\n`);
+    expect(session.documentAdapter.content).toBe(latestContent);
+    expect(session.diskContent).toBe(savedContent);
+    expect(session.diskContentHash).toBe(hashContent(`${rawPrefix}# A saved\r\n`));
+    expect(session.sync.snapshot).toMatchObject({ canonicalContent: latestContent, revision: 2 });
+    expect(session.dirty).toBe(true);
+
+    expect((await service.save(session.tabId, latestContent)).kind).toBe('saved');
+    expect(fs.files.get(targetPath)?.raw).toBe(`${rawPrefix}# A saved later\r\n`);
+    expect(session.dirty).toBe(false);
+    editSession(service, session.tabId, '# A saved later again\n');
+    expect(session.documentAdapter.content).toBe('# A saved later again\n');
+    expect(session.dirty).toBe(true);
+  });
+
+  it('keeps newer edits when older snapshots wait in the save queue', async () => {
+    const fs = new FakeDocumentFileSystem();
+    const service = openTwoSessions(fs);
+    editSession(service, 'tab-a', '# first\n');
+    fs.holdNextWrites();
+    const started = new Promise<void>((resolve) => { fs.writeStarted = resolve; });
+    const first = service.save('tab-a', '# first\n');
+    await started;
+    editSession(service, 'tab-a', '# second\n');
+    const second = service.save('tab-a', '# second\n');
+    editSession(service, 'tab-a', '# third\n');
+    fs.releaseWrites();
+
+    expect((await first).kind).toBe('saved');
+    expect((await second).kind).toBe('saved');
+    expect(fs.files.get('/tmp/a.md')?.raw).toBe('# second\n');
+    expect(service.get('tab-a')?.content).toBe('# third\n');
+    expect(service.get('tab-a')?.documentAdapter.content).toBe('# third\n');
+    expect(service.get('tab-a')?.sync.snapshot.revision).toBe(3);
+    expect(service.get('tab-a')?.dirty).toBe(true);
+  });
+});
 
 describe('DocumentSessionService save targeting (problem 7)', () => {
   it('returns NOT_FOUND and does not fall back to another open session', async () => {
@@ -167,6 +240,7 @@ describe('DocumentSessionService split aliases', () => {
     expect(service.alias('tab-1-split', 'tab-1')?.tabId).toBe('tab-1');
     expect(service.get('tab-1-split')).toBe(service.get('tab-1'));
 
+    editSession(service, 'tab-1-split', '# from split\n');
     const saved = await service.save('tab-1-split', '# from split\n');
     expect(saved.kind).toBe('saved');
     expect(fs.files.get('/tmp/shared.md')?.raw).toBe('# from split\n');

@@ -90,8 +90,8 @@ jobs:
       - name: Wait and verify application
         shell: pwsh
         run: |
-          $pid = [int]$env:APP_PID
-          Write-Host "Monitoring process PID: $pid"
+          $appPid = [int]$env:APP_PID
+          Write-Host "Monitoring process PID: $appPid"
           
           # Wait for 25 seconds, checking every 5 seconds
           $totalWaitTime = 25
@@ -101,9 +101,9 @@ jobs:
           for ($i = 1; $i -le $checks; $i++) {
             Start-Sleep -Seconds $checkInterval
             
-            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
             if (-not $process) {
-              Write-Error "Process $pid has exited!"
+              Write-Error "Process $appPid has exited!"
               Write-Host "=== STDOUT ==="
               if (Test-Path logs\stdout.log) { Get-Content logs\stdout.log }
               Write-Host "=== STDERR ==="
@@ -121,9 +121,9 @@ jobs:
         run: |
           Write-Host "Checking for application windows..."
           
-          $pid = [int]$env:APP_PID
+          $appPid = [int]$env:APP_PID
           
-          $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
           if (-not $process) {
             Write-Error "Process not found"
             exit 1
@@ -137,7 +137,7 @@ jobs:
             Write-Host "Waiting a bit more for window to appear..."
             Start-Sleep -Seconds 5
             
-            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
             if ($process.MainWindowHandle -ne 0) {
               Write-Host "Found main window with title: $($process.MainWindowTitle)"
               Write-Host "✓ Application has a visible window"
@@ -208,19 +208,19 @@ jobs:
         shell: pwsh
         run: |
           if ($env:APP_PID) {
-            $pid = [int]$env:APP_PID
-            Write-Host "Stopping application (PID: $pid)..."
+            $appPid = [int]$env:APP_PID
+            Write-Host "Stopping application (PID: $appPid)..."
             
-            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
             if ($process) {
               $process.CloseMainWindow() | Out-Null
               Start-Sleep -Seconds 2
               
               # Force kill if still running
-              $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+              $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
               if ($process) {
                 Write-Host "Forcing process termination..."
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                Stop-Process -Id $appPid -Force -ErrorAction SilentlyContinue
               }
               
               Write-Host "Application stopped"
@@ -322,8 +322,8 @@ jobs:
       - name: Wait and verify application
         shell: pwsh
         run: |
-          $pid = [int]$env:APP_PID
-          Write-Host "Monitoring process PID: $pid"
+          $appPid = [int]$env:APP_PID
+          Write-Host "Monitoring process PID: $appPid"
           
           $totalWaitTime = 25
           $checkInterval = 5
@@ -332,9 +332,9 @@ jobs:
           for ($i = 1; $i -le $checks; $i++) {
             Start-Sleep -Seconds $checkInterval
             
-            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
             if (-not $process) {
-              Write-Error "Process $pid has exited!"
+              Write-Error "Process $appPid has exited!"
               Write-Host "=== STDOUT ==="
               if (Test-Path logs\stdout.log) { Get-Content logs\stdout.log }
               Write-Host "=== STDERR ==="
@@ -352,9 +352,9 @@ jobs:
         run: |
           Write-Host "Checking for application windows..."
           
-          $pid = [int]$env:APP_PID
+          $appPid = [int]$env:APP_PID
           
-          $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
           if (-not $process) {
             Write-Error "Process not found"
             exit 1
@@ -368,7 +368,7 @@ jobs:
             Write-Host "Waiting a bit more for window to appear..."
             Start-Sleep -Seconds 5
             
-            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
             if ($process.MainWindowHandle -ne 0) {
               Write-Host "Found main window with title: $($process.MainWindowTitle)"
               Write-Host "✓ Application has a visible window"
@@ -437,18 +437,18 @@ jobs:
         shell: pwsh
         run: |
           if ($env:APP_PID) {
-            $pid = [int]$env:APP_PID
-            Write-Host "Stopping application (PID: $pid)..."
+            $appPid = [int]$env:APP_PID
+            Write-Host "Stopping application (PID: $appPid)..."
             
-            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
             if ($process) {
               $process.CloseMainWindow() | Out-Null
               Start-Sleep -Seconds 2
               
-              $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+              $process = Get-Process -Id $appPid -ErrorAction SilentlyContinue
               if ($process) {
                 Write-Host "Forcing process termination..."
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                Stop-Process -Id $appPid -Force -ErrorAction SilentlyContinue
               }
               
               Write-Host "Application stopped"

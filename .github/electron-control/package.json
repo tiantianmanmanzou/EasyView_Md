@@ -1,0 +1,12 @@
+{
+  "name": "electron-control-test",
+  "version": "1.0.0",
+  "description": "Minimal Electron 37.10.3 control test",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "37.10.3"
+  }
+}

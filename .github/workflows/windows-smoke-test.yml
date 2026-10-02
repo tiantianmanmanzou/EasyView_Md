@@ -121,66 +121,30 @@ jobs:
         run: |
           Write-Host "Checking for application windows..."
           
-          # Get all windows for the process
           $pid = [int]$env:APP_PID
           
-          # Use Add-Type to access Windows API for window enumeration
-          Add-Type @"
-            using System;
-            using System.Runtime.InteropServices;
-            using System.Text;
-            public class WindowAPI {
-              [DllImport("user32.dll")]
-              public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
-              
-              [DllImport("user32.dll")]
-              public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-              
-              [DllImport("user32.dll")]
-              public static extern int GetWindowTextLength(IntPtr hWnd);
-              
-              [DllImport("user32.dll")]
-              public static extern bool IsWindowVisible(IntPtr hWnd);
-              
-              [DllImport("user32.dll")]
-              public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-              
-              public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-            }
-"@
-          
-          $foundWindow = $false
-          $windowTitles = @()
-          
-          $callback = {
-            param($hwnd, $lParam)
-            
-            $processId = 0
-            [WindowAPI]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
-            
-            if ($processId -eq $pid) {
-              if ([WindowAPI]::IsWindowVisible($hwnd)) {
-                $length = [WindowAPI]::GetWindowTextLength($hwnd)
-                if ($length -gt 0) {
-                  $sb = New-Object System.Text.StringBuilder -ArgumentList ($length + 1)
-                  [WindowAPI]::GetWindowText($hwnd, $sb, $sb.Capacity) | Out-Null
-                  $title = $sb.ToString()
-                  $script:windowTitles += $title
-                  $script:foundWindow = $true
-                  Write-Host "Found window: '$title'"
-                }
-              }
-            }
-            return $true
+          $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          if (-not $process) {
+            Write-Error "Process not found"
+            exit 1
           }
           
-          [WindowAPI]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
-          
-          if ($foundWindow) {
-            Write-Host "✓ Application has $($windowTitles.Count) visible window(s)"
+          if ($process.MainWindowHandle -ne 0) {
+            Write-Host "Found main window with title: $($process.MainWindowTitle)"
+            Write-Host "✓ Application has a visible window"
           } else {
-            Write-Error "✗ No visible windows found for the application"
-            exit 1
+            Write-Warning "Main window handle is 0"
+            Write-Host "Waiting a bit more for window to appear..."
+            Start-Sleep -Seconds 5
+            
+            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($process.MainWindowHandle -ne 0) {
+              Write-Host "Found main window with title: $($process.MainWindowTitle)"
+              Write-Host "✓ Application has a visible window"
+            } else {
+              Write-Error "✗ No visible window found for the application after waiting"
+              exit 1
+            }
           }
       
       - name: Capture screenshot
@@ -390,62 +354,28 @@ jobs:
           
           $pid = [int]$env:APP_PID
           
-          Add-Type @"
-            using System;
-            using System.Runtime.InteropServices;
-            using System.Text;
-            public class WindowAPI {
-              [DllImport("user32.dll")]
-              public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
-              
-              [DllImport("user32.dll")]
-              public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-              
-              [DllImport("user32.dll")]
-              public static extern int GetWindowTextLength(IntPtr hWnd);
-              
-              [DllImport("user32.dll")]
-              public static extern bool IsWindowVisible(IntPtr hWnd);
-              
-              [DllImport("user32.dll")]
-              public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-              
-              public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-            }
-"@
-          
-          $foundWindow = $false
-          $windowTitles = @()
-          
-          $callback = {
-            param($hwnd, $lParam)
-            
-            $processId = 0
-            [WindowAPI]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
-            
-            if ($processId -eq $pid) {
-              if ([WindowAPI]::IsWindowVisible($hwnd)) {
-                $length = [WindowAPI]::GetWindowTextLength($hwnd)
-                if ($length -gt 0) {
-                  $sb = New-Object System.Text.StringBuilder -ArgumentList ($length + 1)
-                  [WindowAPI]::GetWindowText($hwnd, $sb, $sb.Capacity) | Out-Null
-                  $title = $sb.ToString()
-                  $script:windowTitles += $title
-                  $script:foundWindow = $true
-                  Write-Host "Found window: '$title'"
-                }
-              }
-            }
-            return $true
+          $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          if (-not $process) {
+            Write-Error "Process not found"
+            exit 1
           }
           
-          [WindowAPI]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
-          
-          if ($foundWindow) {
-            Write-Host "✓ Application has $($windowTitles.Count) visible window(s)"
+          if ($process.MainWindowHandle -ne 0) {
+            Write-Host "Found main window with title: $($process.MainWindowTitle)"
+            Write-Host "✓ Application has a visible window"
           } else {
-            Write-Error "✗ No visible windows found for the application"
-            exit 1
+            Write-Warning "Main window handle is 0"
+            Write-Host "Waiting a bit more for window to appear..."
+            Start-Sleep -Seconds 5
+            
+            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($process.MainWindowHandle -ne 0) {
+              Write-Host "Found main window with title: $($process.MainWindowTitle)"
+              Write-Host "✓ Application has a visible window"
+            } else {
+              Write-Error "✗ No visible window found for the application after waiting"
+              exit 1
+            }
           }
       
       - name: Capture screenshot

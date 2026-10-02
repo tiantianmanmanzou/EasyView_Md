@@ -1,3 +1,5 @@
+# Launch + wait MUST stay in one GHA step. Splitting Start-Process into a later
+# step causes Windows runners to tear down the process tree (~silent ~10s exit).
 param(
   [Parameter(Mandatory = $true)][string]$ExePath,
   [Parameter(Mandatory = $true)][string]$TestFile,

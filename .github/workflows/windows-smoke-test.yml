@@ -65,23 +65,76 @@ jobs:
           echo "TEST_FILE=$testFile" >> $env:GITHUB_ENV
           Write-Host "Test file will be: $testFile"
       
-      - name: Launch application
+      - name: Check Windows dependencies
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking system dependencies ==="
+          
+          Write-Host "`nWindows Version:"
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsHardwareAbstractionLayer
+          
+          Write-Host "`nVisual C++ Redistributables:"
+          Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+            Where-Object { $_.DisplayName -like "*Visual C++*" -or $_.DisplayName -like "*Microsoft Visual*" } |
+            Select-Object DisplayName, DisplayVersion
+          
+          Write-Host "`n.NET versions:"
+          Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse |
+            Get-ItemProperty -Name version -EA 0 |
+            Where-Object { $_.PSChildName -match '^(?!S)\p{L}'} |
+            Select-Object PSChildName, version
+      
+      - name: Launch application with debugging
         shell: pwsh
         run: |
           Write-Host "Launching EasyView_Md with test file..."
           Write-Host "Executable: $env:EXE_PATH"
           Write-Host "Test file: $env:TEST_FILE"
           
+          # Check if executable exists and is valid
+          if (-not (Test-Path $env:EXE_PATH)) {
+            Write-Error "Executable not found at: $env:EXE_PATH"
+            exit 1
+          }
+          
+          $exeInfo = Get-Item $env:EXE_PATH
+          Write-Host "Executable size: $($exeInfo.Length) bytes"
+          Write-Host "Executable modified: $($exeInfo.LastWriteTime)"
+          
+          # Set Electron debugging environment variables
+          $env:ELECTRON_ENABLE_LOGGING = "1"
+          $env:ELECTRON_LOG_FILE = "$PWD\logs\electron-debug.log"
+          
+          Write-Host "`nStarting application..."
+          
           # Start the application with the test markdown file
           $process = Start-Process -FilePath $env:EXE_PATH -ArgumentList $env:TEST_FILE -PassThru -RedirectStandardOutput logs\stdout.log -RedirectStandardError logs\stderr.log
           
           if ($process) {
-            Write-Host "Process started with PID: $($process.Id)"
+            Write-Host "✓ Process started with PID: $($process.Id)"
             echo "APP_PID=$($process.Id)" >> $env:GITHUB_ENV
             
-            # Give the app time to start
+            # Immediately check if process is still running
+            Start-Sleep -Seconds 2
+            $checkProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if (-not $checkProcess) {
+              Write-Error "Process exited immediately after start!"
+              Write-Host "Exit code: $($process.ExitCode)"
+              exit 1
+            }
+            
+            Write-Host "✓ Process still alive after 2 seconds"
             Write-Host "Waiting for application to initialize..."
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 3
+            
+            # Check again
+            $checkProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if (-not $checkProcess) {
+              Write-Error "Process exited during initialization (after 5 seconds total)"
+              exit 1
+            }
+            
+            Write-Host "✓ Process still alive after 5 seconds"
           } else {
             Write-Error "Failed to start process"
             exit 1
@@ -170,26 +223,68 @@ jobs:
           Write-Host "Screenshot saved to: $screenshotPath"
           Write-Host "Screenshot size: $((Get-Item $screenshotPath).Length) bytes"
       
+      - name: Check Windows Event Log
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking Windows Event Log for Application Errors ==="
+          
+          $startTime = (Get-Date).AddMinutes(-10)
+          
+          $events = Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Level = 2
+            StartTime = $startTime
+          } -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*EasyView*" -or $_.ProviderName -like "*Electron*" -or $_.Message -like "*node*" }
+          
+          if ($events) {
+            Write-Host "Found relevant error events:"
+            $events | ForEach-Object {
+              Write-Host "`n--- Event ID $($_.Id) at $($_.TimeCreated) ---"
+              Write-Host "Source: $($_.ProviderName)"
+              Write-Host "Message: $($_.Message)"
+            }
+          } else {
+            Write-Host "No relevant application errors found in Event Log"
+          }
+      
       - name: Collect application logs
         if: always()
         shell: pwsh
         run: |
           Write-Host "=== Application STDOUT ==="
           if (Test-Path logs\stdout.log) {
-            Get-Content logs\stdout.log
+            $content = Get-Content logs\stdout.log -Raw
+            if ($content) {
+              Write-Host $content
+            } else {
+              Write-Host "(stdout file exists but is empty)"
+            }
           } else {
             Write-Host "(no stdout)"
           }
           
           Write-Host "`n=== Application STDERR ==="
           if (Test-Path logs\stderr.log) {
-            Get-Content logs\stderr.log
+            $content = Get-Content logs\stderr.log -Raw
+            if ($content) {
+              Write-Host $content
+            } else {
+              Write-Host "(stderr file exists but is empty)"
+            }
           } else {
             Write-Host "(no stderr)"
           }
           
+          Write-Host "`n=== Electron Debug Log ==="
+          if (Test-Path logs\electron-debug.log) {
+            Get-Content logs\electron-debug.log
+          } else {
+            Write-Host "(no electron debug log)"
+          }
+          
           # Check for Electron logs in AppData
-          Write-Host "`n=== Checking for Electron logs ==="
+          Write-Host "`n=== Checking for Electron logs in AppData ==="
           $appDataPath = [Environment]::GetFolderPath('ApplicationData')
           $electronLogPath = Join-Path $appDataPath "EasyView_Md\logs"
           
@@ -201,6 +296,16 @@ jobs:
             }
           } else {
             Write-Host "No Electron logs found at: $electronLogPath"
+          }
+          
+          # Check for crash dumps
+          Write-Host "`n=== Checking for crash dumps ==="
+          $crashDumpPath = Join-Path $appDataPath "EasyView_Md\Crashpad"
+          if (Test-Path $crashDumpPath) {
+            Write-Host "Found crash dumps at: $crashDumpPath"
+            Get-ChildItem $crashDumpPath -Recurse | Select-Object Name, Length, LastWriteTime
+          } else {
+            Write-Host "No crash dumps found"
           }
       
       - name: Cleanup - Stop application
@@ -299,21 +404,69 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path logs
       
-      - name: Launch application
+      - name: Check Windows dependencies
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking system dependencies ==="
+          
+          Write-Host "`nWindows Version:"
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsHardwareAbstractionLayer
+          
+          Write-Host "`nVisual C++ Redistributables:"
+          Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+            Where-Object { $_.DisplayName -like "*Visual C++*" -or $_.DisplayName -like "*Microsoft Visual*" } |
+            Select-Object DisplayName, DisplayVersion
+      
+      - name: Launch application with debugging
         shell: pwsh
         run: |
           Write-Host "Launching EasyView_Md with test file..."
           Write-Host "Executable: $env:EXE_PATH"
           Write-Host "Test file: $env:TEST_FILE"
           
+          # Check if executable exists and is valid
+          if (-not (Test-Path $env:EXE_PATH)) {
+            Write-Error "Executable not found at: $env:EXE_PATH"
+            exit 1
+          }
+          
+          $exeInfo = Get-Item $env:EXE_PATH
+          Write-Host "Executable size: $($exeInfo.Length) bytes"
+          Write-Host "Executable modified: $($exeInfo.LastWriteTime)"
+          
+          # Set Electron debugging environment variables
+          $env:ELECTRON_ENABLE_LOGGING = "1"
+          $env:ELECTRON_LOG_FILE = "$PWD\logs\electron-debug.log"
+          
+          Write-Host "`nStarting application..."
+          
           $process = Start-Process -FilePath $env:EXE_PATH -ArgumentList $env:TEST_FILE -PassThru -RedirectStandardOutput logs\stdout.log -RedirectStandardError logs\stderr.log
           
           if ($process) {
-            Write-Host "Process started with PID: $($process.Id)"
+            Write-Host "✓ Process started with PID: $($process.Id)"
             echo "APP_PID=$($process.Id)" >> $env:GITHUB_ENV
             
+            # Immediately check if process is still running
+            Start-Sleep -Seconds 2
+            $checkProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if (-not $checkProcess) {
+              Write-Error "Process exited immediately after start!"
+              Write-Host "Exit code: $($process.ExitCode)"
+              exit 1
+            }
+            
+            Write-Host "✓ Process still alive after 2 seconds"
             Write-Host "Waiting for application to initialize..."
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 3
+            
+            # Check again
+            $checkProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if (-not $checkProcess) {
+              Write-Error "Process exited during initialization (after 5 seconds total)"
+              exit 1
+            }
+            
+            Write-Host "✓ Process still alive after 5 seconds"
           } else {
             Write-Error "Failed to start process"
             exit 1
@@ -400,25 +553,67 @@ jobs:
           
           Write-Host "Screenshot saved to: $screenshotPath"
       
+      - name: Check Windows Event Log
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking Windows Event Log for Application Errors ==="
+          
+          $startTime = (Get-Date).AddMinutes(-10)
+          
+          $events = Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Level = 2
+            StartTime = $startTime
+          } -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*EasyView*" -or $_.ProviderName -like "*Electron*" -or $_.Message -like "*node*" }
+          
+          if ($events) {
+            Write-Host "Found relevant error events:"
+            $events | ForEach-Object {
+              Write-Host "`n--- Event ID $($_.Id) at $($_.TimeCreated) ---"
+              Write-Host "Source: $($_.ProviderName)"
+              Write-Host "Message: $($_.Message)"
+            }
+          } else {
+            Write-Host "No relevant application errors found in Event Log"
+          }
+      
       - name: Collect application logs
         if: always()
         shell: pwsh
         run: |
           Write-Host "=== Application STDOUT ==="
           if (Test-Path logs\stdout.log) {
-            Get-Content logs\stdout.log
+            $content = Get-Content logs\stdout.log -Raw
+            if ($content) {
+              Write-Host $content
+            } else {
+              Write-Host "(stdout file exists but is empty)"
+            }
           } else {
             Write-Host "(no stdout)"
           }
           
           Write-Host "`n=== Application STDERR ==="
           if (Test-Path logs\stderr.log) {
-            Get-Content logs\stderr.log
+            $content = Get-Content logs\stderr.log -Raw
+            if ($content) {
+              Write-Host $content
+            } else {
+              Write-Host "(stderr file exists but is empty)"
+            }
           } else {
             Write-Host "(no stderr)"
           }
           
-          Write-Host "`n=== Checking for Electron logs ==="
+          Write-Host "`n=== Electron Debug Log ==="
+          if (Test-Path logs\electron-debug.log) {
+            Get-Content logs\electron-debug.log
+          } else {
+            Write-Host "(no electron debug log)"
+          }
+          
+          Write-Host "`n=== Checking for Electron logs in AppData ==="
           $appDataPath = [Environment]::GetFolderPath('ApplicationData')
           $electronLogPath = Join-Path $appDataPath "EasyView_Md\logs"
           
@@ -429,7 +624,16 @@ jobs:
               Get-Content $_.FullName -ErrorAction SilentlyContinue
             }
           } else {
-            Write-Host "No Electron logs found"
+            Write-Host "No Electron logs found at: $electronLogPath"
+          }
+          
+          Write-Host "`n=== Checking for crash dumps ==="
+          $crashDumpPath = Join-Path $appDataPath "EasyView_Md\Crashpad"
+          if (Test-Path $crashDumpPath) {
+            Write-Host "Found crash dumps at: $crashDumpPath"
+            Get-ChildItem $crashDumpPath -Recurse | Select-Object Name, Length, LastWriteTime
+          } else {
+            Write-Host "No crash dumps found"
           }
       
       - name: Cleanup - Stop application

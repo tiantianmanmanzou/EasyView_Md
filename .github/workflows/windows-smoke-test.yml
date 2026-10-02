@@ -1,0 +1,536 @@
+name: Windows Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      download_url:
+        description: 'URL to EasyView_Md Windows build ZIP'
+        required: false
+        default: 'https://easyview.wonderxy.art/downloads/EasyView_Md-win-x64.zip?v=0.1.1'
+      test_source_build:
+        description: 'Also test source build'
+        required: false
+        default: 'true'
+        type: boolean
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/editor-core/**'
+      - 'packages/preview-ui/**'
+      - 'packages/node-runtime/**'
+      - '.github/workflows/windows-smoke-test.yml'
+
+jobs:
+  test-published-build:
+    name: Test Published Windows Build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download published build
+        shell: pwsh
+        run: |
+          $url = "${{ github.event.inputs.download_url || 'https://easyview.wonderxy.art/downloads/EasyView_Md-win-x64.zip?v=0.1.1' }}"
+          Write-Host "Downloading from: $url"
+          Invoke-WebRequest -Uri $url -OutFile EasyView_Md-win-x64.zip
+          
+          Write-Host "Extracting archive..."
+          Expand-Archive -Path EasyView_Md-win-x64.zip -DestinationPath . -Force
+          
+          Write-Host "Contents of extracted folder:"
+          Get-ChildItem -Recurse -Depth 2
+      
+      - name: Prepare test environment
+        shell: pwsh
+        run: |
+          # Create logs directory
+          New-Item -ItemType Directory -Force -Path logs
+          
+          # Find the executable
+          $exe = Get-ChildItem -Recurse -Filter "EasyView_Md.exe" | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "EasyView_Md.exe not found!"
+            exit 1
+          }
+          
+          $exePath = $exe.FullName
+          Write-Host "Found executable at: $exePath"
+          echo "EXE_PATH=$exePath" >> $env:GITHUB_ENV
+          
+          # Get the markdown test file path
+          $testFile = "${{ github.workspace }}\.github\test-sample.md"
+          echo "TEST_FILE=$testFile" >> $env:GITHUB_ENV
+          Write-Host "Test file will be: $testFile"
+      
+      - name: Launch application
+        shell: pwsh
+        run: |
+          Write-Host "Launching EasyView_Md with test file..."
+          Write-Host "Executable: $env:EXE_PATH"
+          Write-Host "Test file: $env:TEST_FILE"
+          
+          # Start the application with the test markdown file
+          $process = Start-Process -FilePath $env:EXE_PATH -ArgumentList $env:TEST_FILE -PassThru -RedirectStandardOutput logs\stdout.log -RedirectStandardError logs\stderr.log
+          
+          if ($process) {
+            Write-Host "Process started with PID: $($process.Id)"
+            echo "APP_PID=$($process.Id)" >> $env:GITHUB_ENV
+            
+            # Give the app time to start
+            Write-Host "Waiting for application to initialize..."
+            Start-Sleep -Seconds 5
+          } else {
+            Write-Error "Failed to start process"
+            exit 1
+          }
+      
+      - name: Wait and verify application
+        shell: pwsh
+        run: |
+          $pid = [int]$env:APP_PID
+          Write-Host "Monitoring process PID: $pid"
+          
+          # Wait for 25 seconds, checking every 5 seconds
+          $totalWaitTime = 25
+          $checkInterval = 5
+          $checks = $totalWaitTime / $checkInterval
+          
+          for ($i = 1; $i -le $checks; $i++) {
+            Start-Sleep -Seconds $checkInterval
+            
+            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if (-not $process) {
+              Write-Error "Process $pid has exited!"
+              Write-Host "=== STDOUT ==="
+              if (Test-Path logs\stdout.log) { Get-Content logs\stdout.log }
+              Write-Host "=== STDERR ==="
+              if (Test-Path logs\stderr.log) { Get-Content logs\stderr.log }
+              exit 1
+            }
+            
+            Write-Host "Check $i/$checks : Process is still running (CPU: $($process.CPU)s, Memory: $([math]::Round($process.WorkingSet64/1MB, 2))MB)"
+          }
+          
+          Write-Host "✓ Application stayed alive for $totalWaitTime seconds"
+      
+      - name: Check for application window
+        shell: pwsh
+        run: |
+          Write-Host "Checking for application windows..."
+          
+          # Get all windows for the process
+          $pid = [int]$env:APP_PID
+          
+          # Use Add-Type to access Windows API for window enumeration
+          Add-Type @"
+            using System;
+            using System.Runtime.InteropServices;
+            using System.Text;
+            public class WindowAPI {
+              [DllImport("user32.dll")]
+              public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+              
+              [DllImport("user32.dll")]
+              public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+              
+              [DllImport("user32.dll")]
+              public static extern int GetWindowTextLength(IntPtr hWnd);
+              
+              [DllImport("user32.dll")]
+              public static extern bool IsWindowVisible(IntPtr hWnd);
+              
+              [DllImport("user32.dll")]
+              public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+              
+              public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+            }
+"@
+          
+          $foundWindow = $false
+          $windowTitles = @()
+          
+          $callback = {
+            param($hwnd, $lParam)
+            
+            $processId = 0
+            [WindowAPI]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
+            
+            if ($processId -eq $pid) {
+              if ([WindowAPI]::IsWindowVisible($hwnd)) {
+                $length = [WindowAPI]::GetWindowTextLength($hwnd)
+                if ($length -gt 0) {
+                  $sb = New-Object System.Text.StringBuilder -ArgumentList ($length + 1)
+                  [WindowAPI]::GetWindowText($hwnd, $sb, $sb.Capacity) | Out-Null
+                  $title = $sb.ToString()
+                  $script:windowTitles += $title
+                  $script:foundWindow = $true
+                  Write-Host "Found window: '$title'"
+                }
+              }
+            }
+            return $true
+          }
+          
+          [WindowAPI]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+          
+          if ($foundWindow) {
+            Write-Host "✓ Application has $($windowTitles.Count) visible window(s)"
+          } else {
+            Write-Error "✗ No visible windows found for the application"
+            exit 1
+          }
+      
+      - name: Capture screenshot
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "Capturing screenshot..."
+          
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+          
+          $screenshotPath = "logs\screenshot.png"
+          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          
+          $graphics.Dispose()
+          $bitmap.Dispose()
+          
+          Write-Host "Screenshot saved to: $screenshotPath"
+          Write-Host "Screenshot size: $((Get-Item $screenshotPath).Length) bytes"
+      
+      - name: Collect application logs
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Application STDOUT ==="
+          if (Test-Path logs\stdout.log) {
+            Get-Content logs\stdout.log
+          } else {
+            Write-Host "(no stdout)"
+          }
+          
+          Write-Host "`n=== Application STDERR ==="
+          if (Test-Path logs\stderr.log) {
+            Get-Content logs\stderr.log
+          } else {
+            Write-Host "(no stderr)"
+          }
+          
+          # Check for Electron logs in AppData
+          Write-Host "`n=== Checking for Electron logs ==="
+          $appDataPath = [Environment]::GetFolderPath('ApplicationData')
+          $electronLogPath = Join-Path $appDataPath "EasyView_Md\logs"
+          
+          if (Test-Path $electronLogPath) {
+            Write-Host "Found Electron logs at: $electronLogPath"
+            Get-ChildItem $electronLogPath -Recurse | ForEach-Object {
+              Write-Host "`n=== $($_.Name) ==="
+              Get-Content $_.FullName -ErrorAction SilentlyContinue
+            }
+          } else {
+            Write-Host "No Electron logs found at: $electronLogPath"
+          }
+      
+      - name: Cleanup - Stop application
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:APP_PID) {
+            $pid = [int]$env:APP_PID
+            Write-Host "Stopping application (PID: $pid)..."
+            
+            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($process) {
+              $process.CloseMainWindow() | Out-Null
+              Start-Sleep -Seconds 2
+              
+              # Force kill if still running
+              $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+              if ($process) {
+                Write-Host "Forcing process termination..."
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+              }
+              
+              Write-Host "Application stopped"
+            } else {
+              Write-Host "Process already exited"
+            }
+          }
+      
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-test-logs-published
+          path: |
+            logs/
+            *.log
+          retention-days: 7
+
+  test-source-build:
+    name: Test Source Build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: github.event.inputs.test_source_build != 'false'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build desktop app
+        run: npm run build:desktop
+      
+      - name: Package desktop app
+        run: npm run package:desktop
+      
+      - name: Find packaged application
+        shell: pwsh
+        run: |
+          Write-Host "Searching for packaged application..."
+          
+          $outDir = "apps\desktop\out"
+          if (-not (Test-Path $outDir)) {
+            Write-Error "Out directory not found: $outDir"
+            exit 1
+          }
+          
+          Write-Host "Contents of out directory:"
+          Get-ChildItem $outDir -Recurse -Depth 3
+          
+          # Find the executable in the packaged output
+          $exe = Get-ChildItem $outDir -Recurse -Filter "EasyView_Md.exe" | Select-Object -First 1
+          
+          if (-not $exe) {
+            Write-Error "Packaged EasyView_Md.exe not found!"
+            exit 1
+          }
+          
+          $exePath = $exe.FullName
+          Write-Host "Found executable at: $exePath"
+          echo "EXE_PATH=$exePath" >> $env:GITHUB_ENV
+          
+          # Get the markdown test file path
+          $testFile = "${{ github.workspace }}\.github\test-sample.md"
+          echo "TEST_FILE=$testFile" >> $env:GITHUB_ENV
+      
+      - name: Prepare test environment
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path logs
+      
+      - name: Launch application
+        shell: pwsh
+        run: |
+          Write-Host "Launching EasyView_Md with test file..."
+          Write-Host "Executable: $env:EXE_PATH"
+          Write-Host "Test file: $env:TEST_FILE"
+          
+          $process = Start-Process -FilePath $env:EXE_PATH -ArgumentList $env:TEST_FILE -PassThru -RedirectStandardOutput logs\stdout.log -RedirectStandardError logs\stderr.log
+          
+          if ($process) {
+            Write-Host "Process started with PID: $($process.Id)"
+            echo "APP_PID=$($process.Id)" >> $env:GITHUB_ENV
+            
+            Write-Host "Waiting for application to initialize..."
+            Start-Sleep -Seconds 5
+          } else {
+            Write-Error "Failed to start process"
+            exit 1
+          }
+      
+      - name: Wait and verify application
+        shell: pwsh
+        run: |
+          $pid = [int]$env:APP_PID
+          Write-Host "Monitoring process PID: $pid"
+          
+          $totalWaitTime = 25
+          $checkInterval = 5
+          $checks = $totalWaitTime / $checkInterval
+          
+          for ($i = 1; $i -le $checks; $i++) {
+            Start-Sleep -Seconds $checkInterval
+            
+            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if (-not $process) {
+              Write-Error "Process $pid has exited!"
+              Write-Host "=== STDOUT ==="
+              if (Test-Path logs\stdout.log) { Get-Content logs\stdout.log }
+              Write-Host "=== STDERR ==="
+              if (Test-Path logs\stderr.log) { Get-Content logs\stderr.log }
+              exit 1
+            }
+            
+            Write-Host "Check $i/$checks : Process is still running (CPU: $($process.CPU)s, Memory: $([math]::Round($process.WorkingSet64/1MB, 2))MB)"
+          }
+          
+          Write-Host "✓ Application stayed alive for $totalWaitTime seconds"
+      
+      - name: Check for application window
+        shell: pwsh
+        run: |
+          Write-Host "Checking for application windows..."
+          
+          $pid = [int]$env:APP_PID
+          
+          Add-Type @"
+            using System;
+            using System.Runtime.InteropServices;
+            using System.Text;
+            public class WindowAPI {
+              [DllImport("user32.dll")]
+              public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+              
+              [DllImport("user32.dll")]
+              public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+              
+              [DllImport("user32.dll")]
+              public static extern int GetWindowTextLength(IntPtr hWnd);
+              
+              [DllImport("user32.dll")]
+              public static extern bool IsWindowVisible(IntPtr hWnd);
+              
+              [DllImport("user32.dll")]
+              public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+              
+              public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+            }
+"@
+          
+          $foundWindow = $false
+          $windowTitles = @()
+          
+          $callback = {
+            param($hwnd, $lParam)
+            
+            $processId = 0
+            [WindowAPI]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
+            
+            if ($processId -eq $pid) {
+              if ([WindowAPI]::IsWindowVisible($hwnd)) {
+                $length = [WindowAPI]::GetWindowTextLength($hwnd)
+                if ($length -gt 0) {
+                  $sb = New-Object System.Text.StringBuilder -ArgumentList ($length + 1)
+                  [WindowAPI]::GetWindowText($hwnd, $sb, $sb.Capacity) | Out-Null
+                  $title = $sb.ToString()
+                  $script:windowTitles += $title
+                  $script:foundWindow = $true
+                  Write-Host "Found window: '$title'"
+                }
+              }
+            }
+            return $true
+          }
+          
+          [WindowAPI]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+          
+          if ($foundWindow) {
+            Write-Host "✓ Application has $($windowTitles.Count) visible window(s)"
+          } else {
+            Write-Error "✗ No visible windows found for the application"
+            exit 1
+          }
+      
+      - name: Capture screenshot
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "Capturing screenshot..."
+          
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+          
+          $screenshotPath = "logs\screenshot.png"
+          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          
+          $graphics.Dispose()
+          $bitmap.Dispose()
+          
+          Write-Host "Screenshot saved to: $screenshotPath"
+      
+      - name: Collect application logs
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Application STDOUT ==="
+          if (Test-Path logs\stdout.log) {
+            Get-Content logs\stdout.log
+          } else {
+            Write-Host "(no stdout)"
+          }
+          
+          Write-Host "`n=== Application STDERR ==="
+          if (Test-Path logs\stderr.log) {
+            Get-Content logs\stderr.log
+          } else {
+            Write-Host "(no stderr)"
+          }
+          
+          Write-Host "`n=== Checking for Electron logs ==="
+          $appDataPath = [Environment]::GetFolderPath('ApplicationData')
+          $electronLogPath = Join-Path $appDataPath "EasyView_Md\logs"
+          
+          if (Test-Path $electronLogPath) {
+            Write-Host "Found Electron logs at: $electronLogPath"
+            Get-ChildItem $electronLogPath -Recurse | ForEach-Object {
+              Write-Host "`n=== $($_.Name) ==="
+              Get-Content $_.FullName -ErrorAction SilentlyContinue
+            }
+          } else {
+            Write-Host "No Electron logs found"
+          }
+      
+      - name: Cleanup - Stop application
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:APP_PID) {
+            $pid = [int]$env:APP_PID
+            Write-Host "Stopping application (PID: $pid)..."
+            
+            $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($process) {
+              $process.CloseMainWindow() | Out-Null
+              Start-Sleep -Seconds 2
+              
+              $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+              if ($process) {
+                Write-Host "Forcing process termination..."
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+              }
+              
+              Write-Host "Application stopped"
+            }
+          }
+      
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-test-logs-source
+          path: |
+            logs/
+            *.log
+          retention-days: 7

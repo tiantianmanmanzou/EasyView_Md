@@ -22,11 +22,8 @@ import {
 } from '../../application/window/windowService';
 import { registerDesktopIpc } from './registerDesktopIpc';
 import { registerPreviewProtocol, registerPreviewScheme } from './previewProtocol';
-import { setupDiagnostics, setupWindowDiagnostics } from './diagnostics';
 
 if (!squirrelStartup) registerPreviewScheme();
-
-setupDiagnostics();
 
 const hasSingleInstanceLock = !squirrelStartup && app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -82,8 +79,7 @@ if (!hasSingleInstanceLock) {
       const result = await readDocument(filePath);
       if (!result.ok) console.error('[EasyView_Md] 启动文件打开失败:', result.message);
     }
-    const mainWindow = createWindow();
-    setupWindowDiagnostics(mainWindow);
+    createWindow();
     nativeTheme.on('updated', () => {
       sendToWindow(
         'app.themeChanged',
@@ -91,9 +87,7 @@ if (!hasSingleInstanceLock) {
       );
     });
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        setupWindowDiagnostics(createWindow());
-      }
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   });
 

@@ -2,16 +2,6 @@ name: Windows Smoke Test
 
 on:
   workflow_dispatch:
-    inputs:
-      download_url:
-        description: 'URL to EasyView_Md Windows build ZIP'
-        required: false
-        default: 'https://easyview.wonderxy.art/downloads/EasyView_Md-win-x64.zip?v=0.1.1'
-      test_published:
-        description: 'Also test published ZIP (no EASYVIEW_DIAG code)'
-        required: false
-        default: 'true'
-        type: boolean
   pull_request:
     paths:
       - 'apps/desktop/**'
@@ -19,56 +9,13 @@ on:
       - 'packages/preview-ui/**'
       - 'packages/node-runtime/**'
       - '.github/workflows/windows-smoke-test.yml'
-      - '.github/scripts/**'
-      - '.github/electron-control/**'
+      - '.github/scripts/windows-smoke-launch.ps1'
+      - '.github/scripts/resolve-latest-win-zip.ps1'
       - '.github/test-sample.md'
 
 jobs:
-  # Control: bare Electron 37.10.3 hello-window on the same runner.
-  electron-control:
-    name: Control Electron ${{ matrix.name }}
-    runs-on: windows-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: default
-            extra_args: ""
-          - name: disable-gpu
-            extra_args: "--disable-gpu"
-          - name: swiftshader
-            extra_args: "--disable-gpu --use-angle=swiftshader"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Run Electron control smoke
-        shell: pwsh
-        run: |
-          $logs = "logs-control-${{ matrix.name }}"
-          .\.github\scripts\windows-electron-control.ps1 `
-            -LogsDir $logs `
-            -WaitSeconds 25 `
-            -ExtraArgs "${{ matrix.extra_args }}"
-
-      - name: Upload control artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: control-${{ matrix.name }}
-          path: logs-control-${{ matrix.name }}/
-          retention-days: 14
-          if-no-files-found: warn
-
-  # Build once, then test the packaged exe under flag matrix with EASYVIEW_DIAG=1.
-  build-source:
-    name: Build Windows package from source
+  test-source-build:
+    name: Source build smoke
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -87,125 +34,72 @@ jobs:
       - name: Build and package desktop
         run: npm run package:desktop
 
-      - name: Locate packaged app
+      - name: Launch and smoke-test packaged app
         shell: pwsh
         run: |
           $exe = Get-ChildItem "apps\desktop\out" -Recurse -Filter "EasyView_Md.exe" | Select-Object -First 1
-          if (-not $exe) { throw "Packaged EasyView_Md.exe not found" }
-          Write-Host "Found $($exe.FullName)"
-          # Stage a stable path for artifact
-          New-Item -ItemType Directory -Force -Path staged-win | Out-Null
-          $srcDir = $exe.Directory.FullName
-          Copy-Item -Path $srcDir -Destination "staged-win\EasyView_Md-win32-x64" -Recurse -Force
-
-      - name: Upload packaged Windows build
-        uses: actions/upload-artifact@v4
-        with:
-          name: packaged-win-x64
-          path: staged-win/
-          retention-days: 3
-
-  test-source-matrix:
-    name: Source build ${{ matrix.name }}
-    needs: build-source
-    runs-on: windows-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: default
-            extra_args: ""
-          - name: disable-gpu
-            extra_args: "--disable-gpu"
-          - name: swiftshader
-            # Prefer software GL via ANGLE SwiftShader on headless-ish runners
-            extra_args: "--disable-gpu --use-angle=swiftshader"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download packaged Windows build
-        uses: actions/download-artifact@v4
-        with:
-          name: packaged-win-x64
-          path: staged-win
-
-      - name: Run smoke with diagnostics
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem "staged-win" -Recurse -Filter "EasyView_Md.exe" | Select-Object -First 1
-          if (-not $exe) { throw "EasyView_Md.exe missing from artifact" }
-          $logs = "logs-source-${{ matrix.name }}"
-          $testFile = "${{ github.workspace }}\.github\test-sample.md"
+          if (-not $exe) { throw "Packaged EasyView_Md.exe not found under apps/desktop/out" }
+          Write-Host "Using $($exe.FullName)"
+          $testFile = Join-Path $env:GITHUB_WORKSPACE ".github\test-sample.md"
           .\.github\scripts\windows-smoke-launch.ps1 `
             -ExePath $exe.FullName `
             -TestFile $testFile `
-            -ExtraArgs "${{ matrix.extra_args }}" `
-            -LogsDir $logs `
+            -LogsDir "logs-source" `
             -WaitSeconds 25 `
-            -RequireWindow `
-            -JobLabel "source-${{ matrix.name }}"
+            -JobLabel "source-build"
 
-      - name: Upload source-matrix artifacts
+      - name: Upload source smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: source-${{ matrix.name }}
-          path: logs-source-${{ matrix.name }}/
+          name: windows-smoke-source
+          path: logs-source/
           retention-days: 14
           if-no-files-found: warn
 
-  test-published:
-    name: Published ZIP ${{ matrix.name }}
+  test-published-release:
+    name: Published release zip smoke
     runs-on: windows-latest
-    timeout-minutes: 15
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test_published != 'false'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: default
-            extra_args: ""
-          - name: disable-gpu
-            extra_args: "--disable-gpu"
-          - name: swiftshader
-            extra_args: "--disable-gpu --use-angle=swiftshader"
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download published build
+      - name: Resolve latest Windows x64 zip from GitHub Releases
         shell: pwsh
-        run: |
-          $url = "${{ github.event.inputs.download_url || 'https://easyview.wonderxy.art/downloads/EasyView_Md-win-x64.zip?v=0.1.1' }}"
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile EasyView_Md-win-x64.zip
-          Expand-Archive -Path EasyView_Md-win-x64.zip -DestinationPath . -Force
-          Get-ChildItem -Recurse -Depth 2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .\.github\scripts\resolve-latest-win-zip.ps1
 
-      - name: Run smoke (published has no EASYVIEW_DIAG)
+      - name: Download and extract release zip
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Recurse -Filter "EasyView_Md.exe" | Where-Object { $_.FullName -notmatch '\\staged-win\\' } | Select-Object -First 1
-          if (-not $exe) { throw "EasyView_Md.exe not found in published zip" }
-          $logs = "logs-published-${{ matrix.name }}"
-          $testFile = "${{ github.workspace }}\.github\test-sample.md"
-          # Still set EASYVIEW_DIAG for consistency; published binary may ignore it.
+          Write-Host "Downloading $($env:DOWNLOAD_URL) (release $($env:RELEASE_TAG), asset $($env:RELEASE_ASSET))"
+          Invoke-WebRequest -Uri $env:DOWNLOAD_URL -OutFile EasyView_Md-win-x64.zip
+          Expand-Archive -Path EasyView_Md-win-x64.zip -DestinationPath published -Force
+          Get-ChildItem published -Recurse -Depth 2
+
+      - name: Launch and smoke-test published app
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "published" -Recurse -Filter "EasyView_Md.exe" | Select-Object -First 1
+          if (-not $exe) { throw "EasyView_Md.exe not found inside published release zip" }
+          Write-Host "Using $($exe.FullName)"
+          $testFile = Join-Path $env:GITHUB_WORKSPACE ".github\test-sample.md"
           .\.github\scripts\windows-smoke-launch.ps1 `
             -ExePath $exe.FullName `
             -TestFile $testFile `
-            -ExtraArgs "${{ matrix.extra_args }}" `
-            -LogsDir $logs `
+            -LogsDir "logs-published" `
             -WaitSeconds 25 `
-            -RequireWindow `
-            -JobLabel "published-${{ matrix.name }}"
+            -JobLabel "published-release"
 
-      - name: Upload published-matrix artifacts
+      - name: Upload published smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: published-${{ matrix.name }}
-          path: logs-published-${{ matrix.name }}/
+          name: windows-smoke-published
+          path: logs-published/
           retention-days: 14
           if-no-files-found: warn

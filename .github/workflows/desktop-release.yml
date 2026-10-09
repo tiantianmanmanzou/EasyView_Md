@@ -26,6 +26,7 @@ jobs:
           if ($version -ne "2.0.0") { throw "Unexpected application version: $version" }
           Write-Host "Verified Windows product version $version"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: easyview-desktop-Windows-2.0.0
           path: apps/desktop/out/make/**/*

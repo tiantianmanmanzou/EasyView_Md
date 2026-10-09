@@ -57,9 +57,9 @@ try {
   const applicationProcess = application.process();
   if (applicationProcess.exitCode === null) {
     const exited = once(applicationProcess, 'exit');
-    applicationProcess.kill('SIGTERM');
+    applicationProcess.kill('SIGKILL');
     await exited;
   }
   await application.close();
-  await rm(tempDirectory, { recursive: true, force: true });
+  await rm(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => undefined);
 }

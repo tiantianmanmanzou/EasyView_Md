@@ -10,27 +10,27 @@
 - `EasyView_Md-mac-arm64.zip`
 - `EasyView_Md-win-x64-setup.exe`
 - `EasyView_Md-win-x64.zip`
-- `SHA256SUMS`：上述四个安装包的 SHA-256。
-- `release.json`：产品、tag、desktopVersion，以及每个安装包的文件名、大小和 SHA-256。
+- `easyview-md.vsix`：VS Code / Cursor 扩展，版本见下文“VS Code 扩展（VSIX）”。
+- `SHA256SUMS`：上述五个文件的 SHA-256。
+- `release.json`：产品、tag、desktopVersion、extensionVersion，以及每个文件的文件名、大小和 SHA-256。
 
 Release 先创建为草稿，上传完成后公开。失败重跑时，草稿继续上传；已公开的 Release 下载原始附件用于官网同步，不覆盖已发布的安装包。
 
-公开后，用 SSH/rsync 上传四个安装包和 `SHA256SUMS` 到 `/opt/services/sites/easyview/downloads/`，服务器执行 `sha256sum -c SHA256SUMS`，成功后上传 `release.json`。最后更新 `tiantianmanmanzou/WonderXY-ART` 的 `main`：只提交 `sites/easyview/index.html` 中桌面端两处版本文字和三条现有下载链接的 `?v=` 参数，由其现有 `deploy.yml` 自动部署。官网部署使用的 `--exclude 'downloads/'` 保留服务器上的下载文件。
+公开后，用 SSH/rsync 上传四个安装包、`easyview-md.vsix` 和 `SHA256SUMS` 到 `/opt/services/sites/easyview/downloads/`，服务器执行 `sha256sum -c SHA256SUMS`，成功后上传 `release.json`。最后更新 `tiantianmanmanzou/WonderXY-ART` 的 `main`：只提交 `sites/easyview/index.html` 中桌面端两处版本文字、三条桌面下载链接的 `?v=` 参数，以及扩展卡片的版本文字和下载链接，由其现有 `deploy.yml` 自动部署。官网部署使用的 `--exclude 'downloads/'` 保留服务器上的下载文件。
 
 所有桌面发布共用一个 concurrency 队列，避免同时写固定下载文件名。GitHub 不保证排队顺序，也可能替换尚未开始的 pending run；应等上一版完成再发下一版。手动重跑历史 tag 会把官网下载切回该版本，应只重跑准备对外提供的版本。固定下载路径逐文件替换，整组文件不是原子切换；同步失败时官网 HTML 不更新，但部分安装包可能已经替换，应及时重跑同步。
 
-本流程只发布桌面端，不构建或更新 VSIX。扩展版本、官网扩展版本及其下载文件走独立发布安排。现有 Desktop Build 仅保留应用打包与运行验证，不制作发布安装包；旧 `desktop-release.yml` 已由新流程替代。
+VSIX 随同一 tag 构建与发布，但扩展版本号独立维护。现有 Desktop Build 仅保留应用打包与运行验证，不制作发布安装包；旧 `desktop-release.yml` 已由新流程替代。
 
-## VS Code 扩展（手动发布）
+## VS Code 扩展（VSIX）
 
-Desktop Release 不处理 VSIX，官网的扩展下载仍需手动更新：
+VSIX 与桌面端走同一条 Desktop Release 流程，但版本独立：tag 只对应桌面版本，扩展版本取自该 tag 下的 `apps/vscode-extension/package.json`（`version` job 输出 `extension_version`）。
 
-1. 在 `apps/vscode-extension/package.json` 确认扩展版本，运行 `npm run build --workspace easyview-md && npm run package:vscode && npm run verify:vscode-package`，得到 `apps/vscode-extension/easyview-md-X.Y.Z.vsix`。
-2. 在服务器 `/opt/services/sites/easyview/downloads/` 先备份旧文件（`cp -p easyview-md.vsix easyview-md.vsix.bak-<旧版本>`），再把新 VSIX 上传为临时文件名，核对 SHA-256 后 `mv` 覆盖为 `easyview-md.vsix`。不要删除目录中的其他文件。
-3. 修改 WonderXY-ART `sites/easyview/index.html` 中扩展卡片的 `vX.Y.Z · .vsix` 文字和 `easyview-md.vsix?v=X.Y.Z`，提交并推送 `main`，由 Deploy 部署。
-4. 用 `curl -I https://easyview.wonderxy.art/downloads/easyview-md.vsix` 检查大小与新文件一致。
-
-本流程不发布到 VS Code Marketplace 或 Open VSX。
+- macOS 构建 job 在打完 dmg 后运行 `npm run package:vscode` 和 `npm run verify:vscode-package`，再用 `desktop-artifacts.mjs stage-vsix` 改名为固定文件名 `easyview-md.vsix`。VSIX 内含 node-pty 各平台预编译文件，与构建平台无关，只构建一次。
+- `easyview-md.vsix` 与四个安装包一起进入 Release 附件、`SHA256SUMS`、`release.json`（新增 `extensionVersion` 字段）和服务器同步。
+- 官网更新同时改写扩展卡片的 `vX.Y.Z · .vsix` 文字和 `easyview-md.vsix?v=X.Y.Z`（`data-easyview-extension-version` / `data-easyview-extension-download` 标记）。
+- 扩展版本没变时也会重新打包并上传同版本 VSIX，内容来自该 tag 的源码。
+- 本流程不发布到 VS Code Marketplace 或 Open VSX，商店发布仍需单独操作。
 
 ## GitHub Secrets
 
@@ -57,7 +57,7 @@ WonderXY-ART 原有部署 secrets 仍需有效：`DEPLOY_SSH_KEY`、`DEPLOY_HOST
 
 ## 以后发版的三步操作
 
-1. 完成变更并确定桌面版本。用 `npm version X.Y.Z --workspace @easyview/desktop --no-git-tag-version` 更新桌面 package 与锁文件，检查 diff 后提交；不要顺带更新扩展版本。将对应提交推送到主分支。
+1. 完成变更并确定桌面版本。用 `npm version X.Y.Z --workspace @easyview/desktop --no-git-tag-version` 更新桌面 package 与锁文件，检查 diff 后提交；扩展需要发新版时，另行修改 `apps/vscode-extension/package.json` 的版本并一起提交。将对应提交推送到主分支。
 2. 在要发布的提交上创建 tag：`git tag vX.Y.Z`。
 3. 推送这个 tag：`git push origin vX.Y.Z`。
 
@@ -70,7 +70,7 @@ WonderXY-ART 原有部署 secrets 仍需有效：`DEPLOY_SSH_KEY`、`DEPLOY_HOST
 - 如果 EasyView 已成功，而官网 Deploy 失败，直接在 WonderXY-ART Actions 重跑 Deploy 或使用其 Run workflow。官网 HTML 已是目标版本时 EasyView 不会生成空提交，也不会通过空提交重复触发部署。
 - 官网 main 在发布期间发生并发修改，普通 push 可能被拒绝；工作流不强推。重跑 publish 会重新检出 main 并更新目标字段。
 
-已有历史 Release 若缺少本流程的四个固定文件名附件、`release.json` 或 `SHA256SUMS`，校验会失败；应使用新的未发布版本 tag，或先由维护者单独处理历史 Release 的附件。不要移动已发布 tag。Release 创建使用 [`gh release create --verify-tag`](https://cli.github.com/manual/gh_release_create)，防止自动创建未存在的 tag。
+已有历史 Release（如 v2.0.1，没有 VSIX）若缺少本流程的固定文件名附件、`release.json` 或 `SHA256SUMS`，校验会失败；应使用新的未发布版本 tag，或先由维护者单独处理历史 Release 的附件。不要移动已发布 tag。Release 创建使用 [`gh release create --verify-tag`](https://cli.github.com/manual/gh_release_create)，防止自动创建未存在的 tag。
 
 ## 本地检查与脚本接口
 
@@ -78,11 +78,12 @@ WonderXY-ART 原有部署 secrets 仍需有效：`DEPLOY_SSH_KEY`、`DEPLOY_HOST
 
 ```bash
 node tooling/release/desktop-artifacts.mjs validate vX.Y.Z
-bash ../WonderXY-ART/scripts/prepare-easyview-downloads.sh <固定文件名产物目录> X.Y.Z <临时输出目录> --dry-run
-bash ../WonderXY-ART/scripts/prepare-easyview-downloads.sh <固定文件名产物目录> X.Y.Z <临时输出目录>
-node ../WonderXY-ART/scripts/easyview-release.mjs verify <临时输出目录> X.Y.Z
+node tooling/release/desktop-artifacts.mjs stage-vsix <固定文件名产物目录>
+bash ../WonderXY-ART/scripts/prepare-easyview-downloads.sh <固定文件名产物目录> X.Y.Z <临时输出目录> --extension-version A.B.C --dry-run
+bash ../WonderXY-ART/scripts/prepare-easyview-downloads.sh <固定文件名产物目录> X.Y.Z <临时输出目录> --extension-version A.B.C
+node ../WonderXY-ART/scripts/easyview-release.mjs verify <临时输出目录> X.Y.Z [--extension-version A.B.C]
 bash ../WonderXY-ART/scripts/sync-easyview-downloads.sh <临时输出目录> X.Y.Z --dry-run
-node ../WonderXY-ART/scripts/easyview-release.mjs update-site <index.html副本> X.Y.Z --dry-run
+node ../WonderXY-ART/scripts/easyview-release.mjs update-site <index.html副本> X.Y.Z --extension-version A.B.C --dry-run
 ```
 
-prepare 的 dry-run 验证四个源文件存在且非空，不创建输出目录。sync 的 dry-run 验证清单和四个安装包的大小、SHA-256 与版本，不读取密钥、不执行 SSH 或 rsync。update-site 的 dry-run 验证两处文字和三条链接标记存在，不写文件。缺失、空文件、校验不符或页面标记数量异常会立即失败。
+prepare 的 dry-run 验证五个源文件存在且非空，不创建输出目录。sync 的 dry-run 验证清单和五个文件的大小、SHA-256 与版本，不读取密钥、不执行 SSH 或 rsync。update-site 的 dry-run 验证桌面端两处文字、三条链接以及扩展的一处文字、一条链接标记存在，不写文件。缺失、空文件、校验不符或页面标记数量异常会立即失败。

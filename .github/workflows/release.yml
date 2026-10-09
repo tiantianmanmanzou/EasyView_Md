@@ -24,6 +24,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      extension_version: ${{ steps.version.outputs.extension_version }}
     steps:
       - name: Validate requested tag format
         env:
@@ -84,6 +85,12 @@ jobs:
       - run: npm run verify:desktop-runtime
       - if: matrix.platform == 'darwin'
         run: npm run make:dmg --workspace @easyview/desktop
+      # The VSIX is platform-neutral (node-pty prebuilds for all targets ship inside it); build it once, on macOS.
+      - name: Package VS Code extension
+        if: matrix.platform == 'darwin'
+        run: |
+          npm run package:vscode
+          npm run verify:vscode-package
       - name: Verify Windows executable version
         if: matrix.platform == 'win32'
         shell: pwsh
@@ -97,7 +104,9 @@ jobs:
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
           TARGET_ARCH: ${{ matrix.arch }}
-        run: node tooling/release/desktop-artifacts.mjs stage "$TARGET_PLATFORM" "$TARGET_ARCH" release-assets
+        run: |
+          node tooling/release/desktop-artifacts.mjs stage "$TARGET_PLATFORM" "$TARGET_ARCH" release-assets
+          if [[ "$TARGET_PLATFORM" == darwin ]]; then node tooling/release/desktop-artifacts.mjs stage-vsix release-assets; fi
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
@@ -113,6 +122,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.version.outputs.tag }}
       RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      EXTENSION_VERSION: ${{ needs.version.outputs.extension_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -135,8 +145,8 @@ jobs:
           path: artifacts
       - name: Prepare release manifest and checksums
         run: |
-          bash website/scripts/prepare-easyview-downloads.sh artifacts "$RELEASE_VERSION" release-assets
-          node website/scripts/easyview-release.mjs verify release-assets "$RELEASE_VERSION"
+          bash website/scripts/prepare-easyview-downloads.sh artifacts "$RELEASE_VERSION" release-assets --extension-version "$EXTENSION_VERSION"
+          node website/scripts/easyview-release.mjs verify release-assets "$RELEASE_VERSION" --extension-version "$EXTENSION_VERSION"
       - name: Create or resume GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,7 +161,7 @@ jobs:
             rm -rf release-assets
             mkdir release-assets
             gh release download "$RELEASE_TAG" --dir release-assets \
-              --pattern 'EasyView_Md-*' --pattern SHA256SUMS --pattern release.json
+              --pattern 'EasyView_Md-*' --pattern easyview-md.vsix --pattern SHA256SUMS --pattern release.json
           else
             if [[ "$state" == missing ]]; then
               gh release create "$RELEASE_TAG" --verify-tag --draft --title "EasyView_Md $RELEASE_TAG" --generate-notes
@@ -187,7 +197,7 @@ jobs:
           set -euo pipefail
           # Fetch before editing so unrelated website changes are preserved.
           git pull --ff-only origin main
-          node scripts/easyview-release.mjs update-site sites/easyview/index.html "$RELEASE_VERSION"
+          node scripts/easyview-release.mjs update-site sites/easyview/index.html "$RELEASE_VERSION" --extension-version "$EXTENSION_VERSION"
           git diff --check
           git add sites/easyview/index.html
           if git diff --cached --quiet; then
@@ -195,6 +205,6 @@ jobs:
           else
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m "Update EasyView desktop downloads to $RELEASE_TAG"
+            git commit -m "Update EasyView downloads to $RELEASE_TAG (extension v$EXTENSION_VERSION)"
             git push origin HEAD:main
           fi

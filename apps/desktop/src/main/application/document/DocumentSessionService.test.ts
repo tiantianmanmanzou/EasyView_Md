@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { hashContent, minimalTextPatch } from '@easyview/editor-sync';
 import {
@@ -6,6 +7,9 @@ import {
 } from './DocumentSessionService';
 import type { CompareAndWriteResult, DocumentFileSystem, DocumentFileStat } from './documentFileSystem';
 import type { DocumentGitPort } from './documentGit';
+
+// The app stores platform-absolute paths (path.resolve), e.g. D:\tmp\a.md on Windows.
+const p = (filePath: string): string => path.resolve(filePath);
 
 class FakeDocumentFileSystem implements DocumentFileSystem {
   readonly files = new Map<string, { raw: string; mtimeMs: number }>();
@@ -73,11 +77,11 @@ class FakeDocumentFileSystem implements DocumentFileSystem {
 }
 
 function openTwoSessions(fs: FakeDocumentFileSystem): DocumentSessionService {
-  fs.seed('/tmp/a.md', '# A\n');
-  fs.seed('/tmp/b.md', '# B\n');
+  fs.seed(p('/tmp/a.md'), '# A\n');
+  fs.seed(p('/tmp/b.md'), '# B\n');
   const service = new DocumentSessionService(fs);
-  service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
-  service.open({ tabId: 'tab-b', filePath: '/tmp/b.md', fileName: 'b.md', raw: '# B\n', mtimeMs: 1 });
+  service.open({ tabId: 'tab-a', filePath: p('/tmp/a.md'), fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
+  service.open({ tabId: 'tab-b', filePath: p('/tmp/b.md'), fileName: 'b.md', raw: '# B\n', mtimeMs: 1 });
   return service;
 }
 
@@ -96,15 +100,15 @@ describe('DocumentSessionService save snapshots', () => {
     const fs = new FakeDocumentFileSystem();
     const rawPrefix = '<!-- fullWidth: true tocVisible: false -->\r\n';
     const raw = `${rawPrefix}# A\r\n`;
-    fs.seed('/tmp/a.md', raw);
+    fs.seed(p('/tmp/a.md'), raw);
     const service = new DocumentSessionService(fs);
-    const session = service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw, mtimeMs: 1 });
+    const session = service.open({ tabId: 'tab-a', filePath: p('/tmp/a.md'), fileName: 'a.md', raw, mtimeMs: 1 });
     const savedContent = '# A saved\n';
     const latestContent = '# A saved later\n';
     editSession(service, session.tabId, savedContent);
     fs.holdNextWrites();
     const started = new Promise<void>((resolve) => { fs.writeStarted = resolve; });
-    const targetPath = operation === 'save' ? '/tmp/a.md' : '/tmp/saved-as.md';
+    const targetPath = operation === 'save' ? p('/tmp/a.md') : p('/tmp/saved-as.md');
     const saving = operation === 'save'
       ? service.save(session.tabId, savedContent)
       : service.writeToPath(session.tabId, targetPath, savedContent, '\r\n');
@@ -146,7 +150,7 @@ describe('DocumentSessionService save snapshots', () => {
 
     expect((await first).kind).toBe('saved');
     expect((await second).kind).toBe('saved');
-    expect(fs.files.get('/tmp/a.md')?.raw).toBe('# second\n');
+    expect(fs.files.get(p('/tmp/a.md'))?.raw).toBe('# second\n');
     expect(service.get('tab-a')?.content).toBe('# third\n');
     expect(service.get('tab-a')?.documentAdapter.content).toBe('# third\n');
     expect(service.get('tab-a')?.sync.snapshot.revision).toBe(3);
@@ -164,8 +168,8 @@ describe('DocumentSessionService save targeting (problem 7)', () => {
     if (missing.kind === 'error' && !missing.error.ok) {
       expect(missing.error.code).toBe('NOT_FOUND');
     }
-    expect(fs.files.get('/tmp/a.md')?.raw).toBe('# A\n');
-    expect(fs.files.get('/tmp/b.md')?.raw).toBe('# B\n');
+    expect(fs.files.get(p('/tmp/a.md'))?.raw).toBe('# A\n');
+    expect(fs.files.get(p('/tmp/b.md'))?.raw).toBe('# B\n');
   });
 
   it('writes the queued session even if another tab is saved afterwards', async () => {
@@ -182,13 +186,13 @@ describe('DocumentSessionService save targeting (problem 7)', () => {
     expect(firstOutcome.kind).toBe('saved');
     expect(secondOutcome.kind).toBe('saved');
     if (firstOutcome.kind === 'saved') {
-      expect(firstOutcome.value.filePath).toBe('/tmp/a.md');
+      expect(firstOutcome.value.filePath).toBe(p('/tmp/a.md'));
     }
     if (secondOutcome.kind === 'saved') {
-      expect(secondOutcome.value.filePath).toBe('/tmp/b.md');
+      expect(secondOutcome.value.filePath).toBe(p('/tmp/b.md'));
     }
-    expect(fs.files.get('/tmp/a.md')?.raw).toBe('# A saved\n');
-    expect(fs.files.get('/tmp/b.md')?.raw).toBe('# B saved\n');
+    expect(fs.files.get(p('/tmp/a.md'))?.raw).toBe('# A saved\n');
+    expect(fs.files.get(p('/tmp/b.md'))?.raw).toBe('# B saved\n');
   });
 });
 
@@ -197,7 +201,7 @@ describe('DocumentSessionService external conflict (problem 8)', () => {
     const fs = new FakeDocumentFileSystem();
     const service = openTwoSessions(fs);
     fs.beforeCompareAndWrite = (filePath) => {
-      if (filePath === '/tmp/a.md') fs.seed('/tmp/a.md', '# changed on disk\n', 99);
+      if (filePath === p('/tmp/a.md')) fs.seed(p('/tmp/a.md'), '# changed on disk\n', 99);
     };
 
     const outcome = await service.save('tab-a', '# A local\n');
@@ -205,28 +209,28 @@ describe('DocumentSessionService external conflict (problem 8)', () => {
     if (outcome.kind === 'error' && !outcome.error.ok) {
       expect(outcome.error.code).toBe('CONFLICT');
     }
-    expect(fs.files.get('/tmp/a.md')?.raw).toBe('# changed on disk\n');
+    expect(fs.files.get(p('/tmp/a.md'))?.raw).toBe('# changed on disk\n');
     expect(service.get('tab-a')?.content).toBe('# A\n');
     expect(service.get('tab-a')?.externalConflict).not.toBeNull();
   });
 
   it('rejects a second tab save of the same file after the first tab already wrote', async () => {
     const fs = new FakeDocumentFileSystem();
-    fs.seed('/tmp/shared.md', '# shared\n');
+    fs.seed(p('/tmp/shared.md'), '# shared\n');
     const service = new DocumentSessionService(fs);
-    service.open({ tabId: 'tab-1', filePath: '/tmp/shared.md', fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
-    service.open({ tabId: 'tab-2', filePath: '/tmp/shared.md', fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-1', filePath: p('/tmp/shared.md'), fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-2', filePath: p('/tmp/shared.md'), fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
 
     const first = await service.save('tab-1', '# from tab 1\n');
     expect(first.kind).toBe('saved');
-    expect(fs.files.get('/tmp/shared.md')?.raw).toBe('# from tab 1\n');
+    expect(fs.files.get(p('/tmp/shared.md'))?.raw).toBe('# from tab 1\n');
 
     const second = await service.save('tab-2', '# from tab 2\n');
     expect(second.kind).toBe('error');
     if (second.kind === 'error' && !second.error.ok) {
       expect(second.error.code).toBe('CONFLICT');
     }
-    expect(fs.files.get('/tmp/shared.md')?.raw).toBe('# from tab 1\n');
+    expect(fs.files.get(p('/tmp/shared.md'))?.raw).toBe('# from tab 1\n');
     expect(toOperationResult(second).ok).toBe(false);
   });
 });
@@ -234,16 +238,16 @@ describe('DocumentSessionService external conflict (problem 8)', () => {
 describe('DocumentSessionService split aliases', () => {
   it('lets a second tabId save and delete through the same session', async () => {
     const fs = new FakeDocumentFileSystem();
-    fs.seed('/tmp/shared.md', '# shared\n');
+    fs.seed(p('/tmp/shared.md'), '# shared\n');
     const service = new DocumentSessionService(fs);
-    service.open({ tabId: 'tab-1', filePath: '/tmp/shared.md', fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-1', filePath: p('/tmp/shared.md'), fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
     expect(service.alias('tab-1-split', 'tab-1')?.tabId).toBe('tab-1');
     expect(service.get('tab-1-split')).toBe(service.get('tab-1'));
 
     editSession(service, 'tab-1-split', '# from split\n');
     const saved = await service.save('tab-1-split', '# from split\n');
     expect(saved.kind).toBe('saved');
-    expect(fs.files.get('/tmp/shared.md')?.raw).toBe('# from split\n');
+    expect(fs.files.get(p('/tmp/shared.md'))?.raw).toBe('# from split\n');
 
     expect(service.delete('tab-1-split')).toBeUndefined();
     expect(service.get('tab-1')?.content).toBe('# from split\n');
@@ -253,9 +257,9 @@ describe('DocumentSessionService split aliases', () => {
 
   it('promotes the remaining alias when the canonical tab is closed first', () => {
     const fs = new FakeDocumentFileSystem();
-    fs.seed('/tmp/shared.md', '# shared\n');
+    fs.seed(p('/tmp/shared.md'), '# shared\n');
     const service = new DocumentSessionService(fs);
-    service.open({ tabId: 'tab-1', filePath: '/tmp/shared.md', fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-1', filePath: p('/tmp/shared.md'), fileName: 'shared.md', raw: '# shared\n', mtimeMs: 1 });
     service.alias('tab-1-split', 'tab-1');
     expect(service.delete('tab-1')).toBeUndefined();
     expect(service.get('tab-1-split')?.tabId).toBe('tab-1-split');
@@ -302,34 +306,34 @@ class FakeDocumentGit implements DocumentGitPort {
 describe('DocumentSessionService document identity', () => {
   it('keeps the logical document id stable across rename', async () => {
     const fs = new FakeDocumentFileSystem();
-    fs.seed('/tmp/a.md', '# A\n');
+    fs.seed(p('/tmp/a.md'), '# A\n');
     const service = new DocumentSessionService(fs);
-    const opened = service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
+    const opened = service.open({ tabId: 'tab-a', filePath: p('/tmp/a.md'), fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
 
     const renamed = await service.rename('tab-a', 'renamed.md');
 
     expect(renamed.kind).toBe('saved');
     expect(service.get('tab-a')?.documentId).toBe(opened.documentId);
-    expect(service.get('tab-a')?.filePath).toBe('/tmp/renamed.md');
+    expect(service.get('tab-a')?.filePath).toBe(p('/tmp/renamed.md'));
   });
 });
 
 describe('DocumentSessionService git operations', () => {
   it('stages, commits, and syncs through the injected git port', async () => {
     const fs = new FakeDocumentFileSystem();
-    fs.seed('/tmp/a.md', '# A\n');
+    fs.seed(p('/tmp/a.md'), '# A\n');
     const git = new FakeDocumentGit();
     const service = new DocumentSessionService(fs, git);
-    service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-a', filePath: p('/tmp/a.md'), fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
 
     const staged = await service.stage('tab-a');
     expect(staged.ok).toBe(true);
-    expect(git.staged).toEqual(['/tmp/a.md']);
+    expect(git.staged).toEqual([p('/tmp/a.md')]);
 
     git.modified = true;
     const committed = await service.commit('tab-a', 'feat: a');
     expect(committed.ok).toBe(true);
-    expect(git.committed).toEqual([{ filePath: '/tmp/a.md', message: 'feat: a' }]);
+    expect(git.committed).toEqual([{ filePath: p('/tmp/a.md'), message: 'feat: a' }]);
 
     git.modified = false;
     git.ahead = 1;
@@ -342,7 +346,7 @@ describe('DocumentSessionService git operations', () => {
     const fs = new FakeDocumentFileSystem();
     const git = new FakeDocumentGit();
     const service = new DocumentSessionService(fs, git);
-    service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-a', filePath: p('/tmp/a.md'), fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
 
     const missing = await service.stage('missing-tab');
     expect(missing.ok).toBe(false);
@@ -352,11 +356,11 @@ describe('DocumentSessionService git operations', () => {
 
   it('rejects commit when the file has no git changes', async () => {
     const fs = new FakeDocumentFileSystem();
-    fs.seed('/tmp/a.md', '# A\n');
+    fs.seed(p('/tmp/a.md'), '# A\n');
     const git = new FakeDocumentGit();
     git.modified = false;
     const service = new DocumentSessionService(fs, git);
-    service.open({ tabId: 'tab-a', filePath: '/tmp/a.md', fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
+    service.open({ tabId: 'tab-a', filePath: p('/tmp/a.md'), fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
 
     const result = await service.commit('tab-a', 'feat: a');
     expect(result.ok).toBe(false);

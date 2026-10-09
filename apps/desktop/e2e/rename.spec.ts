@@ -101,6 +101,7 @@ test('renames the original document through document and workspace commands whil
       process.kill('SIGKILL');
       await exited;
     }
-    await rm(directory, { recursive: true, force: true });
+    await application.close();
+    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => undefined);
   }
 });

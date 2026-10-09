@@ -15,10 +15,12 @@ async function launch(userDataDir: string): Promise<{ application: ElectronAppli
 async function terminate(application: ElectronApplication | undefined): Promise<void> {
   if (!application) return;
   const process = application.process();
-  if (process.exitCode !== null) return;
-  const exited = once(process, 'exit');
-  process.kill('SIGKILL');
-  await exited;
+  if (process.exitCode === null) {
+    const exited = once(process, 'exit');
+    process.kill('SIGKILL');
+    await exited;
+  }
+  await application.close();
 }
 
 test('keeps Markdown dirty content while preview tabs occupy the central surface and restore after restart', async () => {

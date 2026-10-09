@@ -98,9 +98,10 @@ test('renames the original document through document and workspace commands whil
     const process = application.process();
     if (process.exitCode === null) {
       const exited = once(process, 'exit');
-      process.kill('SIGKILL');
+      process.kill('SIGTERM');
       await exited;
     }
-    await rm(directory, { recursive: true, force: true });
+    await application.close();
+    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });

@@ -209,8 +209,10 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
     await expect(aiPanel.locator('[data-mode="agent"]')).toBeDisabled();
     await expect.poll(async () => {
       const workspaceState = JSON.parse(await readFile(join(userData, 'desktop-state.json'), 'utf8')).workspace;
-      return { tabCount: workspaceState.openTabs.length, activeTabId: workspaceState.activeTabId };
-    }).toEqual({ tabCount: 3, activeTabId: expect.not.stringContaining('notes-tab') });
+      const activeTab = workspaceState.openTabs.find((tab: { id: string }) => tab.id === workspaceState.activeTabId);
+      // Wait until the preview.txt activation itself is persisted, not just any non-notes tab.
+      return { tabCount: workspaceState.openTabs.length, activeRelativePath: activeTab?.relativePath };
+    }).toEqual({ tabCount: 3, activeRelativePath: 'preview.txt' });
     await terminate(first);
     first = undefined;
 
@@ -222,6 +224,7 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
   } finally {
     await terminate(first).catch(() => undefined);
     await terminate(second).catch(() => undefined);
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    // Windows keeps Chromium profile files locked briefly after the Electron process is killed.
+    await rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => undefined);
   }
 });

@@ -130,11 +130,34 @@ body {
   white-space: nowrap;
 }
 
+.workspace-sort-menu-item {
+  gap: 8px;
+}
+
 .workspace-sort-menu-item .workspace-menu-item-label {
   flex: 1 1 auto;
   min-width: 0;
+  padding-right: 16px;
   overflow: visible;
   text-overflow: clip;
+}
+
+.workspace-menu-item-icon {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  opacity: 0.8;
+}
+
+.workspace-menu-item-icon svg {
+  display: block;
+}
+
+.workspace-sort-menu-item:hover .workspace-menu-item-icon,
+.workspace-sort-menu-item:focus-visible .workspace-menu-item-icon,
+.workspace-sort-menu-item[aria-checked='true'] .workspace-menu-item-icon {
+  opacity: 1;
 }
 
 .workspace-menu-item-check {

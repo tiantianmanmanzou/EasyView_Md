@@ -13,6 +13,9 @@ import {
   resolveWorkspaceTreeIcon,
   workspaceEntryNameSelectionRange,
   WORKSPACE_TREE_SORT_MODE_LABELS as SORT_MODE_LABELS,
+  WORKSPACE_TREE_SORT_MODE_ICONS as SORT_MODE_ICONS,
+  workspaceTreeMenuIconSvg,
+  type WorkspaceTreeMenuIconId,
   type WorkspaceTreeSortMode,
 } from '@easyview/contracts';
 import type {
@@ -580,11 +583,13 @@ export class WorkspaceExplorerView {
     menu.setAttribute('role', 'menu');
 
     this.appendSortMenuItem(menu, {
+      icon: 'viewList',
       label: 'View as List',
       checked: this.displayMode === 'list',
       onClick: () => { void this.changeDisplayMode('list'); },
     });
     this.appendSortMenuItem(menu, {
+      icon: 'viewIcons',
       label: 'View as Icons',
       checked: this.displayMode === 'icons',
       onClick: () => { void this.changeDisplayMode('icons'); },
@@ -595,6 +600,7 @@ export class WorkspaceExplorerView {
 
     for (const mode of ['created', 'name', 'custom'] as const) {
       this.appendSortMenuItem(menu, {
+        icon: SORT_MODE_ICONS[mode],
         label: SORT_MODE_LABELS[mode],
         checked: this.sortMode === mode,
         onClick: () => { void this.changeSortMode(mode); },
@@ -604,16 +610,19 @@ export class WorkspaceExplorerView {
     separator.className = 'workspace-sort-menu-separator';
     menu.appendChild(separator);
     this.appendSortMenuItem(menu, {
+      icon: 'showCreated',
       label: 'Show Created Time',
       checked: this.showCreatedAt,
       onClick: () => { void this.changeShowCreatedAt(!this.showCreatedAt); },
     });
     this.appendSortMenuItem(menu, {
+      icon: 'showUpdated',
       label: 'Show Updated Time',
       checked: this.showUpdatedAt,
       onClick: () => { void this.changeShowUpdatedAt(!this.showUpdatedAt); },
     });
     this.appendSortMenuItem(menu, {
+      icon: 'showTimeOnHover',
       label: 'Show Time on Hover',
       checked: this.showTimestampHover,
       onClick: () => { void this.changeShowTimestampHover(!this.showTimestampHover); },
@@ -622,6 +631,7 @@ export class WorkspaceExplorerView {
     dotSeparator.className = 'workspace-sort-menu-separator';
     menu.appendChild(dotSeparator);
     this.appendSortMenuItem(menu, {
+      icon: 'showDotEntries',
       label: 'Show Dotfiles and Folders',
       checked: this.showDotEntries,
       onClick: () => { void this.changeShowDotEntries(!this.showDotEntries); },
@@ -982,13 +992,17 @@ export class WorkspaceExplorerView {
 
   private appendSortMenuItem(
     menu: HTMLElement,
-    options: { label: string; checked: boolean; onClick: () => void },
+    options: { icon: WorkspaceTreeMenuIconId; label: string; checked: boolean; onClick: () => void },
   ): void {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'workspace-sort-menu-item';
     button.setAttribute('role', 'menuitemcheckbox');
     button.setAttribute('aria-checked', String(options.checked));
+    const icon = document.createElement('span');
+    icon.className = 'workspace-menu-item-icon';
+    icon.innerHTML = workspaceTreeMenuIconSvg(options.icon);
+    button.appendChild(icon);
     const label = document.createElement('span');
     label.className = 'workspace-menu-item-label';
     label.textContent = options.label;

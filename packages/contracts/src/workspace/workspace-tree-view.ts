@@ -1,4 +1,5 @@
 import type { WorkspaceTreeSortMode } from './workspace';
+import type { WorkspaceTreeMenuIconId } from './workspace-tree-menu-icons';
 
 /**
  * Display labels for {@link WorkspaceTreeSortMode}, shared by the Desktop DOM tree and the
@@ -8,6 +9,12 @@ export const WORKSPACE_TREE_SORT_MODE_LABELS: Record<WorkspaceTreeSortMode, stri
   created: 'Sort by Created Time',
   name: 'Sort by Name',
   custom: 'Custom',
+};
+
+export const WORKSPACE_TREE_SORT_MODE_ICONS: Record<WorkspaceTreeSortMode, WorkspaceTreeMenuIconId> = {
+  created: 'sortCreated',
+  name: 'sortName',
+  custom: 'sortCustom',
 };
 
 /**

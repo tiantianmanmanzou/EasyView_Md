@@ -15,6 +15,9 @@ import {
   resolveWorkspaceTreeIcon,
   workspaceEntryNameSelectionRange,
   WORKSPACE_TREE_SORT_MODE_LABELS as SORT_MODE_LABELS,
+  WORKSPACE_TREE_SORT_MODE_ICONS as SORT_MODE_ICONS,
+  workspaceTreeMenuIconSvg,
+  type WorkspaceTreeMenuIconId,
 } from '@easyview/contracts';
 
 interface WorkspaceExplorerOptions {
@@ -292,33 +295,16 @@ export class WorkspaceExplorer {
     if (this.sortMenuOpen) {
       const menu = document.createElement('div');
       menu.className = 'workspace-sort-menu';
-      for (const mode of ['created', 'name', 'custom'] as const) {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'workspace-sort-menu-item';
-        item.setAttribute('role', 'menuitemcheckbox');
-        item.setAttribute('aria-checked', String(this.sortMode === mode));
-        const label = document.createElement('span');
-        label.className = 'workspace-menu-item-label';
-        label.textContent = SORT_MODE_LABELS[mode];
-        item.appendChild(label);
-        const check = document.createElement('span');
-        check.className = 'workspace-menu-item-check';
-        check.setAttribute('aria-hidden', 'true');
-        check.textContent = this.sortMode === mode ? '✓' : '';
-        item.appendChild(check);
-        item.addEventListener('click', () => { void this.changeSortMode(mode); });
-        menu.appendChild(item);
-      }
-      const separator = document.createElement('div');
-      separator.className = 'workspace-sort-menu-separator';
-      menu.appendChild(separator);
-      const appendToggle = (text: string, checked: boolean, onClick: () => void) => {
+      const appendToggle = (iconId: WorkspaceTreeMenuIconId, text: string, checked: boolean, onClick: () => void) => {
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'workspace-sort-menu-item';
         item.setAttribute('role', 'menuitemcheckbox');
         item.setAttribute('aria-checked', String(checked));
+        const icon = document.createElement('span');
+        icon.className = 'workspace-menu-item-icon';
+        icon.innerHTML = workspaceTreeMenuIconSvg(iconId);
+        item.appendChild(icon);
         const label = document.createElement('span');
         label.className = 'workspace-menu-item-label';
         label.textContent = text;
@@ -331,19 +317,27 @@ export class WorkspaceExplorer {
         item.addEventListener('click', onClick);
         menu.appendChild(item);
       };
-      appendToggle('Show Created Time', this.showCreatedAt, () => {
+      for (const mode of ['created', 'name', 'custom'] as const) {
+        appendToggle(SORT_MODE_ICONS[mode], SORT_MODE_LABELS[mode], this.sortMode === mode, () => {
+          void this.changeSortMode(mode);
+        });
+      }
+      const separator = document.createElement('div');
+      separator.className = 'workspace-sort-menu-separator';
+      menu.appendChild(separator);
+      appendToggle('showCreated', 'Show Created Time', this.showCreatedAt, () => {
         void this.changeShowCreatedAt(!this.showCreatedAt);
       });
-      appendToggle('Show Updated Time', this.showUpdatedAt, () => {
+      appendToggle('showUpdated', 'Show Updated Time', this.showUpdatedAt, () => {
         void this.changeShowUpdatedAt(!this.showUpdatedAt);
       });
-      appendToggle('Show Time on Hover', this.showTimestampHover, () => {
+      appendToggle('showTimeOnHover', 'Show Time on Hover', this.showTimestampHover, () => {
         void this.changeShowTimestampHover(!this.showTimestampHover);
       });
       const dotSeparator = document.createElement('div');
       dotSeparator.className = 'workspace-sort-menu-separator';
       menu.appendChild(dotSeparator);
-      appendToggle('Show Dotfiles and Folders', this.showDotEntries, () => {
+      appendToggle('showDotEntries', 'Show Dotfiles and Folders', this.showDotEntries, () => {
         void this.changeShowDotEntries(!this.showDotEntries);
       });
       container.appendChild(menu);

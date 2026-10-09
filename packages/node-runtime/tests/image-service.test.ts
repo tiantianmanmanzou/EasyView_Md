@@ -98,10 +98,10 @@ describe("image service", () => {
       await expect(pickImage({ documentPath })).rejects.toBeInstanceOf(ImageServiceError);
 
       const saved = await savePastedImage({ documentPath, dataUrl: PNG_DATA_URL, preferredName: "../危险 名称?.jpg" });
-      expect(saved.filePath).toBe(path.join(root, "设计-文档.assets", "危险-名称.png"));
+      expect(saved.filePath).toBe(path.join(root, ".设计-文档.assets", "危险-名称.png"));
       expect(await readFile(saved.filePath, "base64")).toBe(PNG_BYTES.toString("base64"));
       const second = await savePastedImage({ documentPath, dataUrl: PNG_DATA_URL, preferredName: "危险 名称.png" });
-      expect(second.filePath).toBe(path.join(root, "设计-文档.assets", "危险-名称-1.png"));
+      expect(second.filePath).toBe(path.join(root, ".设计-文档.assets", "危险-名称-1.png"));
     });
   });
 });

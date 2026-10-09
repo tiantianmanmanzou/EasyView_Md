@@ -67,12 +67,12 @@ Desktop source and platform-specific instructions are in `apps/desktop`. Current
 
 ## What's New in 2.0.3
 
-- **PDF to Markdown conversion** — right-click a `.pdf` file and select `Convert to Markdown with EasyView_Md`. The extension creates an editable `.md` file beside the PDF, extracts images into a matching `.assets` folder, and falls back to page images when the PDF has no extractable text.
-- **Word to Markdown conversion** — right-click a `.docx` or `.doc` file and select `Convert to Markdown with EasyView_Md`. The converted Markdown is created beside the source file, with extracted images stored in a matching `.assets` folder.
+- **PDF to Markdown conversion** — right-click a `.pdf` file and select `Convert to Markdown with EasyView_Md`. The extension creates an editable `.md` file beside the PDF, extracts images into a matching `.<document>.assets` folder, and falls back to page images when the PDF has no extractable text.
+- **Word to Markdown conversion** — right-click a `.docx` or `.doc` file and select `Convert to Markdown with EasyView_Md`. The converted Markdown is created beside the source file, with extracted images stored in a matching `.<document>.assets` folder.
 - **Reliable document images** — Word and PDF image assets are written as relative references where possible, and transparent PNGs are flattened onto a white background for consistent rendering.
 - **More reliable visual tables** — nested tables, cell editing, table scrolling, column resizing, and Markdown/HTML table serialization have been strengthened for complex documents.
 - **Improved native-editor workflow** — Markdown stays compatible with the native VS Code editor, including outline navigation and a one-click return from visual editing to source editing.
-- **Portable image paste** — when Markdown or HTML containing Base64 images is pasted into the native VS Code editor, images are written to the current document's `.assets` folder and replaced with relative image references.
+- **Portable image paste** — when Markdown or HTML containing Base64 images is pasted into the native VS Code editor, images are written to the current document's `.<document>.assets` folder and replaced with relative image references.
 - **Rich copy with images** — copying a selection containing images keeps formatted HTML and embeds image data, so pasting into other rich-text editors retains the selected text and images.
 - **Improved DOCX and PDF export** — DOCX export keeps H1-H4 headings black and bold without adding blank body paragraphs; PDF export includes bundled Chinese and symbol fonts for more reliable CJK, emoji, diagram, and special-character output.
 - **Update notification** — after a new EasyView_Md version is installed and activated, VS Code shows a native update message with a link to the release notes. First installation only records the version and does not interrupt the user.
@@ -209,7 +209,7 @@ Render Mermaid diagrams directly in the editor:
 
 - **Drag & drop** from file system
 - **Paste** from clipboard
-- **Portable image references** — Base64 images pasted as Markdown or HTML in the native editor are saved to the document's `.assets` directory automatically
+- **Portable image references** — Base64 images pasted as Markdown or HTML in the native editor are saved to the document's `.<document>.assets` directory automatically
 - **Rich copy** — copy selected formatted content and images to paste into other rich-text editors
 - **Image toolbar** — width/height controls
 - **Insert via slash menu** — by URL or file picker
@@ -221,7 +221,7 @@ Convert Word files directly from VS Code Explorer:
 
 1. Right-click a `.docx` or `.doc` file.
 2. Select **Convert to Markdown with EasyView_Md**.
-3. EasyView_Md writes a Markdown file beside the source document and puts extracted images in `<document>.assets`.
+3. EasyView_Md writes a Markdown file beside the source document and puts extracted images in `.<document>.assets`.
 4. Select **Open Markdown** in the completion notification to open the converted file in EasyView_Md.
 
 The conversion keeps document headings, tables, image alt text and dimensions. PNG images with transparency are converted to an opaque white background. `.docx` conversion requires [Pandoc](https://pandoc.org/); legacy `.doc` conversion additionally requires LibreOffice (`soffice`).
@@ -232,7 +232,7 @@ Convert PDF files directly from VS Code Explorer:
 
 1. Right-click a `.pdf` file.
 2. Select **Convert to Markdown with EasyView_Md**.
-3. EasyView_Md writes an editable `.md` file beside the PDF and puts extracted images in `<document>.assets`.
+3. EasyView_Md writes an editable `.md` file beside the PDF and puts extracted images in `.<document>.assets`.
 4. If the PDF has no extractable text, EasyView_Md creates page-image references instead.
 
 PDF conversion requires the Poppler command-line utilities: `pdftotext`, `pdfimages`, and `pdftoppm`.

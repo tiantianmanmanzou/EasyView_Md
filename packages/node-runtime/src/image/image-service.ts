@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import {
   createImageDataUrl,
+  documentAssetsDirectoryName,
   documentDirectory,
   IMAGE_MIME_TYPES,
   ImageServiceError,
@@ -111,7 +112,10 @@ export async function pickImage(options: PickImageOptions): Promise<SelectedImag
 
 export async function savePastedImage(options: SavePastedImageOptions): Promise<SavedImage> {
   const parsed = parseImageDataUrl(options.dataUrl);
-  const assetsDirectory = path.join(documentDirectory(options.documentPath), `${sanitizeDocumentStem(options.documentPath)}.assets`);
+  const assetsDirectory = path.join(
+    documentDirectory(options.documentPath),
+    documentAssetsDirectoryName(sanitizeDocumentStem(options.documentPath)),
+  );
   const extension = IMAGE_MIME_TYPES[parsed.mimeType];
   const requestedName = sanitizeFileName(options.preferredName, `image-${Date.now()}${extension}`);
   const requestedExtension = path.extname(requestedName).toLowerCase();

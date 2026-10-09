@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   detectImageMime,
+  documentAssetsDirectoryName,
   IMAGE_MIME_TYPES,
   MAX_IMAGE_BYTES,
   parseImageDataUrl,
@@ -31,7 +32,7 @@ function allocateImageTarget(
 ): { directory: vscode.Uri; file: vscode.Uri } {
   const docDir = path.dirname(document.uri.fsPath);
   const safeStem = sanitizeDocumentStem(document.uri.fsPath);
-  const directory = vscode.Uri.file(path.join(docDir, `${safeStem}.assets`));
+  const directory = vscode.Uri.file(path.join(docDir, documentAssetsDirectoryName(safeStem)));
   const filename = `${safeStem}-${batchId}-${index}${extension}`;
   const file = vscode.Uri.joinPath(directory, filename);
   return { directory, file };

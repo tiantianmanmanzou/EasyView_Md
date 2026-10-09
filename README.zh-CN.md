@@ -67,9 +67,9 @@ npm run make:desktop:mac    # macOS ZIP 和 DMG
 
 ## 2.0.0 更新内容
 
-- **Word 转 Markdown**：在 `.docx` 或 `.doc` 文件上右键，选择 `Convert to Markdown with EasyView_Md`。生成的 Markdown 位于源文件同级目录，图片提取至对应的 `.assets` 目录。
+- **Word 转 Markdown**：在 `.docx` 或 `.doc` 文件上右键，选择 `Convert to Markdown with EasyView_Md`。生成的 Markdown 位于源文件同级目录，图片提取至对应的 `.<文档名>.assets` 目录。
 - **Word 图片稳定转换**：保留 Word 图片的尺寸属性；带透明通道的 PNG 自动合成为白色背景，避免预览出现透明底。
-- **图片粘贴资源化**：在 VS Code 原生编辑器粘贴含 Base64 图片的 Markdown 或 HTML 时，图片会自动保存到当前文档的 `.assets` 目录，并替换为相对路径。
+- **图片粘贴资源化**：在 VS Code 原生编辑器粘贴含 Base64 图片的 Markdown 或 HTML 时，图片会自动保存到当前文档的 `.<文档名>.assets` 目录，并替换为相对路径。
 - **图片富文本复制**：复制包含图片的选中内容时，剪贴板保留格式化 HTML 并内嵌图片，可直接粘贴到其他富文本编辑器。
 - **DOCX 与 PDF 导出优化**：DOCX 导出中 H1-H4 标题使用黑色加粗，正文连续行不再产生视觉空白段；PDF 使用内置中文与符号字体，提升中文、Emoji、图表和特殊字符的兼容性。
 - **自动更新提醒**：安装新版并激活插件后，通过 VS Code 原生消息提示更新，并可跳转查看更新说明。首次安装只记录版本，不弹窗打扰。
@@ -146,7 +146,7 @@ npm run make:desktop:mac    # macOS ZIP 和 DMG
 
 - 支持从文件系统拖拽、从剪贴板粘贴、通过 URL 或文件选择器插入。
 - 图片工具栏支持查看大图、调整宽高等操作。
-- 在原生编辑器粘贴 Base64 Markdown/HTML 图片时，自动写入文档 `.assets` 目录并使用相对引用。
+- 在原生编辑器粘贴 Base64 Markdown/HTML 图片时，自动写入文档 `.<文档名>.assets` 目录并使用相对引用。
 - 复制带图片的选中内容时，保留富文本格式和图片，便于粘贴到其他编辑器。
 - 支持 PNG、JPEG、GIF、SVG、WebP、BMP、ICO。
 
@@ -154,7 +154,7 @@ npm run make:desktop:mac    # macOS ZIP 和 DMG
 
 1. 在 VS Code Explorer 中右键 `.docx` 或 `.doc` 文件。
 2. 选择 **Convert to Markdown with EasyView_Md**。
-3. 插件在源文件同级目录创建 Markdown 文件，并将图片保存到 `<文档名>.assets`。
+3. 插件在源文件同级目录创建 Markdown 文件，并将图片保存到 `.<文档名>.assets`。
 4. 转换完成后选择 **Open Markdown**，即可使用 EasyView_Md 打开。
 
 转换会保留标题、表格、图片替代文本和尺寸。透明 PNG 会自动转换为白色不透明背景。`.docx` 转换需要安装 [Pandoc](https://pandoc.org/)；旧版 `.doc` 还需要 LibreOffice（`soffice`）。

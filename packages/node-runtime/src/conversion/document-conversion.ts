@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { PNG } from "pngjs";
 import { writeFileAtomically } from '../filesystem/file-write';
+import { documentAssetsDirectoryName } from '../image/image-security';
 import { stripPandocHighlightMarkup } from "@easyview/markdown-core/pandoc-highlight-markup";
 
 type CommandError = Error & { code?: string | number; stderr?: string };
@@ -248,7 +249,8 @@ export async function convertWordToMarkdown(request: DocumentConversionRequest):
   const stem = path.basename(sourcePath, path.extname(sourcePath));
   const safeStem = sanitizeBaseName(stem);
   const outputPath = path.join(directory, `${stem}.md`);
-  const assetDirectory = path.join(directory, `${safeStem}.assets`);
+  const assetDirectoryName = documentAssetsDirectoryName(safeStem);
+  const assetDirectory = path.join(directory, assetDirectoryName);
   await ensureOutputAvailable(outputPath, request.overwrite);
 
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "easyview-word-"));
@@ -270,7 +272,7 @@ export async function convertWordToMarkdown(request: DocumentConversionRequest):
 
     const converted = await readFile(temporaryMarkdownPath, "utf8");
     const markdown = stripPandocHighlightMarkup(
-      rewriteExtractedMediaPaths(converted, temporaryMediaDirectory, `${safeStem}.assets`),
+      rewriteExtractedMediaPaths(converted, temporaryMediaDirectory, assetDirectoryName),
     );
     if (request.overwrite) await rm(assetDirectory, { recursive: true, force: true });
     const assetPaths = await copyExtractedMedia(temporaryMediaDirectory, assetDirectory);
@@ -305,7 +307,8 @@ export async function convertPdfToMarkdown(request: DocumentConversionRequest): 
   const stem = path.basename(sourcePath, path.extname(sourcePath));
   const safeStem = sanitizeBaseName(stem);
   const outputPath = path.join(directory, `${stem}.md`);
-  const assetDirectory = path.join(directory, `${safeStem}.assets`);
+  const assetDirectoryName = documentAssetsDirectoryName(safeStem);
+  const assetDirectory = path.join(directory, assetDirectoryName);
   await ensureOutputAvailable(outputPath, request.overwrite);
 
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "easyview-pdf-"));
@@ -327,9 +330,9 @@ export async function convertPdfToMarkdown(request: DocumentConversionRequest): 
       await mkdir(pagesDirectory, { recursive: true });
       await runCommand("pdftoppm", ["-png", "-r", "150", sourcePath, pagePrefix]);
       assetPaths = await copyExtractedMedia(pagesDirectory, assetDirectory);
-      markdown = markdownImageReferences(`${safeStem}.assets`, assetPaths);
+      markdown = markdownImageReferences(assetDirectoryName, assetPaths);
     } else if (assetPaths.length > 0) {
-      markdown = `${markdown}\n\n${markdownImageReferences(`${safeStem}.assets`, assetPaths)}`;
+      markdown = `${markdown}\n\n${markdownImageReferences(assetDirectoryName, assetPaths)}`;
     }
     if (!markdown) {
       throw new DocumentConversionError("CONVERSION_FAILED", "No extractable text or page images were found in this PDF.");

@@ -268,3 +268,7 @@ export function sanitizeFileName(value: string | undefined, fallback: string): s
 export function sanitizeDocumentStem(documentPath: string): string {
   return sanitizeFileName(path.basename(documentPath, path.extname(documentPath)), "document");
 }
+
+export function documentAssetsDirectoryName(safeStem: string): string {
+  return `.${safeStem}.assets`;
+}

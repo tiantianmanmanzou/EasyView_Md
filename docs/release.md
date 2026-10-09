@@ -21,6 +21,17 @@ Release 先创建为草稿，上传完成后公开。失败重跑时，草稿继
 
 本流程只发布桌面端，不构建或更新 VSIX。扩展版本、官网扩展版本及其下载文件走独立发布安排。现有 Desktop Build 仅保留应用打包与运行验证，不制作发布安装包；旧 `desktop-release.yml` 已由新流程替代。
 
+## VS Code 扩展（手动发布）
+
+Desktop Release 不处理 VSIX，官网的扩展下载仍需手动更新：
+
+1. 在 `apps/vscode-extension/package.json` 确认扩展版本，运行 `npm run build --workspace easyview-md && npm run package:vscode && npm run verify:vscode-package`，得到 `apps/vscode-extension/easyview-md-X.Y.Z.vsix`。
+2. 在服务器 `/opt/services/sites/easyview/downloads/` 先备份旧文件（`cp -p easyview-md.vsix easyview-md.vsix.bak-<旧版本>`），再把新 VSIX 上传为临时文件名，核对 SHA-256 后 `mv` 覆盖为 `easyview-md.vsix`。不要删除目录中的其他文件。
+3. 修改 WonderXY-ART `sites/easyview/index.html` 中扩展卡片的 `vX.Y.Z · .vsix` 文字和 `easyview-md.vsix?v=X.Y.Z`，提交并推送 `main`，由 Deploy 部署。
+4. 用 `curl -I https://easyview.wonderxy.art/downloads/easyview-md.vsix` 检查大小与新文件一致。
+
+本流程不发布到 VS Code Marketplace 或 Open VSX。
+
 ## GitHub Secrets
 
 在 **EasyView_Md → Settings → Secrets and variables → Actions → Repository secrets** 配置：

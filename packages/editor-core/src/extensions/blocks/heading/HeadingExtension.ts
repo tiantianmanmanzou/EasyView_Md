@@ -273,9 +273,12 @@ function createHeadingWidgets(doc: ProsemirrorNode, options: HeadingExtensionOpt
       const collapsed = node.attrs.collapsed;
       const headingPos = pos;
 
+      // Rendered at the end of the heading (positioned absolutely by CSS): a
+      // non-editable widget right before the text makes Chromium drop the IME
+      // composition on the first keystroke when the heading is the first block.
       decorations.push(
         Decoration.widget(
-          pos + 1,
+          pos + node.nodeSize - 1,
           (view) => {
             const anchor = ownerDocument.createElement('button');
             anchor.innerText = '#';
@@ -317,7 +320,7 @@ function createHeadingWidgets(doc: ProsemirrorNode, options: HeadingExtensionOpt
             return container;
           },
           {
-            side: -1,
+            side: 2,
             ignoreSelection: true,
             key: `heading-${pos}-${collapsed ? 'collapsed' : 'expanded'}`,
           }

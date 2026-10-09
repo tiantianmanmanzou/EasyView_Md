@@ -153,8 +153,9 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
       const api = (window as typeof window & { easyViewDesktop: { tabs: { openWorkspaceEntry(path: string): Promise<unknown> } } }).easyViewDesktop;
       await api.tabs.openWorkspaceEntry('transparent.png');
     });
-    await expect(page.locator('.preview-image-viewer')).toBeVisible();
-    const imageBackground = await page.locator('.preview-image-viewer').evaluate((element) => {
+    // Raster images render through the universal file viewer (.image-viewer); only HEIC uses .preview-image-viewer.
+    await expect(page.locator('.preview-universal-viewer .image-viewer')).toBeVisible();
+    const imageBackground = await page.locator('.preview-universal-viewer .image-viewer').evaluate((element) => {
       const style = getComputedStyle(element);
       return { color: style.backgroundColor, image: style.backgroundImage };
     });

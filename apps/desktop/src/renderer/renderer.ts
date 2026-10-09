@@ -98,15 +98,18 @@ function commandEditor(): EasyViewEditorInstance | null {
 
 function bindActiveEditor(editor: EasyViewEditorInstance | null): void {
   editorStateSubscription?.unsubscribe();
+  // Apply the persisted outline layout before subscribing: subscribeUiState emits
+  // the editor's current state immediately, and a freshly created editor starts
+  // with its outline closed, which would otherwise overwrite the saved preference.
+  if (editor) {
+    editor.setOutlineVisible(lastOutlineVisible);
+    editor.setOutlineWidth(lastOutlineWidth);
+  }
   editorStateSubscription = editor?.subscribeUiState((state) => {
     document.getElementById('outline-toggle')?.classList.toggle('active', state.outlineVisible);
     workspaceExplorer.setOutlineVisible(state.outlineVisible);
     publishMenuState();
   });
-  if (editor) {
-    editor.setOutlineVisible(lastOutlineVisible);
-    editor.setOutlineWidth(lastOutlineWidth);
-  }
 }
 
 const workspaceExplorer = new WorkspaceExplorer({

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import * as vscode from 'vscode';
+import { renameMarkdownResource } from '../application/document/renameMarkdownResource';
 import {
   createWorkspaceNodeId,
   WorkspaceOperationError,
@@ -112,9 +113,7 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
     const relativePath = joinWorkspaceRelativePath(parentRelativePath, request.newName);
     const target = this.uriFor(rootId, relativePath);
     const sourceStat = await vscode.workspace.fs.stat(source);
-    const edit = new vscode.WorkspaceEdit();
-    edit.renameFile(source, target, { overwrite: false, ignoreIfExists: false });
-    if (!await vscode.workspace.applyEdit(edit)) {
+    if (!await renameMarkdownResource(source, target)) {
       throw new WorkspaceOperationError('IO_ERROR', `Unable to rename ${workspaceBasename(source)}.`);
     }
     return {

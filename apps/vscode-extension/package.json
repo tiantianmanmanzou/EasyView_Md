@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "A visual Markdown editor for VS Code with rich editing, document conversion, and export tools.",
-  "version": "2.0.159",
+  "version": "2.0.160",
   "publisher": "zhangxy",
   "license": "MIT",
   "private": true,

@@ -32,6 +32,7 @@ import {
 import { isEasyViewThemeMode } from '@easyview/contracts';
 import { isDiskBackedMarkdownUri } from './markdownUri';
 import { resolveMarkdownDiskUri } from './openMarkdownEditor';
+import { renameMarkdownResource } from './renameMarkdownResource';
 import { broadcastProductTheme, readProductTheme, writeProductTheme } from '../../theme/productThemeBridge';
 
 function diskFsPath(document: vscode.TextDocument): string {
@@ -892,7 +893,8 @@ export async function handleWebviewMessage(
       const oldUri = document.uri;
       const dir = path.dirname(oldUri.fsPath);
       const ext = path.extname(oldUri.fsPath);
-      const newUri = vscode.Uri.file(path.join(dir, newName + ext));
+      const newUri = oldUri.with({ path: vscode.Uri.file(path.join(dir, newName + ext)).path });
+      if (newUri.toString() === oldUri.toString()) return;
 
       // Check if target already exists
       try {
@@ -903,14 +905,7 @@ export async function handleWebviewMessage(
         // Good — file doesn't exist
       }
 
-      const wsEdit = new vscode.WorkspaceEdit();
-      wsEdit.renameFile(oldUri, newUri);
-      const success = await vscode.workspace.applyEdit(wsEdit);
-      if (success) {
-        // Open the renamed file
-        const doc = await vscode.workspace.openTextDocument(newUri);
-        await vscode.window.showTextDocument(doc, { viewColumn: webviewPanel.viewColumn });
-      }
+      await renameMarkdownResource(oldUri, newUri);
       break;
     }
 

@@ -6,6 +6,7 @@ import MarkdownIt from 'markdown-it';
 import { findChromiumBinary, printToPdf } from '../application/export/providerExportHandler';
 import { roundPdfCorners } from '../application/export/pdfRoundCorners';
 import { activeMarkdownEditor, isMarkdownDocument, parseMarkdownDocument } from './markdownModel';
+import { renameMarkdownResource } from '../application/document/renameMarkdownResource';
 
 
 async function documentForUri(uri?: vscode.Uri): Promise<vscode.TextDocument | undefined> {
@@ -191,10 +192,7 @@ export function registerNativeMarkdownCommands(context: vscode.ExtensionContext)
     const next = await vscode.window.showInputBox({ value: current, prompt: 'New file name' });
     if (!next || next === current) return;
     const nextUri = vscode.Uri.file(path.join(path.dirname(document.uri.fsPath), `${next}${ext}`));
-    const edit = new vscode.WorkspaceEdit();
-    edit.renameFile(document.uri, nextUri);
-    await vscode.workspace.applyEdit(edit);
-    await editorForUri(nextUri);
+    if (await renameMarkdownResource(document.uri, nextUri)) await editorForUri(nextUri);
   }));
 
   disposables.push(vscode.commands.registerCommand('easyviewMd.stageFile', async () => {

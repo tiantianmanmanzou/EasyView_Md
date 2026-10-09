@@ -172,14 +172,13 @@ export async function renameWorkspaceEntry(request: WorkspaceRenameRequest): Pro
   if (!rootPath) return failure('INVALID_ARGUMENT', '尚未打开工作区');
   try {
     const oldPaths = workspaceCore.resourcePaths(request.relativePath);
-    const entry = await workspaceCore.rename(request);
-    const nextPaths = workspaceCore.resourcePaths(entry.relativePath);
-    for (const session of documentSessions.values()) {
-      if (!session.filePath || filePathKey(session.filePath) !== filePathKey(oldPaths.absolutePath)) continue;
+    const nextRelativePath = path.posix.join(workspaceCore.parentRelativePath(request.relativePath), request.newName);
+    const nextPaths = workspaceCore.resourcePaths(nextRelativePath);
+    const affected = documentSessions.findWithinPath(oldPaths.absolutePath);
+    const entry = await documentSessions.renamePath(oldPaths.absolutePath, nextPaths.absolutePath, () => workspaceCore.rename(request));
+    for (const session of affected) {
       await stopWatcher(session);
-      session.filePath = nextPaths.absolutePath;
-      session.fileName = entry.name;
-      tabRegistry.renameEditor(session.tabId, nextPaths.absolutePath, entry.name);
+      tabRegistry.renameEditor(session.tabId, session.filePath!, session.fileName);
       void watchDocumentSession(session);
     }
     tabRegistry.renamePreview(request.relativePath, entry.relativePath, entry.name);

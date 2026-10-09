@@ -101,6 +101,14 @@ export class DocumentSessionService {
     ));
   }
 
+  findWithinPath(filePath: string): DocumentSession[] {
+    return [...this.sessions.values()].filter((session) => {
+      if (!session.filePath) return false;
+      const relative = path.relative(filePath, session.filePath);
+      return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    });
+  }
+
   attach(session: DocumentSession): DocumentSession {
     this.sessions.set(session.tabId, session);
     return session;
@@ -378,6 +386,32 @@ export class DocumentSessionService {
         }
       }));
     });
+  }
+
+  /** Serialize a workspace rename with every affected document's saves. */
+  renamePath<T>(oldPath: string, nextPath: string, operation: () => Promise<T>): Promise<T> {
+    const source = path.resolve(oldPath);
+    const target = path.resolve(nextPath);
+    const affected = this.findWithinPath(source).map((session) => ({
+      session, nextPath: path.join(target, path.relative(source, session.filePath!)),
+    }));
+    // Reserve all session queues together, so later saves wait until both the
+    // disk rename and the document path migration have completed.
+    const previous = affected.map(({ session }) => this.saveQueues.get(session.tabId) ?? Promise.resolve());
+    const rename = async (): Promise<T> => {
+      const result = await operation();
+      for (const entry of affected) {
+        entry.session.filePath = entry.nextPath;
+        entry.session.fileName = path.basename(entry.nextPath);
+      }
+      return result;
+    };
+    const next = Promise.all(previous).then(() => this.enqueueFile(source, () => (
+      filePathKey(source) === filePathKey(target) ? rename() : this.enqueueFile(target, rename)
+    )));
+    const settled = next.then(() => undefined, () => undefined);
+    for (const { session } of affected) this.saveQueues.set(session.tabId, settled);
+    return next;
   }
 
   private writeBoundPath(session: DocumentSession, filePath: string, content: string, overwrite = false): Promise<DocumentSaveOutcome> {

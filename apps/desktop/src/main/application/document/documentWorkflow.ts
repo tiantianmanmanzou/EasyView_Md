@@ -170,7 +170,12 @@ export async function loadEditorTab(
   groupId?: string,
 ): Promise<OperationResult<DocumentOpenResult>> {
   if (!isMarkdownPath(filePath)) return failure('INVALID_ARGUMENT', '仅支持 Markdown 文件');
-  const resolvedPath = path.resolve(filePath);
+  let resolvedPath: string;
+  try {
+    resolvedPath = await fs.realpath(filePath);
+  } catch (error) {
+    return failure('UNKNOWN', error instanceof Error ? error.message : '无法读取文件');
+  }
   const targetGroupId = groupId ?? tabSnapshot().activeGroupId;
   const targetGroup = tabSnapshot().groups.find((group) => group.id === targetGroupId);
   const existingInGroup = targetGroup?.tabs.find((tab) => (
@@ -301,7 +306,7 @@ export async function publishSaveOutcome(
   if (outcome.kind === 'error') return outcome.error;
   const session = documentSessions.get(sessionId);
   if (outcome.kind === 'saved' && session) {
-    tabRegistry.renameEditor(session.tabId, outcome.value.filePath, outcome.value.fileName);
+    tabRegistry.renameEditor(session.tabId, session.filePath!, session.fileName);
     tabRegistry.setEditorDirty(session.tabId, session.dirty);
     await watchDocumentSession(session);
     syncTabState();
@@ -327,8 +332,14 @@ export async function saveAsSession(
   if (!isMarkdownPath(chosen.filePath)) {
     return failure('INVALID_ARGUMENT', '保存目标必须是 Markdown 文件');
   }
+  let targetPath: string;
+  try {
+    targetPath = path.join(await fs.realpath(path.dirname(chosen.filePath)), path.basename(chosen.filePath));
+  } catch (error) {
+    return failure('UNKNOWN', error instanceof Error ? error.message : '无法访问保存目录');
+  }
   await stopWatcher(session);
-  const outcome = await documentSessions.writeToPath(sessionId, chosen.filePath, content, lineEnding);
+  const outcome = await documentSessions.writeToPath(sessionId, targetPath, content, lineEnding);
   if (outcome.kind !== 'saved') await watchDocumentSession(session);
   return publishSaveOutcome(sessionId, outcome);
 }

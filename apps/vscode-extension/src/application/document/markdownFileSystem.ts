@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { open } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
@@ -139,8 +140,26 @@ export function registerEasyViewMarkdownFileSystem(): vscode.Disposable {
       return vscode.workspace.fs.readFile(toDiskFileUri(uri));
     },
 
-    async writeFile(uri, content, _options) {
-      await vscode.workspace.fs.writeFile(toDiskFileUri(uri), content);
+    async writeFile(uri, content, options) {
+      const diskUri = toDiskFileUri(uri);
+      // Opening with r+ prevents a stale save from recreating a missing path,
+      // while an already-open handle follows the file across a disk rename.
+      const flags = options.create ? (options.overwrite ? 'w' : 'wx') : 'r+';
+      try {
+        const handle = await open(diskUri.fsPath, flags);
+        try {
+          if (!options.create && !options.overwrite) throw vscode.FileSystemError.FileExists(uri);
+          await handle.writeFile(content);
+          await handle.truncate(content.byteLength);
+        } finally {
+          await handle.close();
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') throw vscode.FileSystemError.FileNotFound(uri);
+        if (code === 'EEXIST') throw vscode.FileSystemError.FileExists(uri);
+        throw error;
+      }
       const state = diskWatchers.get(diskKey(uri));
       if (state) state.signature = await readDiskSignature(state.diskUri);
       changeEmitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const vscodeMocks = vi.hoisted(() => {
   const fileWatchers: Array<{
@@ -42,6 +45,10 @@ const vscodeMocks = vi.hoisted(() => {
     EventEmitter,
     Disposable,
     FileChangeType: { Changed: 1, Created: 2, Deleted: 3 },
+    FileSystemError: {
+      FileNotFound: () => Object.assign(new Error('FileNotFound'), { code: 'FileNotFound' }),
+      FileExists: () => Object.assign(new Error('FileExists'), { code: 'FileExists' }),
+    },
     Uri: {
       file: (fsPath: string) => ({ fsPath, scheme: 'file', toString: () => `file:${fsPath}` }),
     },
@@ -89,6 +96,7 @@ import { registerEasyViewMarkdownFileSystem } from './markdownFileSystem';
 
 type MarkdownFileSystemProvider = {
   watch(uri: { toString(skipEncoding?: boolean): string; with(change: { scheme: string }): unknown }): { dispose(): void };
+  writeFile(uri: unknown, content: Uint8Array, options: { create: boolean; overwrite: boolean }): Promise<void>;
 };
 
 describe('EasyView markdown file system', () => {
@@ -160,5 +168,46 @@ describe('EasyView markdown file system', () => {
     expect(vscodeMocks.emitters[0].fire).not.toHaveBeenCalled();
 
     registration.dispose();
+  });
+
+  it('does not recreate the old path after rename when saving an existing file', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'easyview-rename-save-'));
+    const registration = registerEasyViewMarkdownFileSystem();
+    try {
+      const oldPath = path.join(directory, 'old.md');
+      const nextPath = path.join(directory, 'new.md');
+      await writeFile(oldPath, 'original');
+      await rename(oldPath, nextPath);
+      const provider = vscodeMocks.providers[0] as MarkdownFileSystemProvider;
+      await expect(provider.writeFile(vscodeMocks.Uri.file(oldPath), new Uint8Array([1]), {
+        create: false, overwrite: true,
+      })).rejects.toMatchObject({ code: 'FileNotFound' });
+      await expect(readFile(oldPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(nextPath, 'utf8')).toBe('original');
+    } finally {
+      registration.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('honors creation and overwrite options and truncates shorter saved content', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'easyview-write-options-'));
+    const registration = registerEasyViewMarkdownFileSystem();
+    try {
+      const filePath = path.join(directory, 'document.md');
+      const uri = vscodeMocks.Uri.file(filePath);
+      const provider = vscodeMocks.providers[0] as MarkdownFileSystemProvider;
+      await provider.writeFile(uri, Buffer.from('long original'), { create: true, overwrite: false });
+      await expect(provider.writeFile(uri, Buffer.from('bad'), { create: true, overwrite: false }))
+        .rejects.toMatchObject({ code: 'FileExists' });
+      await expect(provider.writeFile(uri, Buffer.from('bad'), { create: false, overwrite: false }))
+        .rejects.toMatchObject({ code: 'FileExists' });
+      expect(await readFile(filePath, 'utf8')).toBe('long original');
+      await provider.writeFile(uri, Buffer.from('short'), { create: false, overwrite: true });
+      expect(await readFile(filePath, 'utf8')).toBe('short');
+    } finally {
+      registration.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

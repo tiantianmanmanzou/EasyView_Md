@@ -267,6 +267,66 @@ describe('DocumentSessionService split aliases', () => {
   });
 });
 
+describe('DocumentSessionService workspace rename', () => {
+  it('waits for an in-flight save and routes a queued save to the renamed path', async () => {
+    const fs = new FakeDocumentFileSystem();
+    const service = openTwoSessions(fs);
+    const session = service.get('tab-a')!;
+    const documentId = session.documentId;
+    fs.holdNextWrites();
+    const started = new Promise<void>((resolve) => { fs.writeStarted = resolve; });
+    editSession(service, 'tab-a', '# saved before rename\n');
+    const saving = service.save('tab-a', session.content);
+    await started;
+    let renamed = false;
+    const renaming = service.renamePath(p('/tmp/a.md'), p('/tmp/renamed.md'), async () => {
+      renamed = true;
+      await fs.link(p('/tmp/a.md'), p('/tmp/renamed.md'));
+      await fs.unlink(p('/tmp/a.md'));
+    });
+    editSession(service, 'tab-a', '# saved after rename\n');
+    const queuedSave = service.save('tab-a', session.content);
+    await Promise.resolve();
+    expect(renamed).toBe(false);
+    fs.releaseWrites();
+    expect((await saving).kind).toBe('saved');
+    await renaming;
+    expect((await queuedSave).kind).toBe('saved');
+    expect(fs.files.has(p('/tmp/a.md'))).toBe(false);
+    expect(fs.files.get(p('/tmp/renamed.md'))?.raw).toBe('# saved after rename\n');
+    expect(session.filePath).toBe(p('/tmp/renamed.md'));
+    expect(session.documentId).toBe(documentId);
+  });
+
+  it('migrates folder descendants and split aliases without losing dirty content', async () => {
+    const fs = new FakeDocumentFileSystem();
+    const service = new DocumentSessionService(fs);
+    fs.seed(p('/tmp/docs/nested/a.md'), '# A\n');
+    const session = service.open({ tabId: 'tab-a', filePath: p('/tmp/docs/nested/a.md'), fileName: 'a.md', raw: '# A\n', mtimeMs: 1 });
+    service.alias('split-a', 'tab-a');
+    editSession(service, 'split-a', '# unsaved\n');
+    await service.renamePath(p('/tmp/docs'), p('/tmp/renamed'), async () => {
+      await fs.link(p('/tmp/docs/nested/a.md'), p('/tmp/renamed/nested/a.md'));
+      await fs.unlink(p('/tmp/docs/nested/a.md'));
+    });
+    expect(session.content).toBe('# unsaved\n');
+    expect(session.dirty).toBe(true);
+    expect(service.get('split-a')?.filePath).toBe(p('/tmp/renamed/nested/a.md'));
+    expect((await service.save('split-a', session.content)).kind).toBe('saved');
+    expect(fs.files.has(p('/tmp/docs/nested/a.md'))).toBe(false);
+  });
+
+  it('leaves document paths unchanged when rename fails and releases the save queue', async () => {
+    const fs = new FakeDocumentFileSystem();
+    const service = openTwoSessions(fs);
+    await expect(service.renamePath(p('/tmp/a.md'), p('/tmp/b.md'), () => fs.link(p('/tmp/a.md'), p('/tmp/b.md'))))
+      .rejects.toMatchObject({ code: 'EEXIST' });
+    expect(service.get('tab-a')?.filePath).toBe(p('/tmp/a.md'));
+    expect((await service.save('tab-a', '# still original\n')).kind).toBe('saved');
+    expect(fs.files.get(p('/tmp/b.md'))?.raw).toBe('# B\n');
+  });
+});
+
 class FakeDocumentGit implements DocumentGitPort {
   repositoryRoot: string | null = '/repo';
   modified = true;

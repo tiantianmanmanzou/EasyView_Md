@@ -23,8 +23,11 @@ test('renames the original document through document and workspace commands whil
       explorerVisible: true, outlineVisible: true, explorerWidth: 280, outlineWidth: 280,
     },
   }));
+  const executablePath = process.env.EASYVIEW_DESKTOP_TEST_EXECUTABLE;
   const application = await electron.launch({
-    args: [process.cwd(), `--user-data-dir=${userData}`],
+    ...(executablePath ? { executablePath } : {}),
+    args: [...(executablePath ? [] : [process.cwd()]), `--user-data-dir=${userData}`],
+    env: { ...process.env, NODE_OPTIONS: '' },
   });
   try {
     const page = await application.firstWindow();

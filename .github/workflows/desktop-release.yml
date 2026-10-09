@@ -1,7 +1,12 @@
 name: Desktop Release 2.0.0
 on:
   push:
-    branches: [codex/desktop-release-2-0-0]
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/desktop-release.yml'
   workflow_dispatch:
 jobs:
   windows:

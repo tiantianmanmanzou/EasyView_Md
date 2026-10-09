@@ -518,9 +518,9 @@ export class WorkspaceExplorer {
 
   private async renameEntry(relativePath: string, newName: string): Promise<void> {
     if (this.renameRelativePath !== relativePath) return;
+    this.renameRelativePath = null;
     const result = await this.options.api.workspace.rename({ relativePath, newName: newName.trim() });
     if (!result.ok) { window.alert(result.message); this.render(); return; }
-    this.renameRelativePath = null;
     this.selectedRelativePaths.delete(relativePath);
     this.selectedRelativePaths.add(result.value.relativePath);
     this.selectedRelativePath = result.value.relativePath;

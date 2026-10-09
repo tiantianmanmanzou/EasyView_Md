@@ -1220,13 +1220,13 @@ export class WorkspaceExplorerView {
       this.render();
       return;
     }
+    this.renamePath = null;
     const result = await this.requestOp((requestId) => ({
       type: 'rename',
       requestId,
       relativePath,
       newName: trimmed,
     }));
-    this.renamePath = null;
     this.setEditing(false);
     if (!result.ok) {
       this.showError(result.message);

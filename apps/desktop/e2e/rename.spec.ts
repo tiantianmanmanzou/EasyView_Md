@@ -31,6 +31,8 @@ test('renames the original document through document and workspace commands whil
   });
   try {
     const page = await application.firstWindow();
+    const errors: string[] = [];
+    page.on('dialog', (dialog) => { errors.push(dialog.message()); void dialog.dismiss(); });
     await expect(page.locator('.ProseMirror')).toContainText('Original.');
     await page.locator('.ProseMirror p').last().click();
     await page.keyboard.press('End');
@@ -51,6 +53,17 @@ test('renames the original document through document and workspace commands whil
     await expect(page.locator('.desktop-tab-dirty')).toHaveCount(1);
     await expect.poll(() => readdir(join(workspace, 'docs'))).toEqual(['title-renamed.md']);
 
+    await page.locator('[data-relative-path="docs/title-renamed.md"] .workspace-entry-name').click();
+    await page.keyboard.press('F2');
+    const renameInput = page.locator('.workspace-rename-input');
+    await renameInput.fill('键盘提交.md');
+    await renameInput.evaluate((input) => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      (input as HTMLInputElement).blur();
+    });
+    await expect(page.locator('.desktop-tab-label')).toHaveText('键盘提交.md');
+    await expect.poll(() => readdir(join(workspace, 'docs'))).toEqual(['键盘提交.md']);
+
     const results = await page.evaluate(async () => {
       const api = (window as typeof window & { easyViewDesktop: EasyViewDesktopApi }).easyViewDesktop;
       const state = await api.tabs.getState();
@@ -58,7 +71,7 @@ test('renames the original document through document and workspace commands whil
       const id = state.value.activeTabId!;
       const content = '# Notes\n\nOriginal. Unsaved content.\n';
       const saving = api.document.save(content, id);
-      const renaming = api.workspace.rename({ relativePath: 'docs/title-renamed.md', newName: 'tree-renamed.md' });
+      const renaming = api.workspace.rename({ relativePath: 'docs/键盘提交.md', newName: 'tree-renamed.md' });
       const nextSave = api.document.save(content, id);
       return Promise.all([saving, renaming, nextSave]);
     });
@@ -80,6 +93,7 @@ test('renames the original document through document and workspace commands whil
     if (folderResult.state.ok) expect(folderResult.state.value.tabs[0]).toMatchObject({ filePath: await realpath(join(workspace, 'renamed-folder', 'tree-renamed.md')) });
     await expect.poll(async () => (await readdir(workspace)).filter((name) => !name.startsWith('.'))).toEqual(['renamed-folder']);
     expect(await readFile(join(workspace, 'renamed-folder', 'tree-renamed.md'), 'utf8')).toContain('Saved after folder rename.');
+    expect(errors).toEqual([]);
   } finally {
     const process = application.process();
     if (process.exitCode === null) {

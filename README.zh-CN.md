@@ -17,6 +17,8 @@
   <a href="https://easyview.wonderxy.art"><b>官网</b></a> · <a href="https://easyview.wonderxy.art/#download">下载</a> · <a href="https://github.com/tiantianmanmanzou/EasyView_Md/releases">版本发布</a> · <a href="https://marketplace.visualstudio.com/items?itemName=zhangxy.easyview-md">VS Code 插件市场</a>
 </p>
 
+https://github.com/user-attachments/assets/de0d405a-6c37-411d-b25b-06c75951e787
+
 [English](./readme.md) | [简体中文](./README.zh-CN.md)
 
 EasyView_Md 同时提供 VS Code/Cursor 插件和 Electron 桌面 APP。两种产品形态共用同一套编辑器内核、Markdown 序列化、表格能力和导出能力。

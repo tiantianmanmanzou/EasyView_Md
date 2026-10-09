@@ -17,6 +17,8 @@
   <a href="https://easyview.wonderxy.art"><b>Website</b></a> · <a href="https://easyview.wonderxy.art/#download">Download</a> · <a href="https://github.com/tiantianmanmanzou/EasyView_Md/releases">Releases</a> · <a href="https://marketplace.visualstudio.com/items?itemName=zhangxy.easyview-md">VS Code Marketplace</a>
 </p>
 
+https://github.com/user-attachments/assets/4b9e8d70-ff5c-41b4-ad85-2509f1e0be82
+
 [English](./readme.md) | [简体中文](./README.zh-CN.md)
 
 # Sample

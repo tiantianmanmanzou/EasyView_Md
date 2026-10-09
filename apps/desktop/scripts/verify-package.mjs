@@ -59,7 +59,7 @@ const requiredAsarFiles = [
 ];
 
 await access(asarPath);
-const packagedFiles = new Set(asar.listPackage(asarPath));
+const packagedFiles = new Set(asar.listPackage(asarPath).map(file => file.replaceAll('\\', '/')));
 for (const file of requiredAsarFiles) {
   if (!packagedFiles.has(file)) throw new Error(`Missing packaged resource: ${file}`);
 }

@@ -1,0 +1,33 @@
+name: Desktop Release 2.0.0
+on:
+  push:
+    branches: [codex/desktop-release-2-0-0]
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck --workspace @easyview/desktop
+      - run: npm run make:desktop
+      - run: npm run verify:desktop-package
+      - run: npm run verify:desktop-runtime
+      - name: Verify application version
+        shell: pwsh
+        run: |
+          $exe = "apps/desktop/out/EasyView_Md-win32-x64/EasyView_Md.exe"
+          $version = (Get-Item $exe).VersionInfo.ProductVersion
+          if ($version -ne "2.0.0") { throw "Unexpected application version: $version" }
+          Write-Host "Verified Windows product version $version"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: easyview-desktop-Windows-2.0.0
+          path: apps/desktop/out/make/**/*
+          if-no-files-found: error

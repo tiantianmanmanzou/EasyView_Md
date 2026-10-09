@@ -25,6 +25,7 @@ try {
   const page = await application.firstWindow();
   await expect(page.locator('.ProseMirror')).toContainText('Packaged EasyView_Md');
 
+  await page.locator('.ProseMirror p').last().click();
   await page.keyboard.press('Alt+t');
   const terminal = page.locator('.easyview-terminal-modal');
   await expect(terminal).toBeVisible();

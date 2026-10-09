@@ -1,6 +1,23 @@
 # EasyView_Md - VS Code 与桌面端 Markdown 可视化编辑器
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
+<p align="center">
+  <a href="https://easyview.wonderxy.art"><img src="./resources/brand/logo.png" alt="EasyView_Md" width="96"></a>
+</p>
+
+<h3 align="center">🌐 官方网站：<a href="https://easyview.wonderxy.art">easyview.wonderxy.art</a></h3>
+
+<p align="center">
+  <a href="https://easyview.wonderxy.art"><img src="https://img.shields.io/badge/Website-easyview.wonderxy.art-7c5cff?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website"></a>
+  <a href="https://github.com/tiantianmanmanzou/EasyView_Md/releases/latest"><img src="https://img.shields.io/github/v/release/tiantianmanmanzou/EasyView_Md?style=for-the-badge&label=%E4%B8%8B%E8%BD%BD&color=5b6cff" alt="Download"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=zhangxy.easyview-md"><img src="https://img.shields.io/badge/VS%20Code-Marketplace-007acc?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace"></a>
+  <a href="./LICENSE.txt"><img src="https://img.shields.io/badge/License-MIT-2ea44f?style=for-the-badge" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="https://easyview.wonderxy.art"><b>官网</b></a> · <a href="https://easyview.wonderxy.art/#download">下载</a> · <a href="https://github.com/tiantianmanmanzou/EasyView_Md/releases">版本发布</a> · <a href="https://marketplace.visualstudio.com/items?itemName=zhangxy.easyview-md">VS Code 插件市场</a>
+</p>
+
+[English](./readme.md) | [简体中文](./README.zh-CN.md)
 
 EasyView_Md 同时提供 VS Code/Cursor 插件和 Electron 桌面 APP。两种产品形态共用同一套编辑器内核、Markdown 序列化、表格能力和导出能力。
 

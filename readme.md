@@ -1,6 +1,23 @@
 # EasyView_Md — Visual Markdown Editor for VS Code and Desktop
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
+<p align="center">
+  <a href="https://easyview.wonderxy.art"><img src="./resources/brand/logo.png" alt="EasyView_Md" width="96"></a>
+</p>
+
+<h3 align="center">🌐 Official Website: <a href="https://easyview.wonderxy.art">easyview.wonderxy.art</a></h3>
+
+<p align="center">
+  <a href="https://easyview.wonderxy.art"><img src="https://img.shields.io/badge/Website-easyview.wonderxy.art-7c5cff?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website"></a>
+  <a href="https://github.com/tiantianmanmanzou/EasyView_Md/releases/latest"><img src="https://img.shields.io/github/v/release/tiantianmanmanzou/EasyView_Md?style=for-the-badge&label=Download&color=5b6cff" alt="Download"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=zhangxy.easyview-md"><img src="https://img.shields.io/badge/VS%20Code-Marketplace-007acc?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace"></a>
+  <a href="./LICENSE.txt"><img src="https://img.shields.io/badge/License-MIT-2ea44f?style=for-the-badge" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="https://easyview.wonderxy.art"><b>Website</b></a> · <a href="https://easyview.wonderxy.art/#download">Download</a> · <a href="https://github.com/tiantianmanmanzou/EasyView_Md/releases">Releases</a> · <a href="https://marketplace.visualstudio.com/items?itemName=zhangxy.easyview-md">VS Code Marketplace</a>
+</p>
+
+[English](./readme.md) | [简体中文](./README.zh-CN.md)
 
 # Sample
 

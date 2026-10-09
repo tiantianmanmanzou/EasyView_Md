@@ -1,5 +1,4 @@
 import { _electron as electron, expect, test } from '@playwright/test';
-import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -95,13 +94,7 @@ test('renames the original document through document and workspace commands whil
     expect(await readFile(join(workspace, 'renamed-folder', 'tree-renamed.md'), 'utf8')).toContain('Saved after folder rename.');
     expect(errors).toEqual([]);
   } finally {
-    const process = application.process();
-    if (process.exitCode === null) {
-      const exited = once(process, 'exit');
-      process.kill('SIGTERM');
-      await exited;
-    }
-    await application.close();
+    await application.close().catch(() => undefined);
     await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });

@@ -1,5 +1,4 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,15 +13,7 @@ async function launch(userDataDir: string): Promise<{ application: ElectronAppli
 
 async function terminate(application: ElectronApplication | undefined): Promise<void> {
   if (!application) return;
-  const process = application.process();
-  if (process.exitCode !== null) {
-    await application.close();
-    return;
-  }
-  const exited = once(process, 'exit');
-  process.kill('SIGTERM');
-  await exited;
-  await application.close();
+  await application.close().catch(() => undefined);
 }
 
 test('keeps Markdown dirty content while preview tabs occupy the central surface and restore after restart', async () => {

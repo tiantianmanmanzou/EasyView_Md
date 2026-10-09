@@ -1,0 +1,55 @@
+name: Desktop Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/editor-core/**'
+      - 'packages/contracts/**'
+      - 'packages/markdown-core/**'
+      - 'packages/node-runtime/**'
+      - 'tests/e2e/desktop/**'
+      - 'tooling/**'
+      - 'tsconfig.base.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'resources/**'
+      - '.github/workflows/desktop-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/editor-core/**'
+      - 'packages/contracts/**'
+      - 'packages/markdown-core/**'
+      - 'packages/node-runtime/**'
+      - 'tests/e2e/desktop/**'
+      - 'tooling/**'
+      - 'tsconfig.base.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'resources/**'
+      - '.github/workflows/desktop-build.yml'
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck --workspace @easyview/desktop
+      - run: npx vitest run apps/desktop/src/main/*.test.ts
+      - run: npm run build:desktop
+      - run: npm run test:e2e:desktop
+      - run: npm run package:desktop
+      - run: npm run verify:desktop-package
+      - run: npm run verify:desktop-runtime

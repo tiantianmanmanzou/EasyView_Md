@@ -1,0 +1,200 @@
+name: Desktop Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing stable release tag (vX.Y.Z)'
+        required: true
+        type: string
+
+# All versions share one queue because the website uses fixed download names.
+concurrency:
+  group: easyview-desktop-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate requested tag format
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Match tag to desktop package version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: node tooling/release/desktop-artifacts.mjs validate "$RELEASE_TAG"
+
+  build:
+    needs: version
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+          - os: windows-latest
+            platform: win32
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.version.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify native runner target
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: node -e 'if (process.platform !== process.env.TARGET_PLATFORM || process.arch !== process.env.TARGET_ARCH) throw new Error("Unexpected runner architecture")'
+      - run: npm ci
+      - run: npm run typecheck --workspace @easyview/desktop
+      - name: Make native installers
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: npm run make --workspace @easyview/desktop -- --arch="$TARGET_ARCH"
+      - run: npm run verify:desktop-package
+      - run: npm run verify:desktop-runtime
+      - if: matrix.platform == 'darwin'
+        run: npm run make:dmg --workspace @easyview/desktop
+      - name: Verify Windows executable version
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $exe = 'apps/desktop/out/EasyView_Md-win32-x64/EasyView_Md.exe'
+          $version = (Get-Item $exe).VersionInfo.ProductVersion
+          if ($version -ne $env:RELEASE_VERSION) { throw "Unexpected application version: $version" }
+      - name: Stage fixed filenames
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: node tooling/release/desktop-artifacts.mjs stage "$TARGET_PLATFORM" "$TARGET_ARCH" release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.version.outputs.tag }}
+          persist-credentials: false
+      - name: Checkout website main
+        uses: actions/checkout@v4
+        with:
+          repository: tiantianmanmanzou/WonderXY-ART
+          ref: main
+          path: website
+          token: ${{ secrets.WONDERXY_ART_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: artifacts
+      - name: Prepare release manifest and checksums
+        run: |
+          bash website/scripts/prepare-easyview-downloads.sh artifacts "$RELEASE_VERSION" release-assets
+          node website/scripts/easyview-release.mjs verify release-assets "$RELEASE_VERSION"
+      - name: Create or resume GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Query errors fail the job; they must not be mistaken for a missing release.
+          gh api --paginate --slurp "repos/$GH_REPO/releases" > "$RUNNER_TEMP/releases.json"
+          state=$(jq -r --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | if length == 0 then "missing" elif .[0].draft then "draft" else "published" end' "$RUNNER_TEMP/releases.json")
+          if [[ "$state" == published ]]; then
+            # Published assets are immutable on retry; website sync reuses these bytes.
+            rm -rf release-assets
+            mkdir release-assets
+            gh release download "$RELEASE_TAG" --dir release-assets \
+              --pattern 'EasyView_Md-*' --pattern SHA256SUMS --pattern release.json
+          else
+            if [[ "$state" == missing ]]; then
+              gh release create "$RELEASE_TAG" --verify-tag --draft --title "EasyView_Md $RELEASE_TAG" --generate-notes
+            fi
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+          node website/scripts/easyview-release.mjs verify release-assets "$RELEASE_VERSION"
+      - name: Sync published downloads over SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.EASYVIEW_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.EASYVIEW_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.EASYVIEW_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.EASYVIEW_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.EASYVIEW_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_PORT"
+          install -m 700 -d ~/.ssh
+          export DEPLOY_SSH_KEY_FILE="$RUNNER_TEMP/easyview-deploy-key"
+          trap 'rm -f "$DEPLOY_SSH_KEY_FILE"' EXIT
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$DEPLOY_SSH_KEY_FILE"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          bash website/scripts/sync-easyview-downloads.sh release-assets "$RELEASE_VERSION"
+      - name: Update website desktop downloads and push main
+        working-directory: website
+        run: |
+          set -euo pipefail
+          # Fetch before editing so unrelated website changes are preserved.
+          git pull --ff-only origin main
+          node scripts/easyview-release.mjs update-site sites/easyview/index.html "$RELEASE_VERSION"
+          git diff --check
+          git add sites/easyview/index.html
+          if git diff --cached --quiet; then
+            echo 'Website already has this desktop version; no commit needed.'
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "Update EasyView desktop downloads to $RELEASE_TAG"
+            git push origin HEAD:main
+          fi

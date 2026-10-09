@@ -11,7 +11,11 @@ coverage/
 playwright-report/
 test-results/
 dist/
-.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/release.yml
+!.github/workflows/desktop-build.yml
 .cursor/
 .vscode-test/
 .easyview/

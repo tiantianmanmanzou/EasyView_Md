@@ -30,11 +30,20 @@ suite('EasyView workspace reveal after restore', () => {
       const module = { exports: {} };
       new Function('require', 'module', 'exports', compiled.outputFiles[0].text)((name) => name === 'vscode' ? host : require(name), module, module.exports);
       await vscode.commands.executeCommand('vscode.openWith', first, 'easyviewMd.markdownEditor', { preview: false });
-      subscription = module.exports.registerWorkspaceExplorer({ extensionUri: vscode.Uri.file(path.resolve(__dirname, '..')), globalStorageUri: vscode.Uri.file(path.join(directory, 'data', 'User', 'globalStorage', 'easyview')) });
+      const workspaceState = new Map();
+      subscription = module.exports.registerWorkspaceExplorer({
+        extensionUri: vscode.Uri.file(path.resolve(__dirname, '..')),
+        globalStorageUri: vscode.Uri.file(path.join(directory, 'data', 'User', 'globalStorage', 'easyview')),
+        workspaceState: { get: (key) => workspaceState.get(key), update: async (key, value) => { workspaceState.set(key, value); } },
+      });
       const events = [];
       provider.resolveWebviewView({ visible: true, webview: { options: {}, asWebviewUri: (uri) => uri, onDidReceiveMessage: () => new vscode.Disposable(() => {}), postMessage: async (event) => { events.push(event); return true; }, html: '' }, onDidChangeVisibility: () => new vscode.Disposable(() => {}), onDidDispose: () => new vscode.Disposable(() => {}) }, {}, {});
       await provider.dispatchRequest({ type: 'ready' });
-      assert.ok(events.some((event) => event.type === 'bootstrap' && event.revealRelativePath === '功能设计/设计.md'), JSON.stringify(events));
+      const bootstrapDeadline = Date.now() + 10000;
+      while (!events.some((event) => event.type === 'bootstrap' && event.revealRelativePath === '功能设计/设计.md')) {
+        if (Date.now() > bootstrapDeadline) throw new Error(JSON.stringify(events));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       await vscode.commands.executeCommand('vscode.openWith', second, 'easyviewMd.markdownEditor', { preview: false });
       const deadline = Date.now() + 10000;
       while (!events.some((event) => event.type === 'reveal' && event.relativePath === '笔记/笔记本.md')) {

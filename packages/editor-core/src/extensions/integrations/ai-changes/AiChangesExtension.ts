@@ -314,8 +314,13 @@ let scrollMarkerChanges: BlockChange[] = [];
 let scrollMarkerView: EditorView | null = null;
 let scrollMarkerBound = false;
 let scrollMarkerLayoutObserver: ResizeObserver | null = null;
+let scrollMarkerFrame = 0;
 
 function clearScrollMarkers() {
+  if (scrollMarkerFrame) {
+    cancelAnimationFrame(scrollMarkerFrame);
+    scrollMarkerFrame = 0;
+  }
   if (scrollMarkerOverlay) {
     scrollMarkerOverlay.remove();
     scrollMarkerOverlay = null;
@@ -342,24 +347,19 @@ function layoutScrollMarkers() {
     const leftRailX = proseMirror
       ? Math.round(Math.max(rect.left, proseMirror.getBoundingClientRect().left - 6))
       : Math.round(rect.left);
-    scrollMarkerOverlay.style.left = `${rect.right - 10}px`;
-    scrollMarkerOverlay.style.top = `${rect.top}px`;
-    scrollMarkerOverlay.style.height = `${rect.height}px`;
-    scrollMarkerOverlay.innerHTML = '';
-    leftMarkerOverlay.style.left = `${leftRailX}px`;
-    leftMarkerOverlay.style.top = `${rect.top}px`;
-    leftMarkerOverlay.style.height = `${rect.height}px`;
-    leftMarkerOverlay.innerHTML = '';
-
     const viewportHeight = Math.max(1, rect.height);
     const scrollHeight = Math.max(1, scrollArea.scrollHeight);
     const renderedOverviewTops = new Set<number>();
+    // Read every block position before touching the DOM: interleaving reads with marker writes
+    // forces a full-page layout per change, which takes seconds on large table documents.
+    const measured = scrollMarkerChanges.flatMap((change) => {
+      const dom = scrollMarkerView!.nodeDOM(change.pos);
+      return dom instanceof HTMLElement ? [{ change, domRect: dom.getBoundingClientRect() }] : [];
+    });
+    const overviewMarkers = document.createDocumentFragment();
+    const leftMarkers = document.createDocumentFragment();
 
-    for (const change of scrollMarkerChanges) {
-      const dom = scrollMarkerView.nodeDOM(change.pos);
-      if (!(dom instanceof HTMLElement)) continue;
-
-      const domRect = dom.getBoundingClientRect();
+    for (const { change, domRect } of measured) {
       if (change.showOverview !== false) {
         const documentTop = domRect.top - rect.top + scrollArea.scrollTop;
         for (const sourceRatio of change.overviewRatios ?? [documentTop / scrollHeight]) {
@@ -373,7 +373,7 @@ function layoutScrollMarkers() {
             const marker = document.createElement('div');
             marker.className = `ai-scroll-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
             marker.style.top = `${markerTop}px`;
-            scrollMarkerOverlay.appendChild(marker);
+            overviewMarkers.appendChild(marker);
           }
         }
       }
@@ -385,9 +385,18 @@ function layoutScrollMarkers() {
         leftMarker.className = `ai-left-marker ${change.kind === 'added' ? 'added' : 'modified'}`;
         leftMarker.style.top = `${visibleTop}px`;
         leftMarker.style.height = `${Math.max(6, visibleBottom - visibleTop)}px`;
-        leftMarkerOverlay.appendChild(leftMarker);
+        leftMarkers.appendChild(leftMarker);
       }
     }
+
+    scrollMarkerOverlay.style.left = `${rect.right - 10}px`;
+    scrollMarkerOverlay.style.top = `${rect.top}px`;
+    scrollMarkerOverlay.style.height = `${rect.height}px`;
+    scrollMarkerOverlay.replaceChildren(overviewMarkers);
+    leftMarkerOverlay.style.left = `${leftRailX}px`;
+    leftMarkerOverlay.style.top = `${rect.top}px`;
+    leftMarkerOverlay.style.height = `${rect.height}px`;
+    leftMarkerOverlay.replaceChildren(leftMarkers);
   } catch {
     // Marker rendering should never interrupt editor updates.
   }
@@ -397,19 +406,27 @@ export function refreshAiChangeMarkers(): void {
   layoutScrollMarkers();
 }
 
+function scheduleScrollMarkerLayout(): void {
+  if (scrollMarkerFrame) return;
+  scrollMarkerFrame = requestAnimationFrame(() => {
+    scrollMarkerFrame = 0;
+    layoutScrollMarkers();
+  });
+}
+
 function bindScrollMarkerLayoutListeners(): void {
   if (scrollMarkerBound) return;
   scrollMarkerBound = true;
 
-  window.addEventListener('resize', layoutScrollMarkers);
-  window.addEventListener('easyview-toc-layout-change', layoutScrollMarkers);
-  window.addEventListener('easyview-table-wrap-layout-change', layoutScrollMarkers);
-  window.addEventListener('easyview-editor-layout-change', layoutScrollMarkers);
-  document.getElementById('editor-scroll-area')?.addEventListener('scroll', layoutScrollMarkers, { passive: true });
+  window.addEventListener('resize', scheduleScrollMarkerLayout);
+  window.addEventListener('easyview-toc-layout-change', scheduleScrollMarkerLayout);
+  window.addEventListener('easyview-table-wrap-layout-change', scheduleScrollMarkerLayout);
+  window.addEventListener('easyview-editor-layout-change', scheduleScrollMarkerLayout);
+  document.getElementById('editor-scroll-area')?.addEventListener('scroll', scheduleScrollMarkerLayout, { passive: true });
 
   if (typeof ResizeObserver === 'undefined') return;
 
-  scrollMarkerLayoutObserver = new ResizeObserver(() => layoutScrollMarkers());
+  scrollMarkerLayoutObserver = new ResizeObserver(scheduleScrollMarkerLayout);
   const scrollArea = document.getElementById('editor-scroll-area');
   const editorBody = document.getElementById('editor-body');
   const tocSidebar = document.querySelector('.toc-sidebar');

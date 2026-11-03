@@ -21,7 +21,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.js
 
 describe('workspace explorer contribution', () => {
   it('registers the Activity Bar container, WebviewView, commands, and scoped delete keys', () => {
-    expect(manifest.activationEvents).toContain('onStartupFinished');
+    expect(manifest.activationEvents).toContain('*');
     expect(manifest.activationEvents).toContain('onView:easyviewMd.workspaceFiles');
     expect(manifest.contributes.viewsContainers?.activitybar).toContainEqual(
       expect.objectContaining({ id: 'easyviewMd-workspacePanel' }),

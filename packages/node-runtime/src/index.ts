@@ -9,6 +9,7 @@ export * from './export/docx-export';
 export * from './export/html-export';
 export * from './export/pdf-export';
 export * from './export/xlsx-export';
+export * from './filesystem/file-clipboard';
 export * from './filesystem/file-write';
 export * from './git/git-service';
 export * from './image/image-security';
@@ -27,3 +28,5 @@ export * from './timeline/read-history-text';
 export * from './timeline/migrate-history';
 export * from './git/version-guard';
 export * from './git/flush-editor';
+
+export { workspaceEntrySize } from './workspace/workspace-entry-size';

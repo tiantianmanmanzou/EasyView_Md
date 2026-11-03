@@ -2,7 +2,7 @@
   "name": "easyview-md",
   "displayName": "EasyView_Md",
   "description": "%extension.description%",
-  "version": "2.2.47",
+  "version": "2.2.60",
   "publisher": "zhangxy",
   "license": "MIT",
   "private": true,
@@ -42,7 +42,7 @@
     "verify:package": "node scripts/verify-package.mjs"
   },
   "activationEvents": [
-    "onStartupFinished",
+    "*",
     "onFileSystem:easyviewMd",
     "onCustomEditor:easyviewMd.markdownEditor",
     "onCustomEditor:easyviewMd.filePreview",

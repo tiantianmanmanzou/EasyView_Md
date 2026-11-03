@@ -26,6 +26,8 @@ it('restores the saved font size offset and persists the value saved from the se
     sortMode: string;
     showCreatedAt: boolean;
     showUpdatedAt: boolean;
+    showSize: boolean;
+    showSizeHover: boolean;
     showTimestampHover: boolean;
     showNameHover: boolean;
     showDotEntries: boolean;
@@ -37,6 +39,8 @@ it('restores the saved font size offset and persists the value saved from the se
     sortMode: view.sortMode,
     showCreatedAt: view.showCreatedAt,
     showUpdatedAt: view.showUpdatedAt,
+    showSize: view.showSize,
+    showSizeHover: view.showSizeHover,
     showTimestampHover: view.showTimestampHover,
     showNameHover: view.showNameHover,
     showDotEntries: view.showDotEntries,
@@ -62,6 +66,8 @@ it('restores and persists the full-name hover setting locally', async () => {
     sortMode: view.sortMode,
     showCreatedAt: view.showCreatedAt,
     showUpdatedAt: view.showUpdatedAt,
+    showSize: view.showSize,
+    showSizeHover: view.showSizeHover,
     showTimestampHover: view.showTimestampHover,
     showNameHover: true,
     showDotEntries: view.showDotEntries,

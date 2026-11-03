@@ -2098,6 +2098,7 @@ function initEditor() {
     else toc.close();
     isTocVisible = toc.visible;
     fileHeader.syncTocState(isTocVisible);
+    refreshChangeRailsAfterLayout();
     notifyUiState();
   };
   {
@@ -2169,10 +2170,7 @@ function initEditor() {
   fileHeader.setHistoryHandler(() => {
     historyPanel.toggle();
   });
-  fileHeader.setTocHandler(() => {
-    toc.toggle();
-    refreshChangeRailsAfterLayout();
-  });
+  fileHeader.setTocHandler(() => setOutlineVisibleImpl(!toc.visible));
 
   let isAllCollapsed = false;
   fileHeader.setCollapseHandler(() => {
@@ -2509,10 +2507,7 @@ function initEditor() {
   executeCommandImpl = (command) => {
     switch (command) {
       case 'toggleOutline':
-        toc.toggle();
-        isTocVisible = toc.visible;
-        fileHeader.syncTocState(isTocVisible);
-        notifyUiState();
+        setOutlineVisibleImpl(!toc.visible);
         return;
       case 'toggleSourceMode':
         openPreferredSourceMode();

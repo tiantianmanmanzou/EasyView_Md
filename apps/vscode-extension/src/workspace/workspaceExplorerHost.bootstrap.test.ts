@@ -4,6 +4,7 @@ const mock = vi.hoisted(() => ({
   provider: null as null | { resolveWebviewView(view: unknown, context: unknown, token: unknown): void },
   errors: [] as string[],
   focusOnStartup: false,
+  readFile: async (): Promise<Uint8Array> => { throw new Error('No saved sort config'); },
 }));
 
 vi.mock('vscode', () => {
@@ -25,7 +26,7 @@ vi.mock('vscode', () => {
       onDidSaveTextDocument: disposable,
       onDidRenameFiles: disposable,
       createFileSystemWatcher: () => ({ ...disposable(), onDidCreate: disposable, onDidChange: disposable, onDidDelete: disposable }),
-      fs: { readFile: async () => { throw new Error('No saved sort config'); } },
+      fs: { readFile: () => mock.readFile() },
     },
     window: {
       tabGroups: { all: [{ tabs: [] }], activeTabGroup: { activeTab: undefined }, onDidChangeTabs: disposable, onDidChangeTabGroups: disposable },
@@ -42,6 +43,13 @@ vi.mock('vscode', () => {
 import * as vscode from 'vscode';
 import { registerWorkspaceExplorer } from './workspaceExplorerHost';
 
+function memento(values = new Map<string, unknown>()) {
+  return {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    update: async (key: string, value: unknown) => { values.set(key, value); },
+  };
+}
+
 describe('workspace explorer startup', () => {
   it.each([
     { name: 'hides the sidebar in an empty welcome window', folder: false, tab: false, enabled: true, command: 'workbench.action.closeSidebar' },
@@ -57,7 +65,7 @@ describe('workspace explorer startup', () => {
       mock.focusOnStartup = enabled;
       Object.assign(vscode.workspace, { workspaceFolders: folder ? folders : undefined });
       Object.assign(vscode.window.tabGroups, { all: [{ tabs: tab ? [{ input: { uri: { scheme: 'file' } } }] : [] }] });
-      subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' } } as never);
+      subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
       const execute = vi.mocked(vscode.commands.executeCommand);
       execute.mockClear();
       await vi.advanceTimersByTimeAsync(250);
@@ -77,7 +85,7 @@ describe('workspace explorer startup', () => {
     const second = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, '笔记', '笔记本.md').with({ scheme: 'easyviewMd' });
     const tabGroup = vscode.window.tabGroups.activeTabGroup as unknown as { activeTab: unknown };
     tabGroup.activeTab = { input: { uri: first } } as never;
-    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' } } as never);
+    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
     const events: Array<{ type: string; relativePath?: string; revealRelativePath?: string }> = [];
     const provider = mock.provider as unknown as {
       resolveWebviewView(view: unknown, context: unknown, token: unknown): void;
@@ -102,7 +110,7 @@ describe('workspace explorer startup', () => {
   });
 
   it('routes PDF and Word tree actions to the existing converter commands for the clicked file', async () => {
-    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' } } as never);
+    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
     const provider = mock.provider as unknown as { dispatchRequest(message: unknown): Promise<void> };
     const execute = vi.mocked(vscode.commands.executeCommand);
     try {
@@ -118,7 +126,7 @@ describe('workspace explorer startup', () => {
   });
 
   it('receives a ready message emitted during HTML assignment and bootstraps the root', async () => {
-    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' } } as never);
+    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
     const events: Array<{ type: string; rootName?: string }> = [];
     let onMessage: ((message: unknown) => void) | undefined;
     const webview = {
@@ -134,11 +142,75 @@ describe('workspace explorer startup', () => {
     subscription.dispose();
   });
 
+  it('bootstraps only after tree-order.json is applied, even when the webview is ready first', async () => {
+    const defaultReadFile = mock.readFile;
+    let releaseConfig!: (bytes: Uint8Array) => void;
+    mock.readFile = () => new Promise((settle) => { releaseConfig = settle; });
+    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
+    const events: Array<{ type: string; sort?: { sortMode: string; showDotEntries: boolean } }> = [];
+    const provider = mock.provider as unknown as {
+      resolveWebviewView(view: unknown, context: unknown, token: unknown): void;
+      dispatchRequest(message: unknown): Promise<void>;
+    };
+    try {
+      provider.resolveWebviewView({
+        visible: true,
+        webview: { options: {}, asWebviewUri: (uri: unknown) => uri, onDidReceiveMessage: () => ({ dispose() {} }), postMessage: async (event: typeof events[number]) => { events.push(event); return true; }, html: '' },
+        onDidChangeVisibility: () => ({ dispose() {} }), onDidDispose: () => ({ dispose() {} }),
+      }, {}, {});
+      await provider.dispatchRequest({ type: 'ready' });
+      await new Promise((settle) => setTimeout(settle, 20));
+      expect(events.filter((event) => event.type === 'bootstrap')).toEqual([]);
+
+      releaseConfig(new TextEncoder().encode(JSON.stringify({ version: 1, sortMode: 'custom', showDotEntries: false, orders: {} })));
+      await vi.waitFor(() => expect(events.some((event) => event.type === 'bootstrap')).toBe(true));
+      expect(events.filter((event) => event.type === 'bootstrap').map((event) => event.sort))
+        .toEqual([expect.objectContaining({ sortMode: 'custom', showDotEntries: false })]);
+    } finally {
+      mock.readFile = defaultReadFile;
+      subscription.dispose();
+    }
+  });
+
+  it('restores the folders left expanded in the previous session', async () => {
+    const workspaceState = memento();
+    const start = () => {
+      const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState } as never);
+      const events: Array<{ type: string; expandedRelativePaths?: string[] }> = [];
+      const provider = mock.provider as unknown as {
+        resolveWebviewView(view: unknown, context: unknown, token: unknown): void;
+        dispatchRequest(message: unknown): Promise<void>;
+      };
+      provider.resolveWebviewView({
+        visible: true,
+        webview: { options: {}, asWebviewUri: (uri: unknown) => uri, onDidReceiveMessage: () => ({ dispose() {} }), postMessage: async (event: typeof events[number]) => { events.push(event); return true; }, html: '' },
+        onDidChangeVisibility: () => ({ dispose() {} }), onDidDispose: () => ({ dispose() {} }),
+      }, {}, {});
+      return { subscription, events, provider };
+    };
+
+    const first = start();
+    await first.provider.dispatchRequest({ type: 'ready' });
+    await vi.waitFor(() => expect(first.events.find((event) => event.type === 'bootstrap')?.expandedRelativePaths).toEqual([]));
+    await first.provider.dispatchRequest({ type: 'setExpanded', relativePath: 'docs', expanded: true });
+    await first.provider.dispatchRequest({ type: 'setExpanded', relativePath: 'docs/api', expanded: true });
+    await first.provider.dispatchRequest({ type: 'setExpanded', relativePath: 'docs/api', expanded: false });
+    first.subscription.dispose();
+
+    const second = start();
+    try {
+      await second.provider.dispatchRequest({ type: 'ready' });
+      await vi.waitFor(() => expect(second.events.find((event) => event.type === 'bootstrap')?.expandedRelativePaths).toEqual(['docs']));
+    } finally {
+      second.subscription.dispose();
+    }
+  });
+
   it('reloads a webview that never sends ready and reports a persistent failure', async () => {
     vi.useFakeTimers();
     try {
       mock.errors.length = 0;
-      const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' } } as never);
+      const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
       let loads = 0;
       const webview = {
         options: {},

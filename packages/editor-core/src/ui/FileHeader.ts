@@ -278,6 +278,7 @@ function ensureFileHeaderCompactStyles(): void {
     body.easyview-vscode-editor .file-header-bar {
       position: relative !important;
       box-shadow: none !important;
+      border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, rgba(128, 128, 128, .35)));
       transform-origin: top center;
       transition:
         max-height var(--easyview-toolbar-collapse-ms, 180ms) var(--easyview-toolbar-collapse-ease, cubic-bezier(0.4, 0, 0.2, 1)),
@@ -302,6 +303,7 @@ function ensureFileHeaderCompactStyles(): void {
       transform: translateY(-6px);
       padding-top: 0 !important;
       padding-bottom: 0 !important;
+      border-bottom-width: 0 !important;
       pointer-events: none !important;
     }
     .file-header-show-toolbar {
@@ -1687,10 +1689,6 @@ export function createFileHeader(deps: FileHeaderDeps): FileHeader {
     setTocHandler(handler: () => void) {
       tocBtn.addEventListener('click', () => {
         handler();
-        const state = getState();
-        const newTocVisible = !state.isTocVisible;
-        setState({ isTocVisible: newTocVisible });
-        syncTocButton(newTocVisible);
         onSettingsChange();
       });
     },

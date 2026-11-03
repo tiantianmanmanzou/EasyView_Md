@@ -28,7 +28,7 @@ export interface DesktopWindowContext {
   pendingOpenPath?: string;
   terminalService?: TerminalService;
   activeTerminalSessionId?: string;
-  workspaceFileClipboard: { relativePath: string } | null;
+  workspaceFileClipboard: { relativePaths: string[] } | null;
   workspaceWatcher?: WorkspaceWatcher;
   aiChatHost?: AiChatHost;
   desktopMenuState: DesktopMenuState;

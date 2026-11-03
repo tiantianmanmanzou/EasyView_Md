@@ -30,6 +30,22 @@ describe('markdownToDocx inline styling', () => {
   });
 });
 
+describe('markdownToDocx tables', () => {
+  it('accepts separator cells with fewer than three dashes, like `:-:`', async () => {
+    const document = await markdownToDocx(
+      '| 序号 | 是否必填 |\n| :-: | :--: |\n| 1 | 是 |',
+      'short-separator-test',
+      '/tmp',
+    );
+    const zip = await JSZip.loadAsync(await Packer.toBuffer(document));
+    const xml = await zip.file('word/document.xml')!.async('string');
+
+    expect(xml).not.toContain(':-:');
+    expect((xml.match(/<w:tr\b/g) ?? [])).toHaveLength(2);
+    expect(xml).toContain('w:val="center"');
+  });
+});
+
 describe('markdownToDocx page orientation', () => {
   it('keeps a narrow table in the same portrait section as surrounding text', async () => {
     const document = await markdownToDocx(

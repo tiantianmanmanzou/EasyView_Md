@@ -47,6 +47,19 @@ describe('resolveWorkspaceTreeKeyAction', () => {
     })).toBeNull();
   });
 
+  it('copies paths with ⌥⌘C / ⇧⌥⌘C even though Option turns the key into "ç"', () => {
+    const selected = { targetIsEditable: false, hasSelection: true };
+    const alt = { code: 'KeyC', altKey: true };
+    expect(resolveWorkspaceTreeKeyAction({ ...event({ key: 'ç', metaKey: true }), ...alt }, selected)).toBe('copyPath');
+    expect(resolveWorkspaceTreeKeyAction({ ...event({ key: 'Ç', metaKey: true }), ...alt, shiftKey: true }, selected)).toBe('copyRelativePath');
+    expect(resolveWorkspaceTreeKeyAction({ ...event({ key: 'C' }), ...alt, shiftKey: true }, selected)).toBe('copyPath');
+    expect(resolveWorkspaceTreeKeyAction({ ...event({ key: 'ç' }), ...alt }, selected)).toBeNull();
+    expect(resolveWorkspaceTreeKeyAction({ ...event({ key: 'ç', metaKey: true }), ...alt }, {
+      targetIsEditable: false,
+      hasSelection: false,
+    })).toBeNull();
+  });
+
   it('pastes with Cmd/Ctrl+V even when the tree has no selection', () => {
     expect(resolveWorkspaceTreeKeyAction(event({ key: 'v', metaKey: true }), {
       targetIsEditable: false,

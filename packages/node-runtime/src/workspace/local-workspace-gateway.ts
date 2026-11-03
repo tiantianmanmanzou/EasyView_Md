@@ -96,15 +96,17 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
         const kind = entry.isSymbolicLink() ? 'symlink' : entry.isDirectory() ? 'directory' : 'file';
         let createdAt: number | undefined;
         let updatedAt: number | undefined;
+        let sizeBytes: number | undefined;
         try {
           const stat = await fs.lstat(absolutePath);
+          sizeBytes = stat.isFile() ? stat.size : undefined;
           createdAt = resolveCreatedAtMs(stat);
           updatedAt = Number.isFinite(stat.mtimeMs) ? Math.trunc(stat.mtimeMs) : undefined;
         } catch {
           createdAt = undefined;
           updatedAt = undefined;
         }
-        return this.toEntry(root.id, entryRelativePath, entry.name, kind, createdAt, updatedAt);
+        return { ...this.toEntry(root.id, entryRelativePath, entry.name, kind, createdAt, updatedAt), ...(sizeBytes !== undefined ? { sizeBytes } : {}) };
       }));
     }, tWorkspaceError('listFailed', { path: relativePath }));
   }

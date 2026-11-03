@@ -215,6 +215,11 @@ export interface WorkspaceApi {
   search(query: string): Promise<import('@easyview/contracts').OperationResult<import('@easyview/contracts').WorkspaceSearchResult>>;
   getSortMode(): Promise<import('@easyview/contracts').OperationResult<import('./workspace').WorkspaceTreeSortMode>>;
   setSortMode(sortMode: import('./workspace').WorkspaceTreeSortMode): Promise<import('@easyview/contracts').OperationResult<import('./workspace').WorkspaceTreeSortMode>>;
+  getEntrySize(relativePath: string): Promise<import('@easyview/contracts').OperationResult<number>>;
+  getShowSizeHover(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setShowSizeHover(showSizeHover: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  getShowSize(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setShowSize(showSize: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   getShowCreatedAt(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   setShowCreatedAt(showCreatedAt: boolean): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   getShowUpdatedAt(): Promise<import('@easyview/contracts').OperationResult<boolean>>;
@@ -228,11 +233,12 @@ export interface WorkspaceApi {
   move(request: import('./workspace').WorkspaceMoveRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
   reorder(request: import('./workspace').WorkspaceReorderRequest): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   delete(request: WorkspaceDeleteRequest): Promise<import('@easyview/contracts').OperationResult<boolean>>;
-  copyClipboard(relativePath: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  copyClipboard(relativePaths: string[]): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   pasteClipboard(request: WorkspacePasteRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
   importExternal(request: WorkspaceImportExternalRequest): Promise<import('@easyview/contracts').OperationResult<WorkspaceEntry>>;
   getResourcePaths(relativePath: string): Promise<import('@easyview/contracts').OperationResult<WorkspaceResourcePaths>>;
-  showContextMenu(relativePath: string, kind: WorkspaceEntry['kind']): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  /** Copy actions apply to `selectedRelativePaths` when it contains the clicked entry. */
+  showContextMenu(relativePath: string, kind: WorkspaceEntry['kind'], selectedRelativePaths: string[]): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   /** Native type picker anchored at screen coordinates (button bottom-left). */
   popupNewFileMenu(parentRelativePath: string, x: number, y: number): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   openEntry(relativePath: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;

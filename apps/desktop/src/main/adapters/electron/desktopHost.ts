@@ -5,6 +5,7 @@ import { loadLanguagePreference } from '../../application/settings/languageSetti
 import { createAppStateStore } from '../../application/document/appState';
 import { createDesktopAiChatHost } from '../../application/ai/createDesktopAiChatHost';
 import { initRecentFolderStore } from '../../application/workspace/recentFolders';
+import { initExplorerExpansionStore } from '../../application/workspace/explorerExpansion';
 import {
   closeAllTabResources,
   readDocument,
@@ -148,6 +149,7 @@ if (!hasSingleInstanceLock) {
     setAppStateStore(appStateStore);
     await appStateStore.load();
     await initRecentFolderStore(app.getPath('userData')).load();
+    await initExplorerExpansionStore(app.getPath('userData')).load();
     setAiChatHost(createDesktopAiChatHost());
     registerPreviewProtocol(protocol, previewProtocolSessions);
     registerDesktopIpc();

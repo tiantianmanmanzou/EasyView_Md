@@ -784,3 +784,14 @@ body.desktop-welcome-active:not(.desktop-welcome-full) #version-guard-host { bac
   color: var(--vscode-button-secondaryForeground); cursor: pointer; transition: background 150ms ease;
 }
 .folder-icon-picker-reset:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+.workspace-entry-size {
+  flex: none;
+  margin-inline-start: 8px;
+  font-size: 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.workspace-icon-tile .workspace-entry-size { margin-inline-start: 0; }
+
+.workspace-entry.has-directory-size:hover .workspace-entry-timestamps { padding-inline-end: 26px; }

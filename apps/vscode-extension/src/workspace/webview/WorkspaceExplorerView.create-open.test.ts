@@ -76,6 +76,32 @@ it.each(['extension', 'desktop'] as const)('%s confirms the create name once on 
   expect(owner.createEntry).toHaveBeenCalledWith(pending, '方案.docx');
 });
 
+it.each(['extension', 'desktop'] as const)('%s keeps editing the create name when a re-render replaces the input', async (host) => {
+  vi.stubGlobal('requestAnimationFrame', vi.fn());
+  const pending: { parentRelativePath: string; kind: 'file'; extension: string; draftName?: string } = { parentRelativePath: 'docs', kind: 'file', extension: '.md' };
+  const prototype = (host === 'extension' ? WorkspaceExplorerView.prototype : WorkspaceExplorer.prototype) as unknown as {
+    renderCreateInput(depth: number): HTMLFormElement;
+  };
+  const owner = {
+    pendingCreate: pending,
+    setEditing: vi.fn(),
+    render: vi.fn(),
+    defaultCreateName: () => 'Untitled.md',
+    createEntry: vi.fn(async () => undefined),
+  };
+  const form = prototype.renderCreateInput.call(owner as never, 1);
+  document.body.append(form);
+  const input = form.querySelector('input')!;
+  input.value = '方案';
+  input.dispatchEvent(new Event('input'));
+  form.remove();
+  input.dispatchEvent(new FocusEvent('blur'));
+  await Promise.resolve();
+  expect(owner.createEntry).not.toHaveBeenCalled();
+  const next = prototype.renderCreateInput.call(owner as never, 1);
+  expect(next.querySelector('input')!.value).toBe('方案');
+});
+
 it.each(['extension', 'desktop'] as const)('%s does not open a created directory', async (host) => {
   const created: WorkspaceExplorerEntry = {
     id: 'folder', rootId: 'workspace', name: 'New Folder',

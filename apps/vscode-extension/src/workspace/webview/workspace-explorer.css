@@ -925,3 +925,14 @@ body {
   .folder-icon-picker-grid { grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 8px; }
   .folder-icon-picker-tile svg { width: 26px; height: 26px; }
 }
+
+.workspace-entry-size {
+  flex: none;
+  margin-inline-start: 8px;
+  font-size: 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.workspace-icon-tile .workspace-entry-size { margin-inline-start: 0; }
+
+.workspace-entry.has-directory-size:hover .workspace-entry-timestamps { padding-inline-end: 26px; }

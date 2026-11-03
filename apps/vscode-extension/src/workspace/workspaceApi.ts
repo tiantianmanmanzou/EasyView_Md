@@ -24,6 +24,7 @@ import {
   WorkspaceFileOperationService,
   WorkspaceTreeModel,
   WorkspaceTreeOrderState,
+  workspaceEntrySize,
 } from '@easyview/node-runtime';
 import { tWorkspace } from './workspace.i18n';
 
@@ -67,8 +68,10 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
       const childUri = this.uriFor(rootId, childRelativePath);
       let createdAt: number | undefined;
       let updatedAt: number | undefined;
+      let sizeBytes: number | undefined;
       try {
         const stat = await vscode.workspace.fs.stat(childUri);
+        sizeBytes = (fileType & vscode.FileType.SymbolicLink) === 0 && (fileType & vscode.FileType.File) !== 0 ? stat.size : undefined;
         createdAt = Number.isFinite(stat.ctime) ? Math.trunc(stat.ctime) : undefined;
         updatedAt = Number.isFinite(stat.mtime) ? Math.trunc(stat.mtime) : undefined;
       } catch {
@@ -81,6 +84,7 @@ export class VscodeWorkspaceGateway implements WorkspaceGateway {
         name,
         relativePath: childRelativePath,
         kind: fileTypeToEntryKind(fileType),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
         ...(createdAt !== undefined ? { createdAt } : {}),
         ...(updatedAt !== undefined ? { updatedAt } : {}),
       };
@@ -239,8 +243,9 @@ export class WorkspaceTreeService {
   );
   private rootUri: vscode.Uri | undefined;
   private persistTimer: NodeJS.Timeout | undefined;
+  private orderLoaded: Promise<void> = Promise.resolve();
 
-  setRoot(root: vscode.Uri | undefined, onOrderLoaded?: () => void): void {
+  setRoot(root: vscode.Uri | undefined): void {
     this.gateway.clearRoots();
     this.model.clear();
     this.rootUri = root;
@@ -249,14 +254,19 @@ export class WorkspaceTreeService {
       sortMode: 'name',
       showCreatedAt: false,
       showUpdatedAt: false,
+      showSize: false,
+      showSizeHover: false,
       showDotEntries: true,
       showTimestampHover: true,
       orders: {},
     });
-    if (root) {
-      this.gateway.registerRoot(root);
-      void this.loadOrderConfig().then(() => onOrderLoaded?.());
-    }
+    if (root) this.gateway.registerRoot(root);
+    this.orderLoaded = root ? this.loadOrderConfig() : Promise.resolve();
+  }
+
+  /** Reads before this resolves would use the default sort and visibility instead of the root's tree-order.json. */
+  whenOrderLoaded(): Promise<void> {
+    return this.orderLoaded;
   }
 
   getSortMode(): WorkspaceTreeSortMode {
@@ -269,6 +279,20 @@ export class WorkspaceTreeService {
 
   getShowUpdatedAt(): boolean {
     return this.orderState.getShowUpdatedAt();
+  }
+
+  getShowSizeHover(): boolean { return this.orderState.getShowSizeHover(); }
+
+  async setShowSizeHover(showSizeHover: boolean): Promise<void> {
+    this.orderState.setShowSizeHover(showSizeHover);
+    await this.persistOrderConfig();
+  }
+
+  getShowSize(): boolean { return this.orderState.getShowSize(); }
+
+  async setShowSize(showSize: boolean): Promise<void> {
+    this.orderState.setShowSize(showSize);
+    await this.persistOrderConfig();
   }
 
   getShowDotEntries(): boolean {
@@ -322,7 +346,12 @@ export class WorkspaceTreeService {
     await this.persistOrderConfig();
   }
 
+  async getEntrySize(root: vscode.Uri, relativePath: string): Promise<number> {
+    return workspaceEntrySize(this.gateway, this.gateway.registerRoot(root), relativePath);
+  }
+
   async readChildren(root: vscode.Uri, relativePath: string): Promise<VscodeWorkspaceEntry[]> {
+    await this.orderLoaded;
     const rootId = this.gateway.registerRoot(root);
     const entries = await this.model.listChildren(rootId, relativePath);
     const writable = vscode.workspace.fs.isWritableFileSystem(root.scheme) !== false;
@@ -334,6 +363,7 @@ export class WorkspaceTreeService {
   }
 
   async search(root: vscode.Uri, query: string): Promise<{ entries: VscodeWorkspaceEntry[]; truncated: boolean }> {
+    await this.orderLoaded;
     const rootId = this.gateway.registerRoot(root);
     const result = await searchWorkspaceTree(this.model, rootId, query, { showDotEntries: this.getShowDotEntries() });
     const writable = vscode.workspace.fs.isWritableFileSystem(root.scheme) !== false;
@@ -521,6 +551,8 @@ export class WorkspaceTreeService {
         sortMode: 'name',
         showCreatedAt: false,
         showUpdatedAt: false,
+        showSize: false,
+        showSizeHover: false,
         showDotEntries: true,
         showTimestampHover: true,
         orders: {},

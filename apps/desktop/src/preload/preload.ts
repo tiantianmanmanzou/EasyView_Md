@@ -165,6 +165,20 @@ const api: EasyViewDesktopApi = {
       }
       return ipcRenderer.invoke('workspace.setSortMode', sortMode) as Promise<OperationResult<WorkspaceTreeSortMode>>;
     },
+    getEntrySize: (relativePath: string) => {
+      assertRelativePath(relativePath);
+      return ipcRenderer.invoke('workspace.getEntrySize', relativePath) as Promise<OperationResult<number>>;
+    },
+    getShowSizeHover: () => ipcRenderer.invoke('workspace.getShowSizeHover') as Promise<OperationResult<boolean>>,
+    setShowSizeHover: (showSizeHover: boolean) => {
+      if (typeof showSizeHover !== 'boolean') throw new TypeError(tPreload('invalidArgument', { name: 'showSizeHover' }));
+      return ipcRenderer.invoke('workspace.setShowSizeHover', showSizeHover) as Promise<OperationResult<boolean>>;
+    },
+    getShowSize: () => ipcRenderer.invoke('workspace.getShowSize') as Promise<OperationResult<boolean>>,
+    setShowSize: (showSize: boolean) => {
+      if (typeof showSize !== 'boolean') throw new TypeError(tPreload('invalidArgument', { name: 'showSize' }));
+      return ipcRenderer.invoke('workspace.setShowSize', showSize) as Promise<OperationResult<boolean>>;
+    },
     getShowCreatedAt: () => ipcRenderer.invoke('workspace.getShowCreatedAt') as Promise<OperationResult<boolean>>,
     setShowCreatedAt: (showCreatedAt: boolean) => {
       if (typeof showCreatedAt !== 'boolean') throw new TypeError(tPreload('invalidArgument', { name: 'showCreatedAt' }));
@@ -211,9 +225,9 @@ const api: EasyViewDesktopApi = {
       assertRelativePath(request?.relativePath);
       return ipcRenderer.invoke('workspace.delete', request) as Promise<OperationResult<boolean>>;
     },
-    copyClipboard: (relativePath: string) => {
-      assertRelativePath(relativePath);
-      return ipcRenderer.invoke('workspace.copyClipboard', relativePath) as Promise<OperationResult<boolean>>;
+    copyClipboard: (relativePaths: string[]) => {
+      relativePaths.forEach(assertRelativePath);
+      return ipcRenderer.invoke('workspace.copyClipboard', relativePaths) as Promise<OperationResult<boolean>>;
     },
     pasteClipboard: (request: WorkspacePasteRequest) => {
       assertRelativePath(request?.targetRelativePath);
@@ -227,10 +241,11 @@ const api: EasyViewDesktopApi = {
       assertRelativePath(relativePath);
       return ipcRenderer.invoke('workspace.getResourcePaths', relativePath);
     },
-    showContextMenu: (relativePath: string, kind: WorkspaceEntry['kind']) => {
+    showContextMenu: (relativePath: string, kind: WorkspaceEntry['kind'], selectedRelativePaths: string[]) => {
       assertRelativePath(relativePath);
+      selectedRelativePaths.forEach(assertRelativePath);
       if (kind !== 'file' && kind !== 'directory' && kind !== 'symlink') throw new TypeError(tPreload('invalidKind'));
-      return ipcRenderer.invoke('workspace.showContextMenu', { relativePath, kind });
+      return ipcRenderer.invoke('workspace.showContextMenu', { relativePath, kind, selectedRelativePaths });
     },
     popupNewFileMenu: (parentRelativePath: string, x: number, y: number) => {
       assertRelativePath(parentRelativePath);

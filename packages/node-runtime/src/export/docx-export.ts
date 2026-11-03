@@ -506,7 +506,7 @@ function parseMarkdownTableAlignments(separator: string[]): ('left' | 'center' |
   const alignments: ('left' | 'center' | 'right')[] = [];
   for (const cell of separator) {
     const value = cell.trim().replace(/\s+/g, '');
-    if (!/^:?-{3,}:?$/.test(value)) return null;
+    if (!/^:?-+:?$/.test(value)) return null;
     alignments.push(value.startsWith(':') && value.endsWith(':') ? 'center' : value.endsWith(':') ? 'right' : 'left');
   }
   return alignments.length > 0 ? alignments : null;

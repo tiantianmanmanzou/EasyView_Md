@@ -16,6 +16,8 @@ export interface WorkspaceTreeOrderConfig {
   showCreatedAt: boolean;
   /** Show last-modified time beside tree entries. */
   showUpdatedAt: boolean;
+  showSize: boolean;
+  showSizeHover: boolean;
   /** When false, hide entries whose name starts with `.`. Default true. */
   showDotEntries: boolean;
   /** When false, hide created/updated time on row hover. Default true. */
@@ -29,6 +31,8 @@ export const DEFAULT_WORKSPACE_TREE_ORDER_CONFIG: WorkspaceTreeOrderConfig = {
   sortMode: 'name',
   showCreatedAt: false,
   showUpdatedAt: false,
+  showSize: false,
+  showSizeHover: false,
   showDotEntries: true,
   showTimestampHover: true,
   orders: {},
@@ -66,6 +70,8 @@ export function parseWorkspaceTreeOrderConfig(raw: unknown): WorkspaceTreeOrderC
     sortMode: sortMode as WorkspaceTreeSortMode,
     showCreatedAt: value.showCreatedAt === true || (value.showCreatedAt === undefined && value.showTimestamps === true),
     showUpdatedAt: value.showUpdatedAt === true || (value.showUpdatedAt === undefined && value.showTimestamps === true),
+    showSize: value.showSize === true,
+    showSizeHover: value.showSizeHover === true,
     // Absent key → show (legacy configs); explicit false hides.
     showDotEntries: value.showDotEntries !== false,
     showTimestampHover: value.showTimestampHover !== false,
@@ -79,6 +85,8 @@ export function serializeWorkspaceTreeOrderConfig(config: WorkspaceTreeOrderConf
     sortMode: config.sortMode,
     showCreatedAt: config.showCreatedAt === true,
     showUpdatedAt: config.showUpdatedAt === true,
+    showSize: config.showSize === true,
+    showSizeHover: config.showSizeHover === true,
     showDotEntries: config.showDotEntries !== false,
     showTimestampHover: config.showTimestampHover !== false,
     orders: config.orders,

@@ -127,12 +127,16 @@ export function computeNextWorkspaceTreeSelection(
 }
 
 /** Keyboard command shared by Desktop's DOM tree and the Extension webview tree. */
-export type WorkspaceTreeKeyAction = 'rename' | 'copy' | 'paste' | 'delete';
+export type WorkspaceTreeKeyAction = 'rename' | 'copy' | 'copyPath' | 'copyRelativePath' | 'paste' | 'delete';
 
 export interface WorkspaceTreeKeyEventLike {
   key: string;
+  /** Physical key; Option changes `key` on macOS (⌥C → "ç"), so Alt shortcuts match on this. */
+  code?: string;
   metaKey: boolean;
   ctrlKey: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
 }
 
 export interface WorkspaceTreeKeyActionInput {
@@ -149,6 +153,8 @@ export interface WorkspaceTreeKeyActionInput {
  * and delete implementations; this only decides *whether* a shortcut fires.
  *
  * - F2 / Enter → rename (needs a primary selection)
+ * - Cmd/Ctrl+Alt+C, Shift+Alt+C → copyPath (needs any selection)
+ * - Cmd/Ctrl+Shift+Alt+C → copyRelativePath (needs any selection)
  * - Cmd/Ctrl+C → copy (needs any selection)
  * - Cmd/Ctrl+V → paste (always, even with an empty selection — paste into root)
  * - Delete / Cmd+Backspace → delete (needs any selection)
@@ -161,6 +167,11 @@ export function resolveWorkspaceTreeKeyAction(
   const hasPrimary = input.hasPrimarySelection ?? input.hasSelection;
   if ((event.key === 'F2' || event.key === 'Enter') && hasPrimary) return 'rename';
   const modifier = event.metaKey || event.ctrlKey;
+  if (event.altKey && event.code === 'KeyC') {
+    if (!input.hasSelection) return null;
+    if (modifier) return event.shiftKey ? 'copyRelativePath' : 'copyPath';
+    return event.shiftKey ? 'copyPath' : null;
+  }
   if (modifier && event.key.toLowerCase() === 'c' && input.hasSelection) return 'copy';
   if (modifier && event.key.toLowerCase() === 'v') return 'paste';
   const deleteShortcut = event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey);

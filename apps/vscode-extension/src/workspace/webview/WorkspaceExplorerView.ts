@@ -9,6 +9,7 @@ import {
 import type { TimelineClient, WorkspaceSearchResult } from '@easyview/contracts';
 import {
   describeWorkspaceEntryTimestamps,
+  formatWorkspaceSize,
   getCustomFolderIcon,
   setCustomFolderIcon,
   getFolderIconDefinition,
@@ -104,12 +105,15 @@ export class WorkspaceExplorerView {
   private sortMode: WorkspaceTreeSortMode = 'name';
   private displayMode: WorkspaceDisplayMode = 'list';
   private iconDirectory = '';
+  private showSize = false;
+  private showSizeHover = false;
+  private sizeRequests = new Map<string, Promise<number | undefined>>();
   private showCreatedAt = false;
   private showUpdatedAt = false;
   private showDotEntries = true;
   private showTimestampHover = true;
   private showNameHover = true;
-  private pendingCreate: { parentRelativePath: string; kind: 'file' | 'directory'; extension?: string } | null = null;
+  private pendingCreate: { parentRelativePath: string; kind: 'file' | 'directory'; extension?: string; draftName?: string } | null = null;
   private renamePath: string | null = null;
   private settingsDialog: WorkspaceSettingsDialogHandle | null = null;
   private settingsQueue: Promise<void> = Promise.resolve();
@@ -283,6 +287,8 @@ export class WorkspaceExplorerView {
 
   private applySortConfig(sort: WorkspaceExplorerSortConfig): void {
     this.sortMode = sort.sortMode;
+    this.showSize = sort.showSize === true;
+    this.showSizeHover = sort.showSizeHover === true;
     this.showCreatedAt = sort.showCreatedAt;
     this.showUpdatedAt = sort.showUpdatedAt;
     this.showDotEntries = sort.showDotEntries !== false;
@@ -311,8 +317,10 @@ export class WorkspaceExplorerView {
     this.rootLoadError = null;
     this.applySortConfig(event.sort);
     this.hasClipboard = event.hasClipboard;
+    this.sizeRequests.clear();
     this.entriesByDirectory.clear();
     this.expanded.clear();
+    for (const relativePath of event.expandedRelativePaths) this.expanded.add(relativePath);
     this.selected.clear();
     this.anchor = null;
     this.primarySelected = null;
@@ -325,8 +333,7 @@ export class WorkspaceExplorerView {
     this.resetSearch();
     this.render();
     if (this.rootUri !== null || this.rootName !== null) {
-      void this.loadDirectory('').then(async () => {
-        if (this.displayMode === 'icons' && this.iconDirectory) await this.loadDirectory(this.iconDirectory);
+      void this.refreshExpanded().then(() => {
         if (event.revealRelativePath) void this.onReveal(event.revealRelativePath);
       });
     }
@@ -338,6 +345,7 @@ export class WorkspaceExplorerView {
     this.rootUri = null;
     this.iconDirectory = '';
     this.rootLoadError = null;
+    this.sizeRequests.clear();
     this.entriesByDirectory.clear();
     this.expanded.clear();
     this.selected.clear();
@@ -356,6 +364,8 @@ export class WorkspaceExplorerView {
 
   private async onFsChanged(relativePaths: string[]): Promise<void> {
     if (!this.hasRoot()) return;
+    this.sizeRequests.clear();
+    if (this.showSize) this.render();
     if (this.searchOpen) this.searchPanel?.refresh();
     if (this.editing || this.pendingCreate || this.renamePath) return;
     const targets = [...new Set(relativePaths.map(normalizeRelativePath))].filter(
@@ -490,6 +500,7 @@ export class WorkspaceExplorerView {
       return;
     }
     if (relativePath === '') this.rootLoadError = null;
+    for (const entry of result.entries) this.sizeRequests.delete(entry.relativePath);
     this.entriesByDirectory.set(result.relativePath, result.entries);
     this.render();
   }
@@ -579,6 +590,10 @@ export class WorkspaceExplorerView {
     }
     if (action === 'copy') {
       void this.copyEntries([...this.selected]);
+      return;
+    }
+    if (action === 'copyPath' || action === 'copyRelativePath') {
+      this.post({ type: action, relativePaths: [...this.selected] });
       return;
     }
     if (action === 'paste') {
@@ -750,6 +765,8 @@ export class WorkspaceExplorerView {
         sortMode: this.sortMode,
         showCreatedAt: this.showCreatedAt,
         showUpdatedAt: this.showUpdatedAt,
+        showSize: this.showSize,
+        showSizeHover: this.showSizeHover,
         showTimestampHover: this.showTimestampHover,
         showNameHover: this.showNameHover,
         showDotEntries: this.showDotEntries,
@@ -770,6 +787,8 @@ export class WorkspaceExplorerView {
     if (values.fontSizeOffset !== this.fontSizeOffset) this.changeFontSizeOffset(values.fontSizeOffset);
     if (values.showCreatedAt !== this.showCreatedAt) await this.changeShowCreatedAt(values.showCreatedAt);
     if (values.showUpdatedAt !== this.showUpdatedAt) await this.changeShowUpdatedAt(values.showUpdatedAt);
+    if (values.showSize !== this.showSize) await this.changeShowSize(values.showSize);
+    if (values.showSizeHover !== this.showSizeHover) await this.changeShowSizeHover(values.showSizeHover);
     if (values.showTimestampHover !== this.showTimestampHover) await this.changeShowTimestampHover(values.showTimestampHover);
     if (values.showNameHover !== this.showNameHover) this.changeShowNameHover(values.showNameHover);
     if (values.showDotEntries !== this.showDotEntries) await this.changeShowDotEntries(values.showDotEntries);
@@ -873,6 +892,7 @@ export class WorkspaceExplorerView {
         this.attachHoverInfo(tile, entry, label);
       }
       this.appendEntryTimestamps(tile, entry);
+    this.appendEntrySize(tile, entry);
       tile.addEventListener('click', (event) => {
         this.selectionFollowsActive = false;
         this.select(entry.relativePath, {
@@ -1094,6 +1114,7 @@ export class WorkspaceExplorerView {
       row.appendChild(name);
       if (this.renamePath !== entry.relativePath) this.attachHoverInfo(row, entry, name);
       this.appendEntryTimestamps(row, entry);
+      this.appendEntrySize(row, entry);
       if (entry.kind === 'directory') {
         const create = document.createElement('button');
         create.type = 'button';
@@ -1107,7 +1128,7 @@ export class WorkspaceExplorerView {
           this.openNewFileTypeMenuAt(create, entry.relativePath);
         });
         row.appendChild(create);
-      } else if (this.showCreatedAt || this.showUpdatedAt) {
+      } else if (this.showCreatedAt || this.showUpdatedAt || this.showSize) {
         const spacer = document.createElement('span');
         spacer.className = 'workspace-entry-create-spacer';
         row.appendChild(spacer);
@@ -1121,6 +1142,38 @@ export class WorkspaceExplorerView {
       fragment.appendChild(this.renderCreateInput(depth));
     }
     return fragment;
+  }
+
+  private getEntrySize(entry: WorkspaceExplorerEntry): Promise<number | undefined> {
+    let request = this.sizeRequests.get(entry.relativePath);
+    if (!request && entry.kind === 'file' && entry.sizeBytes !== undefined) {
+      request = Promise.resolve(entry.sizeBytes);
+      this.sizeRequests.set(entry.relativePath, request);
+    }
+    if (!request) {
+      request = this.requestOp((requestId) => ({ type: 'getEntrySize', requestId, relativePath: entry.relativePath })).then((result) => result.ok ? result.sizeBytes : undefined).catch(() => undefined);
+      this.sizeRequests.set(entry.relativePath, request);
+    }
+    return request;
+  }
+
+  private appendEntrySize(row: HTMLElement, entry: WorkspaceExplorerEntry): void {
+    if (!this.showSize || entry.kind === 'symlink') return;
+    const value = document.createElement('span');
+    value.className = 'workspace-entry-size';
+    row.classList.add('has-timestamps');
+    if (entry.kind === 'directory') row.classList.add('has-directory-size');
+    let meta = row.querySelector<HTMLElement>('.workspace-entry-timestamps');
+    if (!meta) {
+      meta = document.createElement('span');
+      meta.className = 'workspace-entry-timestamps';
+      row.appendChild(meta);
+    }
+    meta.appendChild(value);
+    const request = this.getEntrySize(entry);
+    void request.then((size) => {
+      if (this.sizeRequests.get(entry.relativePath) === request && size !== undefined) value.textContent = formatWorkspaceSize(size);
+    });
   }
 
   private appendEntryTimestamps(row: HTMLElement, entry: WorkspaceExplorerEntry): void {
@@ -1149,14 +1202,24 @@ export class WorkspaceExplorerView {
 
   /** Shows the full name when `nameBox` clips it, plus timestamps, decided at hover time. */
   private attachHoverInfo(target: HTMLElement, entry: WorkspaceExplorerEntry, nameBox: HTMLElement): void {
+    let hovering = false;
     target.addEventListener('pointerenter', (event) => {
+      hovering = true;
       const lines: string[] = [];
       if (this.showNameHover && isClipped(nameBox)) lines.push(entry.name);
       const timestamps = this.showTimestampHover ? describeWorkspaceEntryTimestamps(entry)?.title : undefined;
       if (timestamps) lines.push(timestamps);
       if (lines.length > 0) this.showTimestampTooltip(lines.join('\n'), event.clientX, event.clientY);
+      if (this.showSizeHover && entry.kind !== 'symlink') {
+        const request = this.getEntrySize(entry);
+        void request.then((size) => {
+          if (!hovering || !target.isConnected || !this.showSizeHover || this.sizeRequests.get(entry.relativePath) !== request || size === undefined) return;
+          lines.push(tExplorer('sizeLabel', { size: formatWorkspaceSize(size) }));
+          this.showTimestampTooltip(lines.join('\n'), event.clientX, event.clientY);
+        });
+      }
     });
-    target.addEventListener('pointerleave', () => this.hideTimestampTooltip());
+    target.addEventListener('pointerleave', () => { hovering = false; this.hideTimestampTooltip(); });
   }
 
   private showTimestampTooltip(text: string, x: number, y: number): void {
@@ -1477,6 +1540,13 @@ export class WorkspaceExplorerView {
       });
     }
     items.push({
+      label: tExplorer('context.copyFile'),
+      action: () => this.post({
+        type: 'copyFile',
+        relativePaths: [...this.selected].length ? [...this.selected] : [entry.relativePath],
+      }),
+    });
+    items.push({
       label: tExplorer('context.paste'),
       shortcut: `${modKey()}V`,
       disabled: !this.hasClipboard || !writable,
@@ -1735,7 +1805,7 @@ export class WorkspaceExplorerView {
     input.autofocus = true;
     const pending = this.pendingCreate;
     input.value = pending
-      ? this.defaultCreateName(pending.kind, pending.extension)
+      ? pending.draftName ?? this.defaultCreateName(pending.kind, pending.extension)
       : unusedWorkspaceCreateFileName(tExplorer('create.defaultFileStem'), '.md', []);
     wrapper.appendChild(input);
     let submitting = false;
@@ -1748,6 +1818,9 @@ export class WorkspaceExplorerView {
       event.preventDefault();
       commit();
     });
+    input.addEventListener('input', () => {
+      if (pending) pending.draftName = input.value;
+    });
     input.addEventListener('keydown', (event) => {
       event.stopPropagation();
       if (event.key === 'Escape') {
@@ -1757,11 +1830,17 @@ export class WorkspaceExplorerView {
       }
     });
     input.addEventListener('focus', () => this.setEditing(true));
-    input.addEventListener('blur', commit);
+    // Re-rendering (e.g. the parent folder finishing its load) replaces this input, and Chromium
+    // blurs a focused node while removing it; only a blur that leaves the input mounted commits.
+    input.addEventListener('blur', () => {
+      queueMicrotask(() => {
+        if (input.isConnected) commit();
+      });
+    });
     requestAnimationFrame(() => {
-      if (!input.isConnected) return;
+      if (!input.isConnected || document.activeElement === input) return;
       input.focus();
-      input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
+      if (pending?.draftName === undefined) input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
     });
     return wrapper;
   }
@@ -1865,6 +1944,24 @@ export class WorkspaceExplorerView {
     else this.sortMode = sortMode;
     this.entriesByDirectory.clear();
     await this.refreshExpanded();
+  }
+
+  private async changeShowSizeHover(showSizeHover: boolean): Promise<void> {
+    this.hideTimestampTooltip();
+    const result = await this.requestOp((requestId) => ({ type: 'setShowSizeHover', requestId, showSizeHover }));
+    if (!result.ok) { this.showError(result.message); return; }
+    if (result.sort) this.applySortConfig(result.sort);
+    else this.showSizeHover = showSizeHover;
+    this.render();
+  }
+
+  private async changeShowSize(showSize: boolean): Promise<void> {
+    const result = await this.requestOp((requestId) => ({ type: 'setShowSize', requestId, showSize }));
+    if (!result.ok) { this.showError(result.message); return; }
+    if (result.sort) this.applySortConfig(result.sort);
+    else this.showSize = showSize;
+    this.sizeRequests.clear();
+    this.render();
   }
 
   private async changeShowCreatedAt(showCreatedAt: boolean): Promise<void> {

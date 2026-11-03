@@ -25,6 +25,8 @@ export class WorkspaceTreeOrderState implements WorkspaceTreeSortProvider {
       sortMode: this.config.sortMode,
       showCreatedAt: this.config.showCreatedAt,
       showUpdatedAt: this.config.showUpdatedAt,
+      showSize: this.config.showSize,
+      showSizeHover: this.config.showSizeHover,
       showDotEntries: this.config.showDotEntries,
       showTimestampHover: this.config.showTimestampHover,
       orders: { ...this.config.orders },
@@ -41,6 +43,20 @@ export class WorkspaceTreeOrderState implements WorkspaceTreeSortProvider {
 
   getShowUpdatedAt(): boolean {
     return this.config.showUpdatedAt === true;
+  }
+
+  getShowSizeHover(): boolean { return this.config.showSizeHover === true; }
+
+  setShowSizeHover(showSizeHover: boolean): WorkspaceTreeOrderConfig {
+    this.config = { ...this.config, showSizeHover };
+    return this.getConfig();
+  }
+
+  getShowSize(): boolean { return this.config.showSize === true; }
+
+  setShowSize(showSize: boolean): WorkspaceTreeOrderConfig {
+    this.config = { ...this.config, showSize };
+    return this.getConfig();
   }
 
   getShowDotEntries(): boolean {
@@ -67,6 +83,8 @@ export class WorkspaceTreeOrderState implements WorkspaceTreeSortProvider {
       sortMode: config.sortMode,
       showCreatedAt: config.showCreatedAt === true,
       showUpdatedAt: config.showUpdatedAt === true,
+      showSize: config.showSize === true,
+      showSizeHover: config.showSizeHover === true,
       showDotEntries: config.showDotEntries !== false,
       showTimestampHover: config.showTimestampHover !== false,
       orders: { ...config.orders },

@@ -25,6 +25,7 @@ import { DOCK_GRIP_ICON_SVG } from '../panelDock';
 import type { EasyViewDesktopApi } from '../../preload/desktopApi';
 import {
   describeWorkspaceEntryTimestamps,
+  formatWorkspaceSize,
   filterWorkspaceEntriesByDotVisibility,
   normalizeWorkspaceViewRelativePath as normalizeRelativePath,
   parentOfWorkspaceViewRelativePath as parentRelativePath,
@@ -86,7 +87,7 @@ const FOLDER_TREE_ICON_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="
 export class WorkspaceExplorer {
   private state: DesktopWorkspaceState | null = null;
   private readonly entriesByDirectory = new Map<string, WorkspaceEntry[]>();
-  private pendingCreate: { parentRelativePath: string; kind: 'file' | 'directory'; extension?: string } | null = null;
+  private pendingCreate: { parentRelativePath: string; kind: 'file' | 'directory'; extension?: string; draftName?: string } | null = null;
   private renameRelativePath: string | null = null;
   private selectedRelativePath: string | null = null;
   private selectedRelativePaths = new Set<string>();
@@ -97,6 +98,9 @@ export class WorkspaceExplorer {
   /** When true, selection tracks the active tab. User tree clicks turn this off until the tab changes. */
   private selectionFollowsActive = true;
   private sortMode: WorkspaceTreeSortMode = 'name';
+  private showSize = false;
+  private showSizeHover = false;
+  private sizeRequests = new Map<string, Promise<number | undefined>>();
   private showCreatedAt = false;
   private showUpdatedAt = false;
   private showDotEntries = true;
@@ -164,8 +168,7 @@ export class WorkspaceExplorer {
     this.render();
     if (this.state.rootPath) {
       await this.loadSortMode();
-      await this.loadDirectory('');
-      if (this.currentDirectory) await this.loadDirectory(this.currentDirectory);
+      await this.refreshExpanded();
     }
     return this.state;
   }
@@ -217,6 +220,7 @@ export class WorkspaceExplorer {
     this.selectedRelativePaths.clear();
     this.selectionAnchorRelativePath = null;
     this.entriesByDirectory.clear();
+    this.sizeRequests.clear();
     this.pendingCreate = null;
     this.renameRelativePath = null;
     this.searchOpen = false;
@@ -224,8 +228,7 @@ export class WorkspaceExplorer {
     this.render();
     this.options.onStateChange(next);
     await this.loadSortMode();
-    await this.loadDirectory('');
-    if (this.currentDirectory) await this.loadDirectory(this.currentDirectory);
+    await this.refreshExpanded();
   }
 
   setOutlineVisible(visible: boolean): void {
@@ -321,8 +324,12 @@ export class WorkspaceExplorer {
       this.beginRename(this.selectedRelativePath);
       return;
     }
-    if (action === 'copy' && this.selectedRelativePath) {
-      void this.options.api.workspace.copyClipboard(this.selectedRelativePath);
+    if (action === 'copy' && this.selectedRelativePaths.size > 0) {
+      void this.options.api.workspace.copyClipboard(this.orderedSelection());
+      return;
+    }
+    if (action === 'copyPath' || action === 'copyRelativePath') {
+      void this.copySelectionPaths(action === 'copyPath' ? 'absolutePath' : 'relativePath');
       return;
     }
     if (action === 'paste') {
@@ -331,6 +338,12 @@ export class WorkspaceExplorer {
     }
     if (action === 'delete') void this.deleteEntries([...this.selectedRelativePaths]);
   };
+
+  private async copySelectionPaths(field: 'absolutePath' | 'relativePath'): Promise<void> {
+    const results = await Promise.all(this.orderedSelection().map((relativePath) => this.options.api.workspace.getResourcePaths(relativePath)));
+    const paths = results.flatMap((result) => (result.ok ? [result.value[field]] : []));
+    if (paths.length > 0) await this.options.api.clipboard.writeText(paths.join('\n'));
+  }
 
   private async pasteEntry(targetRelativePath: string): Promise<void> {
     const result = await this.options.api.workspace.pasteClipboard({ targetRelativePath });
@@ -347,12 +360,15 @@ export class WorkspaceExplorer {
       if (relativePath && relativePath === this.currentDirectory) await this.navigateIconDirectory(parentRelativePath(relativePath));
       return;
     }
+    for (const entry of result.value) this.sizeRequests.delete(entry.relativePath);
     this.entriesByDirectory.set(relativePath, result.value);
     this.render();
   }
 
   private async refreshChanged(relativeDirectories: string[] | null): Promise<void> {
     if (!this.state?.rootPath) return;
+    this.sizeRequests.clear();
+    if (this.showSize) this.render();
     if (this.searchOpen) this.searchPanel?.refresh();
     if (relativeDirectories === null) {
       this.entriesByDirectory.clear();
@@ -406,6 +422,12 @@ export class WorkspaceExplorer {
     }
     const expanded = new Set(this.state?.expandedRelativePaths ?? []);
     return collectVisibleWorkspaceTreeRelativePaths(this.entriesByDirectory, (path) => expanded.has(path));
+  }
+
+  /** Selection in on-screen order, so copied paths read top to bottom. */
+  private orderedSelection(): string[] {
+    const visible = this.visibleRelativePaths().filter((path) => this.selectedRelativePaths.has(path));
+    return [...visible, ...[...this.selectedRelativePaths].filter((path) => !visible.includes(path))];
   }
 
   private updateState(patch: Partial<DesktopWorkspaceState>): void {
@@ -557,7 +579,7 @@ export class WorkspaceExplorer {
         && event.target.closest('.workspace-entry, .workspace-icon-tile, .workspace-create-row, .workspace-icon-navigation')) return;
       event.preventDefault();
       this.selectionFollowsActive = false;
-      void this.options.api.workspace.showContextMenu(this.currentDirectory, 'directory');
+      void this.options.api.workspace.showContextMenu(this.currentDirectory, 'directory', []);
     });
     container.appendChild(tree);
     tree.scrollTop = previousScrollTop;
@@ -573,6 +595,8 @@ export class WorkspaceExplorer {
         sortMode: this.sortMode,
         showCreatedAt: this.showCreatedAt,
         showUpdatedAt: this.showUpdatedAt,
+        showSize: this.showSize,
+        showSizeHover: this.showSizeHover,
         showTimestampHover: this.showTimestampHover,
         showNameHover: this.showNameHover,
         showDotEntries: this.showDotEntries,
@@ -597,6 +621,8 @@ export class WorkspaceExplorer {
     if (values.fontSizeOffset !== this.fontSizeOffset) this.changeFontSizeOffset(values.fontSizeOffset);
     if (values.showCreatedAt !== this.showCreatedAt) await this.changeShowCreatedAt(values.showCreatedAt);
     if (values.showUpdatedAt !== this.showUpdatedAt) await this.changeShowUpdatedAt(values.showUpdatedAt);
+    if (values.showSize !== this.showSize) await this.changeShowSize(values.showSize);
+    if (values.showSizeHover !== this.showSizeHover) await this.changeShowSizeHover(values.showSizeHover);
     if (values.showTimestampHover !== this.showTimestampHover) await this.changeShowTimestampHover(values.showTimestampHover);
     if (values.showNameHover !== this.showNameHover) this.changeShowNameHover(values.showNameHover);
     if (values.showDotEntries !== this.showDotEntries) await this.changeShowDotEntries(values.showDotEntries);
@@ -817,6 +843,7 @@ export class WorkspaceExplorer {
       this.attachHoverInfo(tile, entry, label);
     }
     this.appendEntryTimestamps(tile, entry);
+    this.appendEntrySize(tile, entry);
     tile.addEventListener('click', (event) => {
       this.selectionFollowsActive = false;
       this.select(entry.relativePath, { shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
@@ -837,7 +864,7 @@ export class WorkspaceExplorer {
       event.preventDefault();
       this.selectionFollowsActive = false;
       if (!this.selectedRelativePaths.has(entry.relativePath)) this.select(entry.relativePath);
-      void this.options.api.workspace.showContextMenu(entry.relativePath, entry.kind);
+      void this.options.api.workspace.showContextMenu(entry.relativePath, entry.kind, this.orderedSelection());
     });
     this.attachIconDragHandlers(tile, entry);
     return tile;
@@ -968,19 +995,20 @@ export class WorkspaceExplorer {
         event.preventDefault();
         this.selectionFollowsActive = false;
         if (!this.selectedRelativePaths.has(entry.relativePath)) this.select(entry.relativePath);
-        void this.options.api.workspace.showContextMenu(entry.relativePath, entry.kind);
+        void this.options.api.workspace.showContextMenu(entry.relativePath, entry.kind, this.orderedSelection());
       });
       this.attachDragHandlers(row, entry);
       row.appendChild(name);
       if (this.renameRelativePath !== entry.relativePath) this.attachHoverInfo(row, entry, name);
       this.appendEntryTimestamps(row, entry);
+      this.appendEntrySize(row, entry);
       if (entry.kind === 'directory') {
         const create = document.createElement('button');
         create.type = 'button'; create.className = 'workspace-entry-create'; create.textContent = '＋'; create.title = tExplorer('newFile');
         create.setAttribute('aria-haspopup', 'menu');
         create.addEventListener('click', (event) => { event.stopPropagation(); this.popupNewFileTypes(entry.relativePath, create); });
         row.appendChild(create);
-      } else if (this.showCreatedAt || this.showUpdatedAt) {
+      } else if (this.showCreatedAt || this.showUpdatedAt || this.showSize) {
         const spacer = document.createElement('span');
         spacer.className = 'workspace-entry-create-spacer';
         row.appendChild(spacer);
@@ -990,6 +1018,38 @@ export class WorkspaceExplorer {
     }
     if (this.pendingCreate?.parentRelativePath === relativePath) fragment.appendChild(this.renderCreateInput(depth));
     return fragment;
+  }
+
+  private getEntrySize(entry: WorkspaceEntry): Promise<number | undefined> {
+    let request = this.sizeRequests.get(entry.relativePath);
+    if (!request && entry.kind === 'file' && entry.sizeBytes !== undefined) {
+      request = Promise.resolve(entry.sizeBytes);
+      this.sizeRequests.set(entry.relativePath, request);
+    }
+    if (!request) {
+      request = this.options.api.workspace.getEntrySize(entry.relativePath).then((result) => result.ok ? result.value : undefined).catch(() => undefined);
+      this.sizeRequests.set(entry.relativePath, request);
+    }
+    return request;
+  }
+
+  private appendEntrySize(row: HTMLElement, entry: WorkspaceEntry): void {
+    if (!this.showSize || entry.kind === 'symlink') return;
+    const value = document.createElement('span');
+    value.className = 'workspace-entry-size';
+    row.classList.add('has-timestamps');
+    if (entry.kind === 'directory') row.classList.add('has-directory-size');
+    let meta = row.querySelector<HTMLElement>('.workspace-entry-timestamps');
+    if (!meta) {
+      meta = document.createElement('span');
+      meta.className = 'workspace-entry-timestamps';
+      row.appendChild(meta);
+    }
+    meta.appendChild(value);
+    const request = this.getEntrySize(entry);
+    void request.then((size) => {
+      if (this.sizeRequests.get(entry.relativePath) === request && size !== undefined) value.textContent = formatWorkspaceSize(size);
+    });
   }
 
   private appendEntryTimestamps(row: HTMLElement, entry: WorkspaceEntry): void {
@@ -1018,14 +1078,24 @@ export class WorkspaceExplorer {
 
   /** Shows the full name when `nameBox` clips it, plus timestamps, decided at hover time. */
   private attachHoverInfo(target: HTMLElement, entry: WorkspaceEntry, nameBox: HTMLElement): void {
+    let hovering = false;
     target.addEventListener('pointerenter', (event) => {
+      hovering = true;
       const lines: string[] = [];
       if (this.showNameHover && isClipped(nameBox)) lines.push(entry.name);
       const timestamps = this.showTimestampHover ? describeWorkspaceEntryTimestamps(entry)?.title : undefined;
       if (timestamps) lines.push(timestamps);
       if (lines.length > 0) this.showTimestampTooltip(lines.join('\n'), event.clientX, event.clientY);
+      if (this.showSizeHover && entry.kind !== 'symlink') {
+        const request = this.getEntrySize(entry);
+        void request.then((size) => {
+          if (!hovering || !target.isConnected || !this.showSizeHover || this.sizeRequests.get(entry.relativePath) !== request || size === undefined) return;
+          lines.push(tExplorer('sizeLabel', { size: formatWorkspaceSize(size) }));
+          this.showTimestampTooltip(lines.join('\n'), event.clientX, event.clientY);
+        });
+      }
     });
-    target.addEventListener('pointerleave', () => this.hideTimestampTooltip());
+    target.addEventListener('pointerleave', () => { hovering = false; this.hideTimestampTooltip(); });
   }
 
   private showTimestampTooltip(text: string, x: number, y: number): void {
@@ -1200,7 +1270,7 @@ export class WorkspaceExplorer {
     input.autofocus = true;
     const pending = this.pendingCreate;
     input.value = pending
-      ? this.defaultCreateName(pending.kind, pending.extension)
+      ? pending.draftName ?? this.defaultCreateName(pending.kind, pending.extension)
       : unusedWorkspaceCreateFileName(tExplorer('create.defaultFileStem'), '.md', []);
     wrapper.appendChild(input);
     let submitting = false;
@@ -1211,12 +1281,15 @@ export class WorkspaceExplorer {
       submitting = false;
     };
     wrapper.addEventListener('submit', (event) => { event.preventDefault(); void commit(); });
-    input.addEventListener('blur', () => { void commit(); });
+    input.addEventListener('input', () => { if (pending) pending.draftName = input.value; });
+    // Re-rendering (e.g. the parent folder finishing its load) replaces this input, and Chromium
+    // blurs a focused node while removing it; only a blur that leaves the input mounted commits.
+    input.addEventListener('blur', () => { queueMicrotask(() => { if (input.isConnected) void commit(); }); });
     input.addEventListener('keydown', (event) => { if (event.key === 'Escape') { this.pendingCreate = null; this.render(); } });
     requestAnimationFrame(() => {
-      if (!input.isConnected) return;
+      if (!input.isConnected || document.activeElement === input) return;
       input.focus();
-      input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
+      if (pending?.draftName === undefined) input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
     });
     return wrapper;
   }
@@ -1258,18 +1331,22 @@ export class WorkspaceExplorer {
   }
 
   private async loadSortMode(): Promise<void> {
-    const [sortResult, createdResult, updatedResult, hoverResult, dotResult] = await Promise.all([
+    const [sortResult, createdResult, updatedResult, hoverResult, dotResult, sizeResult, sizeHoverResult] = await Promise.all([
       this.options.api.workspace.getSortMode(),
       this.options.api.workspace.getShowCreatedAt(),
       this.options.api.workspace.getShowUpdatedAt(),
       this.options.api.workspace.getShowTimestampHover(),
       this.options.api.workspace.getShowDotEntries(),
+      this.options.api.workspace.getShowSize(),
+      this.options.api.workspace.getShowSizeHover(),
     ]);
     if (sortResult.ok) this.sortMode = sortResult.value;
     if (createdResult.ok) this.showCreatedAt = createdResult.value;
     if (updatedResult.ok) this.showUpdatedAt = updatedResult.value;
     if (hoverResult.ok) this.showTimestampHover = hoverResult.value;
     if (dotResult.ok) this.showDotEntries = dotResult.value;
+    if (sizeResult.ok) this.showSize = sizeResult.value;
+    if (sizeHoverResult.ok) this.showSizeHover = sizeHoverResult.value;
   }
 
   private async changeSortMode(sortMode: WorkspaceTreeSortMode): Promise<void> {
@@ -1286,6 +1363,22 @@ export class WorkspaceExplorer {
     this.sortMode = result.value;
     this.entriesByDirectory.clear();
     await this.refreshExpanded();
+  }
+
+  private async changeShowSizeHover(showSizeHover: boolean): Promise<void> {
+    this.hideTimestampTooltip();
+    const result = await this.options.api.workspace.setShowSizeHover(showSizeHover);
+    if (!result.ok) { window.alert(result.message); return; }
+    this.showSizeHover = result.value;
+    this.render();
+  }
+
+  private async changeShowSize(showSize: boolean): Promise<void> {
+    const result = await this.options.api.workspace.setShowSize(showSize);
+    if (!result.ok) { window.alert(result.message); return; }
+    this.showSize = result.value;
+    this.sizeRequests.clear();
+    this.render();
   }
 
   private async changeShowCreatedAt(showCreatedAt: boolean): Promise<void> {

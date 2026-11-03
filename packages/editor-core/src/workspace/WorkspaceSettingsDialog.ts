@@ -15,6 +15,8 @@ export interface WorkspaceSettingsValues {
   sortMode: WorkspaceTreeSortMode;
   showCreatedAt: boolean;
   showUpdatedAt: boolean;
+  showSize: boolean;
+  showSizeHover: boolean;
   showTimestampHover: boolean;
   showNameHover: boolean;
   showDotEntries: boolean;
@@ -36,7 +38,7 @@ export interface WorkspaceSettingsDialogHandle {
   close(): void;
 }
 
-type ShowKey = 'showCreatedAt' | 'showUpdatedAt' | 'showTimestampHover' | 'showNameHover' | 'showDotEntries';
+type ShowKey = 'showSizeHover' | 'showSize' | 'showCreatedAt' | 'showUpdatedAt' | 'showTimestampHover' | 'showNameHover' | 'showDotEntries';
 
 /** Settings for the workspace file panel, shared by Desktop and the Extension sidebar; edits preview live and revert unless saved. */
 export function openWorkspaceSettingsDialog(options: WorkspaceSettingsDialogOptions): WorkspaceSettingsDialogHandle {
@@ -77,8 +79,8 @@ export function openWorkspaceSettingsDialog(options: WorkspaceSettingsDialogOpti
         ),
       },
       { label: tWorkspaceSettings('fontSize'), control: fontSizeStepper(draft, options.baseFontSize, changed) },
-      { label: tWorkspaceSettings('show'), control: checkboxes(draft, ['showCreatedAt', 'showUpdatedAt'], changed) },
-      { label: tWorkspaceSettings('hoverInfo'), control: checkboxes(draft, ['showTimestampHover', 'showNameHover'], changed) },
+      { label: tWorkspaceSettings('show'), control: checkboxes(draft, ['showCreatedAt', 'showUpdatedAt', 'showSize'], changed) },
+      { label: tWorkspaceSettings('hoverInfo'), control: checkboxes(draft, ['showTimestampHover', 'showNameHover', 'showSizeHover'], changed) },
       { label: tWorkspaceSettings('showTypes'), control: checkboxes(draft, ['showDotEntries'], changed) },
     ],
     onSave: () => {

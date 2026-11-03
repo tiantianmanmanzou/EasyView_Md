@@ -1,5 +1,5 @@
 import { VscodeTimeline } from '../timeline/vscodeTimeline';
-import type { TimelineChannel } from '@easyview/node-runtime';
+import { copyFilesToSystemClipboard, type TimelineChannel } from '@easyview/node-runtime';
 import { isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type TimelineRequestMessage } from '@easyview/contracts';
 import * as vscode from 'vscode';
 import path from 'node:path';
@@ -29,7 +29,8 @@ import { tWorkspace } from './workspace.i18n';
 const VIEW_ID = 'easyviewMd.workspaceFiles';
 const VIEW_CONTAINER_COMMAND = 'workbench.view.extension.easyviewMd-workspacePanel';
 const FOCUS_ON_STARTUP_SETTING = 'workspace.focusFilesOnStartup';
-/** Wait for host sidebar restore (Cursor/VS Code) before taking focus. */
+const EXPANDED_STATE_KEY = 'easyviewMd.workspace.expandedByRoot';
+/** Startup activation can precede the host's sidebar restore (Cursor/VS Code), which reopens Explorer; focus again after it. */
 const FOCUS_ON_STARTUP_DELAY_MS = 250;
 const WEBVIEW_READY_TIMEOUT_MS = 5_000;
 const WEBVIEW_READY_RETRIES = 2;
@@ -209,6 +210,7 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
   private readyAttempts = 0;
   private viewReady = false;
   private readonly expandedRelativePaths = new Set<string>();
+  private bootstrapSequence = 0;
   private readonly entryKindByPath = new Map<string, VscodeWorkspaceEntry['kind']>();
 
   constructor(
@@ -367,6 +369,7 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
         this.expandedRelativePaths.delete(expanded);
       }
     }
+    this.saveExpanded();
   }
 
   handleWorkspaceFoldersChanged(): void {
@@ -446,6 +449,8 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       sortMode: this.treeService.getSortMode(),
       showCreatedAt: this.treeService.getShowCreatedAt(),
       showUpdatedAt: this.treeService.getShowUpdatedAt(),
+      showSize: this.treeService.getShowSize(),
+      showSizeHover: this.treeService.getShowSizeHover(),
       showDotEntries: this.treeService.getShowDotEntries(),
       showTimestampHover: this.treeService.getShowTimestampHover(),
     };
@@ -453,6 +458,13 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
 
   private postBootstrap(): void {
     const root = this.rootFolder;
+    const sequence = ++this.bootstrapSequence;
+    void this.treeService.whenOrderLoaded().then(() => {
+      if (sequence === this.bootstrapSequence && this.rootFolder === root) this.postBootstrapNow(root);
+    });
+  }
+
+  private postBootstrapNow(root: vscode.WorkspaceFolder | undefined): void {
     const revealResource = resolveActiveResourceUri();
     const revealRelativePath = root && revealResource
       ? workspaceRelativePath(root.uri, revealResource) ?? null
@@ -465,7 +477,18 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       revealRelativePath,
       hasClipboard: this.entryClipboard !== null
         && Boolean(root && this.entryClipboard.rootUri === root.uri.toString(true)),
+      expandedRelativePaths: [...this.expandedRelativePaths],
     });
+  }
+
+  private savedExpandedByRoot(): Record<string, string[]> {
+    return this.context.workspaceState.get<Record<string, string[]>>(EXPANDED_STATE_KEY) ?? {};
+  }
+
+  private saveExpanded(): void {
+    const root = this.rootFolder?.uri.toString(true);
+    if (!root) return;
+    void this.context.workspaceState.update(EXPANDED_STATE_KEY, { ...this.savedExpandedByRoot(), [root]: [...this.expandedRelativePaths] });
   }
 
   private updateRoot(options: { bootstrap: boolean; announceRootChanged?: boolean }): boolean {
@@ -488,20 +511,17 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
 
     if (changed) {
       this.expandedRelativePaths.clear();
+      for (const relativePath of (next ? this.savedExpandedByRoot()[next] : undefined) ?? []) this.expandedRelativePaths.add(relativePath);
       this.entryKindByPath.clear();
       this.selectedRelativePaths = [];
       this.primarySelectedRelativePath = null;
       void this.updateSelectionContext();
-      this.treeService.setRoot(nextRoot?.uri, () => {
-        this.postBootstrap();
-      });
+      this.treeService.setRoot(nextRoot?.uri);
       this.replaceWatcher(nextRoot);
       if (options.announceRootChanged) {
         this.postEvent({ type: 'rootChanged' });
       }
-      if (!nextRoot) {
-        this.postBootstrap();
-      }
+      this.postBootstrap();
       return true;
     }
 
@@ -629,6 +649,7 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       case 'setExpanded':
         if (message.expanded) this.expandedRelativePaths.add(message.relativePath);
         else this.expandedRelativePaths.delete(message.relativePath);
+        this.saveExpanded();
         return;
       case 'setSelection':
         this.selectedRelativePaths = [...message.relativePaths];
@@ -680,6 +701,9 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       case 'importExternal':
         await this.handleImportExternal(message);
         return;
+      case 'copyFile':
+        await this.handleCopyFile(message.relativePaths);
+        return;
       case 'copyPath':
         await this.handleCopyPath(message.relativePaths);
         return;
@@ -702,6 +726,23 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
           ok: true,
           sort: this.currentSort(),
         });
+        return;
+      case 'getEntrySize': {
+        const root = this.rootFolder?.uri;
+        if (!root) { this.postEvent({ type: 'opResult', requestId: message.requestId, ok: false, message: tWorkspace('noRoot.active') }); return; }
+        try {
+          const sizeBytes = await this.treeService.getEntrySize(root, message.relativePath);
+          this.postEvent({ type: 'opResult', requestId: message.requestId, ok: true, sizeBytes });
+        } catch (error) { this.postEvent({ type: 'opResult', requestId: message.requestId, ok: false, message: errorMessage(error) }); }
+        return;
+      }
+      case 'setShowSizeHover':
+        await this.treeService.setShowSizeHover(message.showSizeHover);
+        this.postEvent({ type: 'opResult', requestId: message.requestId, ok: true, sort: this.currentSort() });
+        return;
+      case 'setShowSize':
+        await this.treeService.setShowSize(message.showSize);
+        this.postEvent({ type: 'opResult', requestId: message.requestId, ok: true, sort: this.currentSort() });
         return;
       case 'setShowCreatedAt':
         await this.treeService.setShowCreatedAt(message.showCreatedAt);
@@ -741,6 +782,7 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
         return;
       case 'collapseAll':
         this.expandedRelativePaths.clear();
+        this.saveExpanded();
         // Webview already collapsed locally when echoing after contextCommand; no-op reply.
         return;
       case 'refresh': {
@@ -1071,6 +1113,13 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
+  private async handleCopyFile(relativePaths: readonly string[]): Promise<void> {
+    const root = this.requireRoot();
+    const uris = relativePaths.map((relativePath) => uriFromRelativePath(root, relativePath));
+    if (uris.some((uri) => uri.scheme !== 'file')) throw new Error(tWorkspace('copyFile.localOnly'));
+    await copyFilesToSystemClipboard(uris.map((uri) => uri.fsPath));
+  }
+
   private async handleCopyPath(relativePaths: readonly string[]): Promise<void> {
     const root = this.requireRoot();
     const texts = relativePaths.map((relativePath) => {
@@ -1123,6 +1172,7 @@ function toExplorerEntry(entry: VscodeWorkspaceEntry): WorkspaceExplorerEntry {
     writable: entry.writable,
     ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
     ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
+    ...(entry.sizeBytes !== undefined ? { sizeBytes: entry.sizeBytes } : {}),
   };
 }
 
@@ -1172,7 +1222,7 @@ function scheduleFocusWorkspacePanelOnStartup(): NodeJS.Timeout | undefined {
     .get<boolean>(FOCUS_ON_STARTUP_SETTING, true);
   if (!enabled) return undefined;
 
-  return setTimeout(() => {
+  const focus = () => {
     if (!vscode.workspace.workspaceFolders?.length) {
       if (vscode.window.tabGroups.all.every((group) => group.tabs.length === 0)) {
         void vscode.commands.executeCommand('workbench.action.closeSidebar');
@@ -1180,7 +1230,9 @@ function scheduleFocusWorkspacePanelOnStartup(): NodeJS.Timeout | undefined {
       return;
     }
     void vscode.commands.executeCommand(VIEW_CONTAINER_COMMAND);
-  }, FOCUS_ON_STARTUP_DELAY_MS);
+  };
+  focus();
+  return setTimeout(focus, FOCUS_ON_STARTUP_DELAY_MS);
 }
 
 function toUri(value: unknown): vscode.Uri | undefined {

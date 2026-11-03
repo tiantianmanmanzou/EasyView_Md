@@ -1,4 +1,4 @@
-import { migrateRenamedHistory } from '@easyview/node-runtime';
+import { copyFilesToSystemClipboard, migrateRenamedHistory } from '@easyview/node-runtime';
 import { DESKTOP_TAB_CLOSE_SHORTCUT } from '../../../contracts';
 import { captureDesktopHistoryPath, desktopHistory } from '../document/desktopHistory';
 import { isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type WorkspaceCreatableFileTypeId } from '@easyview/contracts';
@@ -24,6 +24,7 @@ import { desktopWorkspaceErrorMessage } from './DesktopWorkspaceCore';
 import { openWithSystemApplicationPicker } from './openWithSystemApplicationPicker';
 import { WorkspaceWatcher } from './WorkspaceWatcher';
 import { recentFolderStore } from './recentFolders';
+import { explorerExpansionStore } from './explorerExpansion';
 import { tWorkspace } from './workspace.i18n';
 import { resolvePreviewRoute } from '../../../contracts';
 import {
@@ -126,7 +127,10 @@ export async function openWorkspaceFolder(folderPath?: string): Promise<Operatio
       setWorkspaceFileClipboard(null);
     }
     const rootPath = await workspaceCore.bindRoot(candidateRoot);
-    const next = setWorkspaceState({ rootPath, openTabs: [], activeTabId: null, expandedRelativePaths: [], explorerIconDirectory: '', explorerVisible: true });
+    const next = setWorkspaceState({
+      rootPath, openTabs: [], activeTabId: null, explorerIconDirectory: '', explorerVisible: true,
+      expandedRelativePaths: await explorerExpansionStore().get(rootPath),
+    });
     startWorkspaceWatcher(rootPath);
     syncTabState();
     if (folderPath && folderPath !== rootPath) await recentFolderStore().forget(folderPath);
@@ -270,13 +274,13 @@ export async function deleteWorkspaceEntry(request: WorkspaceDeleteRequest, owne
   }
 }
 
-export function copyWorkspaceEntryToClipboard(relativePath: string): OperationResult<boolean> {
+export function copyWorkspaceEntryToClipboard(relativePaths: readonly string[]): OperationResult<boolean> {
   const rootPath = workspaceRoot();
   if (!rootPath) return failure('INVALID_ARGUMENT', tWorkspace('notOpen'));
   try {
-    const paths = workspaceCore.resourcePaths(relativePath);
-    setWorkspaceFileClipboard({ relativePath: paths.relativePath });
-    clipboard.writeText(paths.absolutePath);
+    const paths = relativePaths.map((relativePath) => workspaceCore.resourcePaths(relativePath));
+    setWorkspaceFileClipboard({ relativePaths: paths.map((entry) => entry.relativePath) });
+    clipboard.writeText(paths.map((entry) => entry.absolutePath).join('\n'));
     return success(true);
   } catch (error) {
     return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
@@ -352,17 +356,34 @@ export async function pasteWorkspaceClipboard(request: WorkspacePasteRequest, ow
   if (!clipboardState) return failure('INVALID_ARGUMENT', tWorkspace('paste.clipboardEmpty'));
   try {
     const targetParentRelativePath = await resolvePasteTargetDirectory(request.targetRelativePath);
-    const entry = await workspaceCore.copy({
-      sourceRelativePath: clipboardState.relativePath,
-      targetParentRelativePath,
-    });
+    let last: WorkspaceEntry | undefined;
+    for (const sourceRelativePath of clipboardState.relativePaths) {
+      last = await workspaceCore.copy({ sourceRelativePath, targetParentRelativePath });
+    }
+    if (!last) return failure('INVALID_ARGUMENT', tWorkspace('paste.clipboardEmpty'));
     sendToWindow('workspace.changed', [targetParentRelativePath]);
-    return success(entry);
+    return success(last);
   } catch (error) {
     const message = desktopWorkspaceErrorMessage(error);
     void showMessageBoxFor(owner, { type: 'error', message });
     return failure('INVALID_ARGUMENT', message);
   }
+}
+
+function bindMenuToWindowContext(
+  items: Electron.MenuItemConstructorOptions[],
+  context: ReturnType<typeof getWindowContext>,
+): Electron.MenuItemConstructorOptions[] {
+  return items.map((item) => ({
+    ...item,
+    ...(item.click ? { click: (...args: Parameters<NonNullable<typeof item.click>>) => runInWindowContext(context, () => item.click!(...args)) } : {}),
+    ...(Array.isArray(item.submenu) ? { submenu: bindMenuToWindowContext(item.submenu, context) } : {}),
+  }));
+}
+
+/** Native menu clicks arrive outside the IPC call that opened the menu, so they would otherwise act on the active window's workspace. */
+function popupContextMenu(items: Electron.MenuItemConstructorOptions[], options: Electron.PopupOptions): void {
+  Menu.buildFromTemplate(bindMenuToWindowContext(items, getWindowContext())).popup(options);
 }
 
 export function showOpenWithPicker(relativePath: string, owner: Electron.BrowserWindow | null): void {
@@ -413,7 +434,7 @@ export function showOpenWithPicker(relativePath: string, owner: Electron.Browser
     },
   });
 
-  Menu.buildFromTemplate(items).popup({ window: owner ?? undefined });
+  popupContextMenu(items, { window: owner ?? undefined });
 }
 
 
@@ -453,14 +474,20 @@ export function showNewFileTypeMenu(
   y: number,
 ): void {
   const owner = rendererWindow(sender);
-  Menu.buildFromTemplate(newFileTypeMenuItems(sender, parentRelativePath)).popup({
+  popupContextMenu(newFileTypeMenuItems(sender, parentRelativePath), {
     window: owner ?? undefined,
     x: Math.round(x),
     y: Math.round(y),
   });
 }
 
-export function showWorkspaceContextMenu(sender: Electron.WebContents, relativePath: string, kind: WorkspaceEntry['kind']): void {
+export function showWorkspaceContextMenu(
+  sender: Electron.WebContents,
+  relativePath: string,
+  kind: WorkspaceEntry['kind'],
+  selectedRelativePaths: readonly string[],
+): void {
+  const targets = selectedRelativePaths.includes(relativePath) ? [...selectedRelativePaths] : [relativePath];
   const isFile = kind === 'file' || kind === 'symlink';
   const isDirectory = kind === 'directory';
   const isRoot = relativePath === '';
@@ -486,8 +513,14 @@ export function showWorkspaceContextMenu(sender: Electron.WebContents, relativeP
     if (command === 'openDefault') { void shell.openPath(workspaceEntryAbsolutePath(relativePath)); return; }
     if (command === 'reveal') { shell.showItemInFolder(workspaceEntryAbsolutePath(relativePath)); return; }
     if (command === 'copy') {
-      const result = copyWorkspaceEntryToClipboard(relativePath);
+      const result = copyWorkspaceEntryToClipboard(targets);
       if (!result.ok) void showMessageBoxFor(owner, { type: 'error', message: result.message });
+      return;
+    }
+    if (command === 'copyFile') {
+      void copyFilesToSystemClipboard(targets.map(workspaceEntryAbsolutePath)).catch((error: unknown) => {
+        void showMessageBoxFor(owner, { type: 'error', message: error instanceof Error ? error.message : String(error) });
+      });
       return;
     }
     if (command === 'paste') {
@@ -498,8 +531,8 @@ export function showWorkspaceContextMenu(sender: Electron.WebContents, relativeP
     }
     const rootPath = workspaceRoot();
     if (!rootPath) return;
-    const paths = workspaceCore.resourcePaths(relativePath);
-    clipboard.writeText(command === 'copyPath' ? paths.absolutePath : paths.relativePath);
+    const paths = targets.map((target) => workspaceCore.resourcePaths(target));
+    clipboard.writeText(paths.map((entry) => (command === 'copyPath' ? entry.absolutePath : entry.relativePath)).join('\n'));
   };
   const createItems: Electron.MenuItemConstructorOptions[] = isDirectory ? [
     {
@@ -525,14 +558,15 @@ export function showWorkspaceContextMenu(sender: Electron.WebContents, relativeP
     { type: 'separator' },
     ...customizeIconItems,
     { label: tWorkspace('menu.copy'), accelerator: 'CmdOrCtrl+C', enabled: !isRoot, click: () => run('copy') },
+    { label: tWorkspace('menu.copyFile'), enabled: !isRoot, click: () => run('copyFile') },
     { label: tWorkspace('menu.paste'), accelerator: 'CmdOrCtrl+V', enabled: canPaste, click: () => run('paste') },
-    { label: tWorkspace('menu.copyPath'), enabled: !isRoot, click: () => run('copyPath') },
-    { label: tWorkspace('menu.copyRelativePath'), enabled: !isRoot, click: () => run('copyRelativePath') },
+    { label: tWorkspace('menu.copyPath'), accelerator: 'Alt+CmdOrCtrl+C', enabled: !isRoot, click: () => run('copyPath') },
+    { label: tWorkspace('menu.copyRelativePath'), accelerator: 'Shift+Alt+CmdOrCtrl+C', enabled: !isRoot, click: () => run('copyRelativePath') },
     { type: 'separator' },
     { label: tWorkspace('menu.rename'), enabled: !isRoot, click: () => run('rename') },
     { label: tWorkspace('menu.delete'), accelerator: process.platform === 'darwin' ? 'Cmd+Backspace' : 'Delete', enabled: !isRoot, click: () => run('delete') },
   ];
-  Menu.buildFromTemplate(template).popup({ window: owner ?? undefined });
+  popupContextMenu(template, { window: owner ?? undefined });
 }
 
 export function showTabContextMenu(sender: Electron.WebContents, tabId: string): void {
@@ -544,7 +578,7 @@ export function showTabContextMenu(sender: Electron.WebContents, tabId: string):
     });
   };
   const splitEnabled = tabSnapshot().splitRenderingAvailable;
-  Menu.buildFromTemplate([
+  popupContextMenu([
     { label: tWorkspace('tabMenu.close'), accelerator: DESKTOP_TAB_CLOSE_SHORTCUT.accelerator, registerAccelerator: false, click: () => run('close') },
     { label: tWorkspace('tabMenu.closeOthers'), click: () => run('closeOthers') },
     { label: tWorkspace('tabMenu.closeAll'), click: () => run('closeAll') },
@@ -568,5 +602,5 @@ export function showTabContextMenu(sender: Electron.WebContents, tabId: string):
       { type: 'separator' },
       { label: tWorkspace('tabMenu.moveNewWindow'), enabled: splitEnabled, click: () => run('moveNewWindow') },
     ] },
-  ]).popup({ window: rendererWindow(sender) ?? undefined });
+  ], { window: rendererWindow(sender) ?? undefined });
 }

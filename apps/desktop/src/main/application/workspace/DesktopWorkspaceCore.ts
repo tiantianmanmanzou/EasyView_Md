@@ -22,6 +22,7 @@ import {
   WorkspaceFileOperationService,
   WorkspaceTreeModel,
   WorkspaceTreeOrderState,
+  workspaceEntrySize,
 } from '@easyview/node-runtime';
 import type { WorkspaceCopyRequest, WorkspaceResourcePaths } from '../../../contracts/workspace';
 import { tWorkspace } from './workspace.i18n';
@@ -100,6 +101,8 @@ export class DesktopWorkspaceCore {
       sortMode: 'name',
       showCreatedAt: false,
       showUpdatedAt: false,
+      showSize: false,
+      showSizeHover: false,
       showDotEntries: true,
       showTimestampHover: true,
       orders: {},
@@ -110,6 +113,11 @@ export class DesktopWorkspaceCore {
     this.requireRoot();
     const entries = await this.model.listChildren(DESKTOP_WORKSPACE_ROOT_ID, relativePath);
     return entries.map((entry) => ({ ...entry }));
+  }
+
+  async getEntrySize(relativePath: string): Promise<number> {
+    this.requireRoot();
+    return workspaceEntrySize(this.gateway, DESKTOP_WORKSPACE_ROOT_ID, relativePath);
   }
 
   async search(query: string): Promise<WorkspaceSearchResult> {
@@ -134,6 +142,24 @@ export class DesktopWorkspaceCore {
 
   getShowUpdatedAt(): boolean {
     return this.orderState.getShowUpdatedAt();
+  }
+
+  getShowSizeHover(): boolean { return this.orderState.getShowSizeHover(); }
+
+  async setShowSizeHover(showSizeHover: boolean): Promise<boolean> {
+    this.requireRoot();
+    this.orderState.setShowSizeHover(showSizeHover);
+    await this.persistOrderConfig();
+    return showSizeHover;
+  }
+
+  getShowSize(): boolean { return this.orderState.getShowSize(); }
+
+  async setShowSize(showSize: boolean): Promise<boolean> {
+    this.requireRoot();
+    this.orderState.setShowSize(showSize);
+    await this.persistOrderConfig();
+    return showSize;
   }
 
   getShowDotEntries(): boolean {
@@ -424,6 +450,8 @@ export class DesktopWorkspaceCore {
         sortMode: 'name',
         showCreatedAt: false,
         showUpdatedAt: false,
+        showSize: false,
+        showSizeHover: false,
         showDotEntries: true,
         showTimestampHover: true,
         orders: {},

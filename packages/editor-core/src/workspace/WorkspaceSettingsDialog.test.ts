@@ -9,6 +9,8 @@ const values: WorkspaceSettingsValues = {
   sortMode: 'name',
   showCreatedAt: false,
   showUpdatedAt: false,
+  showSize: false,
+  showSizeHover: false,
   showTimestampHover: true,
   showNameHover: true,
   showDotEntries: true,
@@ -33,7 +35,7 @@ it('previews every edit live and keeps them on Save', () => {
   expect([...handle.element.querySelectorAll('.easyview-settings-label')].map((label) => label.textContent))
     .toEqual(['显示方式', '排序方式', '字号', '显示内容', '悬停信息', '显示类型']);
   expect([...handle.element.querySelectorAll('.easyview-settings-check span')].map((label) => label.textContent))
-    .toEqual(['创建时间', '修改时间', '悬停时显示时间', '悬停时显示完整名称', '以点开头的文件和文件夹']);
+    .toEqual(['创建时间', '修改时间', '大小', '悬停时显示时间', '悬停时显示完整名称', '悬停时显示大小', '以点开头的文件和文件夹']);
 
   query<HTMLButtonElement>('[role="radio"][data-value="list"]').click();
   expect(onPreview).not.toHaveBeenCalled();

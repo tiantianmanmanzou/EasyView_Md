@@ -121,7 +121,7 @@ export function getMainWindow(): BrowserWindow | undefined { return getWindowCon
 export function isWindowClosing(): boolean { return getWindowContext().isClosing; }
 export function getTerminalService(): TerminalService | undefined { return getWindowContext().terminalService; }
 export function getActiveTerminalSessionId(): string | undefined { return getWindowContext().activeTerminalSessionId; }
-export function getWorkspaceFileClipboard(): { relativePath: string } | null { return getWindowContext().workspaceFileClipboard; }
+export function getWorkspaceFileClipboard(): { relativePaths: string[] } | null { return getWindowContext().workspaceFileClipboard; }
 export function getWorkspaceWatcher(): WorkspaceWatcher | undefined { return getWindowContext().workspaceWatcher; }
 export function getAiChatHost(): AiChatHost | undefined { return getWindowContext().aiChatHost; }
 export function getDesktopMenuState(): DesktopMenuState { return getWindowContext().desktopMenuState; }
@@ -150,7 +150,7 @@ export function setDesktopMenuState(value: DesktopMenuState): void {
   getWindowContext().desktopMenuState = value;
 }
 
-export function setWorkspaceFileClipboard(value: { relativePath: string } | null): void {
+export function setWorkspaceFileClipboard(value: { relativePaths: string[] } | null): void {
   getWindowContext().workspaceFileClipboard = value;
 }
 

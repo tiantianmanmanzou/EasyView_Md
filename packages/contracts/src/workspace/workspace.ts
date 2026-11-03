@@ -21,6 +21,8 @@ export interface WorkspaceEntry {
   createdAt?: number;
   /** Last modification time in milliseconds since epoch when the host can provide it. */
   updatedAt?: number;
+  /** File content size in bytes, when available. */
+  sizeBytes?: number;
 }
 
 /** Name search over the whole tree; `truncated` means more matches may exist. */
@@ -194,3 +196,12 @@ export * from './workspace-tree-menu-icons';
 export * from './workspace-tree-drop';
 export * from './workspace-tree-view';
 export * from './workspace-new-file';
+
+/** Human-readable file content size using binary units. */
+export function formatWorkspaceSize(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${unit === 0 ? value : Number(value.toFixed(1))} ${units[unit]}`;
+}

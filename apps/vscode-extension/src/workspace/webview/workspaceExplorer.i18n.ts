@@ -2,6 +2,7 @@ import { defineMessages } from '@easyview/contracts/i18n';
 
 export const tExplorer = defineMessages({
   'zh-CN': {
+    'sizeLabel': '大小：{size}',
     'directoryLoadTimeout': '目录加载超时。',
     'noRoot': '请打开文件夹或工作区',
     'loading': '正在加载文件…',
@@ -27,6 +28,7 @@ export const tExplorer = defineMessages({
     'context.revealInFinder': '在访达中显示',
     'context.revealInFileExplorer': '在文件资源管理器中显示',
     'context.copy': '复制',
+    'context.copyFile': '复制文件',
     'context.paste': '粘贴',
     'context.copyPath': '复制路径',
     'context.copyRelativePath': '复制相对路径',
@@ -49,6 +51,7 @@ export const tExplorer = defineMessages({
     'resetIcon': '恢复默认',
   },
   en: {
+    'sizeLabel': 'Size: {size}',
     'directoryLoadTimeout': 'Directory loading timed out.',
     'noRoot': 'Open a folder or workspace',
     'loading': 'Loading files...',
@@ -74,6 +77,7 @@ export const tExplorer = defineMessages({
     'context.revealInFinder': 'Reveal in Finder',
     'context.revealInFileExplorer': 'Reveal in File Explorer',
     'context.copy': 'Copy',
+    'context.copyFile': 'Copy File',
     'context.paste': 'Paste',
     'context.copyPath': 'Copy Path',
     'context.copyRelativePath': 'Copy Relative Path',

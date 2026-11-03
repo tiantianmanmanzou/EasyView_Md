@@ -79,6 +79,7 @@ import {
 } from '../../application/workspace/workspaceWorkflow';
 import { rendererWindow } from '../../application/host/desktopRuntime';
 import { recentFolderStore } from '../../application/workspace/recentFolders';
+import { explorerExpansionStore } from '../../application/workspace/explorerExpansion';
 import { tRuntime } from '../../application/host/desktopRuntime.i18n';
 import { tIpc } from './desktopIpc.i18n';
 
@@ -102,6 +103,10 @@ function registerEvent<TArgs extends unknown[]>(
     if (!context) return;
     runInWindowContext(context, () => handler(event, ...(args as TArgs)));
   });
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 const CSS_COLOR = /^(#[0-9a-f]{3,8}|rgba?\(\s*\d{1,3}(\s*,\s*\d{1,3}){2}(\s*,\s*(0|1|0?\.\d+))?\s*\))$/i;
@@ -511,6 +516,10 @@ export function registerDesktopIpc(): void {
       outlineWidth: typeof value.outlineWidth === 'number' ? value.outlineWidth : getWorkspaceState().outlineWidth,
       ...(value.panelLayout !== undefined ? { panelLayout: normalizeDesktopPanelLayout(value.panelLayout) } : {}),
     });
+    if (next.rootPath) {
+      void explorerExpansionStore().remember(next.rootPath, next.expandedRelativePaths)
+        .catch((error: unknown) => console.warn('[EasyView_Md] Failed to save explorer expansion:', error));
+    }
     createMenu();
     return success(next);
   });
@@ -525,6 +534,14 @@ export function registerDesktopIpc(): void {
     } catch (error) {
       return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error));
     }
+  });
+
+  registerHandle('workspace.getEntrySize', async (event, relativePath: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!workspaceRoot() || typeof relativePath !== 'string' || !relativePath) return failure('INVALID_ARGUMENT', tIpc('workspace.noReadableDirectory'));
+    try { return success(await workspaceCore.getEntrySize(relativePath)); }
+    catch (error) { return failure('INVALID_ARGUMENT', desktopWorkspaceErrorMessage(error)); }
   });
 
   registerHandle('workspace.search', async (event, query: unknown) => {
@@ -587,6 +604,8 @@ export function registerDesktopIpc(): void {
     });
   };
 
+  booleanWorkspaceSetting('workspace.getShowSizeHover', 'workspace.setShowSizeHover', () => workspaceCore.getShowSizeHover(), (value) => workspaceCore.setShowSizeHover(value), 'workspace.invalidShowCreatedAt');
+  booleanWorkspaceSetting('workspace.getShowSize', 'workspace.setShowSize', () => workspaceCore.getShowSize(), (value) => workspaceCore.setShowSize(value), 'workspace.invalidShowCreatedAt');
   booleanWorkspaceSetting('workspace.getShowCreatedAt', 'workspace.setShowCreatedAt', () => workspaceCore.getShowCreatedAt(), (value) => workspaceCore.setShowCreatedAt(value), 'workspace.invalidShowCreatedAt');
   booleanWorkspaceSetting('workspace.getShowUpdatedAt', 'workspace.setShowUpdatedAt', () => workspaceCore.getShowUpdatedAt(), (value) => workspaceCore.setShowUpdatedAt(value), 'workspace.invalidShowUpdatedAt');
   booleanWorkspaceSetting('workspace.getShowDotEntries', 'workspace.setShowDotEntries', () => workspaceCore.getShowDotEntries(), (value) => workspaceCore.setShowDotEntries(value), 'workspace.invalidShowDotEntries');
@@ -666,11 +685,11 @@ export function registerDesktopIpc(): void {
     return deleteWorkspaceEntry(request, rendererWindow(event.sender));
   });
 
-  registerHandle('workspace.copyClipboard', (event, relativePath: unknown) => {
+  registerHandle('workspace.copyClipboard', (event, relativePaths: unknown) => {
     const denied = assertTrustedRenderer(event);
     if (denied) return denied;
-    if (typeof relativePath !== 'string') return failure('INVALID_ARGUMENT', tIpc('workspace.invalidCopyPath'));
-    return copyWorkspaceEntryToClipboard(relativePath);
+    if (!isStringArray(relativePaths) || relativePaths.length === 0) return failure('INVALID_ARGUMENT', tIpc('workspace.invalidCopyPath'));
+    return copyWorkspaceEntryToClipboard(relativePaths);
   });
 
   registerHandle('workspace.pasteClipboard', async (event, request: WorkspacePasteRequest) => {
@@ -699,10 +718,11 @@ export function registerDesktopIpc(): void {
   registerHandle('workspace.showContextMenu', (event, request: unknown) => {
     const denied = assertTrustedRenderer(event);
     if (denied) return denied;
-    if (!isRecord(request) || typeof request.relativePath !== 'string' || !['file', 'directory', 'symlink'].includes(String(request.kind))) {
+    if (!isRecord(request) || typeof request.relativePath !== 'string' || !['file', 'directory', 'symlink'].includes(String(request.kind))
+      || !isStringArray(request.selectedRelativePaths)) {
       return failure('INVALID_ARGUMENT', tIpc('workspace.invalidContextMenu'));
     }
-    showWorkspaceContextMenu(event.sender, request.relativePath, request.kind as WorkspaceEntry['kind']);
+    showWorkspaceContextMenu(event.sender, request.relativePath, request.kind as WorkspaceEntry['kind'], request.selectedRelativePaths);
     return success(true);
   });
 

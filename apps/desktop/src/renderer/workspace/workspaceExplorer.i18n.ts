@@ -2,6 +2,7 @@ import { defineMessages } from '@easyview/contracts/i18n';
 
 export const tExplorer = defineMessages({
   'zh-CN': {
+    'sizeLabel': '大小：{size}',
     'openFolder': '打开文件夹',
     'panelTitle': '目录树',
     'dragToDock': '拖动以停靠到窗口左侧或右侧，或与其他面板交换位置',
@@ -37,6 +38,7 @@ export const tExplorer = defineMessages({
     'resetIcon': '恢复默认',
   },
   en: {
+    'sizeLabel': 'Size: {size}',
     'openFolder': 'Open Folder',
     'panelTitle': 'Folder Tree',
     'dragToDock': 'Drag to dock on the left or right of the window, or swap with another panel',

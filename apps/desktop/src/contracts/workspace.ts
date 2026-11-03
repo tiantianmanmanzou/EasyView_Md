@@ -241,6 +241,7 @@ export type WorkspaceContextCommand =
   | 'openDefault'
   | 'reveal'
   | 'copy'
+  | 'copyFile'
   | 'paste'
   | 'copyPath'
   | 'copyRelativePath'

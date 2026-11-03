@@ -9,6 +9,8 @@ export interface WorkspaceExplorerSortConfig {
   sortMode: WorkspaceTreeSortMode;
   showCreatedAt: boolean;
   showUpdatedAt: boolean;
+  showSize: boolean;
+  showSizeHover: boolean;
   showDotEntries: boolean;
   showTimestampHover: boolean;
 }
@@ -46,10 +48,14 @@ export type WorkspaceExplorerRequest =
       sourceUris?: string[];
       items?: Array<{ kind: 'file' | 'directory'; relativePath: string; dataBase64?: string }>;
     }
+  | { type: 'copyFile'; relativePaths: string[] }
   | { type: 'copyPath'; relativePaths: string[] }
   | { type: 'copyRelativePath'; relativePaths: string[] }
   | { type: 'getSortConfig'; requestId: string }
   | { type: 'setSortMode'; requestId: string; sortMode: WorkspaceTreeSortMode }
+  | { type: 'getEntrySize'; requestId: string; relativePath: string }
+  | { type: 'setShowSizeHover'; requestId: string; showSizeHover: boolean }
+  | { type: 'setShowSize'; requestId: string; showSize: boolean }
   | { type: 'setShowCreatedAt'; requestId: string; showCreatedAt: boolean }
   | { type: 'setShowUpdatedAt'; requestId: string; showUpdatedAt: boolean }
   | { type: 'setShowDotEntries'; requestId: string; showDotEntries: boolean }
@@ -66,6 +72,8 @@ export type WorkspaceExplorerEvent =
       sort: WorkspaceExplorerSortConfig;
       revealRelativePath: string | null;
       hasClipboard: boolean;
+      /** Folders the user left expanded last time for this root. */
+      expandedRelativePaths: string[];
     }
   | {
       type: 'listChildrenResult';
@@ -98,6 +106,7 @@ export type WorkspaceExplorerEvent =
       entry?: WorkspaceExplorerEntry;
       sort?: WorkspaceExplorerSortConfig;
       siblingNames?: string[];
+      sizeBytes?: number;
     }
   | { type: 'opResult'; requestId: string; ok: false; message: string };
 

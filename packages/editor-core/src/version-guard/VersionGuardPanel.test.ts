@@ -167,6 +167,41 @@ describe('VersionGuardPanel', () => {
     expect(picker()).toBeNull();
     panel.dispose();
   });
+  it('offers Copy Name and Copy Path on branch picker rows', async () => {
+    const guard = client(); const base = guard.request;
+    guard.request = vi.fn(async (request: GuardRequest) => {
+      if (request.method === 'branches') {
+        guard.calls.push(request);
+        return [
+          { name: 'main', remote: false, current: true, subject: 'Base', author: 'A', timestamp: Date.now() },
+          { name: 'design_zxy', remote: false, current: false, subject: 'Design', author: 'B', timestamp: Date.now() },
+          { name: 'origin/release/v2.0.0', remote: true, current: false, subject: 'Release', author: 'C', timestamp: Date.now() },
+        ];
+      }
+      return base(request);
+    });
+    const panel = new VersionGuardPanel({ client: guard }); document.body.append(panel.element);
+    panel.setVisible(true); for (let i = 0; i < 5; i++) await flush();
+    panel.element.querySelector<HTMLButtonElement>('.guard-branch-name')!.click(); for (let i = 0; i < 3; i++) await flush();
+    const design = [...panel.element.querySelectorAll('.guard-branch-item')].find(row => row.querySelector('.guard-branch-item-name')?.textContent === 'design_zxy')!;
+    design.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+    const menu = () => document.body.querySelector<HTMLElement>('.guard-context-menu');
+    expect([...menu()!.querySelectorAll('button')].map(button => button.textContent)).toEqual(['复制名称', '复制路径']);
+    expect(panel.element.querySelector('.guard-branch-picker')).not.toBeNull();
+    [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制名称')!.click();
+    for (let i = 0; i < 3; i++) await flush();
+    expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({ method: 'copyText', text: 'design_zxy' });
+
+    const remote = [...panel.element.querySelectorAll('.guard-branch-item')].find(row => row.querySelector('.guard-branch-item-name')?.textContent === 'origin/release/v2.0.0')!;
+    remote.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
+    [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制路径')!.click();
+    for (let i = 0; i < 3; i++) await flush();
+    expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({
+      method: 'copyText',
+      text: 'refs/remotes/origin/release/v2.0.0',
+    });
+    panel.dispose();
+  });
   it.each([
     { ahead: 0, behind: 0, method: 'none', label: /^(Up to date|已同步)$/, disabled: true },
     { ahead: 0, behind: 5, method: 'pull', label: /↓5$/, disabled: false },

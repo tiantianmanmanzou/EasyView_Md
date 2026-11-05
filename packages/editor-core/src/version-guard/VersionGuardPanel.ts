@@ -115,7 +115,14 @@ export class VersionGuardPanel {
   private alert(detail: string, title = tGuard('error')): void {
     const text = detail.trim();
     if (!text) return;
-    void this.confirm(title, text, [tGuard('dismiss')]);
+    void this.showAlert(title, text);
+  }
+  /** Keep native host dialogs short; offer Copy for the full message. */
+  private async showAlert(title: string, text: string): Promise<void> {
+    const preview = alertPreview(text);
+    const detail = preview === text ? text : `${preview}\n\n${tGuard('alertTruncated')}`;
+    const choice = await this.confirm(title, detail, [tGuard('dismiss'), tGuard('copy')]);
+    if (choice === 1) await this.copyText(text);
   }
   private iconButton(icon: string, title: string, action: () => void): HTMLButtonElement { const button = this.button('', title, action); button.classList.add('guard-header-icon'); button.innerHTML = icon; return button; }
   private button(label: string, title: string, action: () => void | Promise<unknown>): HTMLButtonElement {
@@ -609,4 +616,14 @@ function fitCommitInput(input: HTMLTextAreaElement): void {
   input.style.height = 'auto';
   const max = 12.5 * 16; // ~8 lines at 16px; matches max-height:12.5em
   input.style.height = `${Math.min(Math.max(input.scrollHeight, 0), max)}px`;
+}
+
+/** Short preview for host message boxes so long hook logs stay flat. */
+function alertPreview(text: string, maxLines = 6, maxChars = 360): string {
+  const lines = text.split('\n');
+  let preview = lines.length > maxLines ? `${lines.slice(0, maxLines).join('\n')}\n…` : text;
+  if (preview.length <= maxChars) return preview;
+  const cut = preview.slice(0, maxChars);
+  const at = Math.max(cut.lastIndexOf('\n'), cut.lastIndexOf(' '));
+  return `${(at > maxChars / 2 ? cut.slice(0, at) : cut).trimEnd()}\n…`;
 }

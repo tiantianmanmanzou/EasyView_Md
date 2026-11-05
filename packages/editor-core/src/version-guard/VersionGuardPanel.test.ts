@@ -177,9 +177,32 @@ describe('VersionGuardPanel', () => {
       method: 'confirm',
       message: '操作失败',
       detail: '> running pre-commit hook\nlint failed',
-      choices: ['确定'],
+      choices: ['确定', '复制'],
     });
     expect(panel.element.querySelector('.guard-notice')).toBeNull();
+    panel.dispose();
+  });
+  it('keeps long failure dialogs short and copies the full text on request', async () => {
+    const full = Array.from({ length: 20 }, (_, i) => `line ${i + 1}: npm ERR! detail`).join('\n');
+    const guard = client(); const base = guard.request;
+    guard.request = vi.fn(async (request: GuardRequest) => {
+      if (request.method === 'commit') { guard.calls.push(request); throw new Error(full); }
+      if (request.method === 'confirm') { guard.calls.push(request); return 1; }
+      if (request.method === 'copyText') { guard.calls.push(request); return true; }
+      return base(request);
+    });
+    const panel = new VersionGuardPanel({ client: guard }); document.body.append(panel.element);
+    panel.setVisible(true); for (let i = 0; i < 5; i++) await flush();
+    const input = panel.element.querySelector('textarea')!;
+    input.value = 'msg'; input.dispatchEvent(new Event('input'));
+    panel.element.querySelector<HTMLButtonElement>('.guard-actions .is-primary')!.click();
+    for (let i = 0; i < 6; i++) await flush();
+    const dialog = guard.calls.filter(call => call.method === 'confirm').at(-1)!;
+    expect(dialog.message).toBe('操作失败');
+    expect(dialog.choices).toEqual(['确定', '复制']);
+    expect(String(dialog.detail)).toContain('完整内容请点「复制」。');
+    expect(String(dialog.detail).split('\n').length).toBeLessThan(full.split('\n').length);
+    expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({ method: 'copyText', text: full });
     panel.dispose();
   });
   it('grows the commit message box as lines wrap or break', async () => {

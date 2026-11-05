@@ -287,11 +287,16 @@ describe('VersionGuardPanel', () => {
     expect(sections[1].style.getPropertyValue('--guard-depth')).toBe('1');
     const head = () => panel.element.querySelector<HTMLElement>('.guard-history-head')!;
     expect(panel.element.querySelector('.guard-commit')).not.toBeNull();
+    expect(head().classList.contains('is-open')).toBe(true);
+    expect(head().classList.contains('is-collapsed')).toBe(false);
     head().click();
     expect(head().getAttribute('aria-expanded')).toBe('false');
+    expect(head().classList.contains('is-collapsed')).toBe(true);
+    expect(head().classList.contains('is-open')).toBe(false);
     expect(panel.element.querySelector('.guard-commit')).toBeNull();
     head().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(panel.element.querySelector('.guard-commit')).not.toBeNull();
+    expect(head().classList.contains('is-open')).toBe(true);
     panel.dispose();
   });
   it('asks before staging every change when committing with nothing staged, until the user picks Always', async () => {

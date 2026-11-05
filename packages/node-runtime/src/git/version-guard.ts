@@ -53,6 +53,8 @@ export interface GuardHost {
 export class VersionGuardService {
   private repositories = new Map<string, GuardRepository>();
   private controller = new AbortController();
+  /** Rediscovery has its own signal so known repositories keep serving status reads meanwhile. */
+  private discovery = new AbortController();
   private queries = new Map<string, Promise<unknown>>();
   private watchers: FSWatcher[] = [];
   private checked = new Map<string, number>();
@@ -61,16 +63,19 @@ export class VersionGuardService {
   private changed?: (paths: string[] | null) => void;
   constructor(private readonly host: GuardHost) {}
   setActive(active: boolean, changed?: (paths: string[] | null) => void): void {
+    const resumed = active && !this.active;
     this.watchGeneration++; this.active = active; this.changed = changed;
     this.watchers.splice(0).forEach(watcher => watcher.close());
     if (active) void this.watchMetadata();
+    // Nothing was watched while inactive, so changes made meanwhile (e.g. commits from another app) are unknown.
+    if (resumed) changed?.(null);
   }
   private async watchMetadata(): Promise<void> {
-    const generation = this.controller; const watchGeneration = this.watchGeneration; const watched = new Set<string>();
+    const generation = this.discovery; const watchGeneration = this.watchGeneration; const watched = new Set<string>();
     for (const repository of this.repositories.values()) {
       try {
         const output = await guardGit(repository.rootPath, ['rev-parse', '--absolute-git-dir', '--git-common-dir'], generation.signal);
-        if (!this.active || generation !== this.controller || watchGeneration !== this.watchGeneration) return;
+        if (!this.active || generation !== this.discovery || watchGeneration !== this.watchGeneration) return;
         for (const directory of new Set(output.trim().split('\n').map(value => path.resolve(repository.rootPath, value)))) {
           if (watched.has(directory)) continue; watched.add(directory);
           const watcher = watch(directory, (_event, name) => {
@@ -85,13 +90,12 @@ export class VersionGuardService {
       } catch { if (!generation.signal.aborted) this.changed?.(null); }
     }
   }
-  dispose(): void { this.active = false; this.controller.abort(); this.watchers.splice(0).forEach(w => w.close()); this.queries.clear(); }
+  dispose(): void { this.active = false; this.controller.abort(); this.discovery.abort(); this.watchers.splice(0).forEach(w => w.close()); this.queries.clear(); }
   async discover(): Promise<GuardRepository[]> {
-    this.controller.abort(); this.controller = new AbortController();
-    const signal = this.controller.signal;
+    this.discovery.abort(); this.discovery = new AbortController();
+    const signal = this.discovery.signal;
     this.watchers.splice(0).forEach(w => w.close()); guardDiagnostics.scans++;
     const found = new Map<string, GuardRepository>(); const visited = new Set<string>(); const warnings: string[] = [];
-    this.repositories = found;
     const roots = await Promise.all(this.host.roots().map(root => fs.realpath(root)));
     const queue = [...roots];
     while (queue.length) {
@@ -106,7 +110,8 @@ export class VersionGuardService {
           if (roots.some(root => inside(root, rootPath))) { found.set(rootPath, { id: rootPath, rootPath, name: path.basename(rootPath) }); this.host.discovered?.([...found.values()], [...warnings]); }
         } catch (error) { signal.throwIfAborted(); warnings.push(`${directory}: ${String(error)}`); this.host.discovered?.([...found.values()], [...warnings]); }
       }
-      for (const entry of entries) if (entry.isDirectory() && entry.name !== '.git') queue.push(path.join(directory, entry.name));
+      // Installed dependencies are huge and never hold repositories the user manages.
+      for (const entry of entries) if (entry.isDirectory() && entry.name !== '.git' && entry.name !== 'node_modules') queue.push(path.join(directory, entry.name));
       // Yield to IPC/file events even for very large directory trees.
       if (visited.size % 100 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     }
@@ -144,6 +149,11 @@ export class VersionGuardService {
     }
     return paths as string[];
   }
+  /** Validated absolute paths for a repository-relative selection (directories may end with "/"). */
+  async absolutePaths(request: GuardRequest): Promise<string[]> {
+    const repository = await this.repository(request.repository);
+    return (await this.files(repository, request.paths)).map(file => path.resolve(repository.rootPath, file));
+  }
   async status(repository: GuardRepository): Promise<GuardStatus> {
     const output = await guardGit(repository.rootPath, ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all', '--ignore-submodules=none'], this.controller.signal);
     const status: GuardStatus = { files: [], branch: '', head: '', ahead: 0, behind: 0, checkedAt: this.checked.get(repository.id) };
@@ -167,7 +177,7 @@ export class VersionGuardService {
   }
   async handle(request: GuardRequest): Promise<unknown> {
     if (!request || typeof request !== 'object') throw new Error('Invalid Version Guard request.');
-    if (request.method === 'cancel') { this.controller.abort(); this.controller = new AbortController(); return true; }
+    if (request.method === 'cancel') { this.controller.abort(); this.controller = new AbortController(); this.discovery.abort(); this.discovery = new AbortController(); return true; }
     if (request.method === 'diagnostics') return { ...guardDiagnostics, watchers: this.watchers.length };
     if (request.method === 'discover') return this.discover();
     if (request.method === 'init') return this.init();
@@ -215,18 +225,38 @@ export class VersionGuardService {
         return guardGit(root, refs.has(`refs/heads/${local}`) ? ['switch', local] : ['switch', '--track', name]);
       }
       if (request.method === 'commit') {
-        if (typeof request.message !== 'string' || !request.message.trim()) throw new Error('Commit message is required.');
+        const message = typeof request.message === 'string' ? request.message.trim() : '';
+        if (!message && !request.amend) throw new Error('Commit message is required.');
         const status = await this.status(repository);
         if (status.files.some(file => file.index === 'U')) throw new Error('Resolve conflicts before committing.');
+        if (request.amend) {
+          await this.assertUnpushed(root, status);
+          return guardGit(root, ['commit', '--amend', ...(message ? ['-m', request.message!] : ['--no-edit'])]);
+        }
         if (!status.files.some(file => file.index !== '.' && file.index !== '?')) {
           const paths = request.stageAll ? status.files.filter(file => file.worktree !== '.').flatMap(file => file.oldPath ? [file.oldPath, file.path] : [file.path]) : [];
           if (!paths.length) throw new Error('No staged changes.');
           await this.host.beforeStage(paths.map(file => path.join(root, file)));
           await guardGit(root, ['add', '--', ...paths]);
         }
-        return guardGit(root, ['commit', '-m', request.message]);
+        return guardGit(root, ['commit', '-m', request.message!]);
       }
-      if (request.method === 'fetch' || request.method === 'pull' || request.method === 'push' || request.method === 'sync') {
+      if (request.method === 'undoCommit') {
+        const status = await this.status(repository);
+        await this.assertUnpushed(root, status);
+        const message = (await guardGit(root, ['log', '-1', '--format=%B'])).trim();
+        await guardGit(root, await this.parent(root, 'HEAD') ? ['reset', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD']);
+        return message;
+      }
+      if (request.method === 'stash') {
+        const paths = (await this.status(repository)).files.flatMap(file => file.oldPath ? [file.oldPath, file.path] : [file.path]);
+        if (!paths.length) throw new Error('No local changes to stash.');
+        await this.host.beforeStage(paths.map(file => path.join(root, file)));
+        // With literal pathspecs, `stash -u` saves new files but leaves them in place, so popping later conflicts.
+        return guardGit(root, ['--no-literal-pathspecs', 'stash', 'push', '--include-untracked']);
+      }
+      if (request.method === 'stashPop') return guardGit(root, ['--no-literal-pathspecs', 'stash', 'pop']);
+      if (request.method === 'fetch' || request.method === 'pull' || request.method === 'push') {
         const status = await this.status(repository);
         if (!status.upstream) throw new Error('No upstream configured for the current branch.');
         const remote = (await guardGit(root, ['config', '--get', `branch.${status.branch}.remote`])).trim();
@@ -238,7 +268,6 @@ export class VersionGuardService {
         if (status.files.some(file => file.index === 'U')) throw new Error('Resolve conflicts before pulling.');
         const result = await this.pull(root);
         this.checked.set(repository.id, Date.now());
-        if (request.method === 'sync' && (await this.status(repository)).ahead > 0) return push();
         return result;
       }
       const paths = await this.files(repository, request.paths);
@@ -288,6 +317,11 @@ export class VersionGuardService {
       if (rebasing.some(Boolean)) await guardGit(root, ['rebase', '--abort']).catch(() => undefined);
       throw error;
     }
+  }
+  /** Undo and amend rewrite the last commit, which must not already be shared through a remote. */
+  private async assertUnpushed(root: string, status: GuardStatus): Promise<void> {
+    if (status.head === '(initial)') throw new Error('There is no commit yet.');
+    if ((await guardGit(root, ['branch', '-r', '--contains', 'HEAD'])).trim()) throw new Error('The last commit is already on a remote; changing it would rewrite shared history.');
   }
   private revision(value: unknown): string { if (typeof value !== 'string' || !/^[a-f0-9]{40,64}$/.test(value)) throw new Error('Invalid commit.'); return value; }
   private async parent(root: string, revision: string): Promise<string | undefined> { return (await guardGit(root, ['rev-list', '--parents', '-n', '1', revision])).trim().split(' ')[1]; }

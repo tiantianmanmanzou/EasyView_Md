@@ -28,6 +28,10 @@ it('discovers every nested repository, submodule and worktree without including 
   const below = new VersionGuardService({ roots: () => [path.join(repo, 'deep')], beforeStage: async () => {}, discard: async () => false, trash: async () => {} }); services.push(below);
   expect((await below.discover()).map(item => item.rootPath)).toEqual([nested]);
 });
+it('does not look for repositories inside node_modules', async () => {
+  const { repo, service } = await fixture(); const dependency = path.join(repo, 'node_modules', 'pkg'); await mkdir(dependency, { recursive: true }); init(dependency);
+  expect((await service.discover()).map(item => item.rootPath)).toEqual([repo]);
+});
 it('initializes the open folder as a Git repository once', async () => {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'version-guard-init-'))); temps.push(root);
   const service = new VersionGuardService({ roots: () => [root], beforeStage: async () => {}, discard: async () => false, trash: async () => {} }); services.push(service);
@@ -121,7 +125,7 @@ it('lists local and remote branches and switches, tracks or creates branches', a
   await expect(service.handle({ method: 'checkout', repository: repo, branch: 'missing' })).rejects.toThrow('Unknown branch');
 });
 const isolatedConfig = () => { const previous = process.env.GIT_CONFIG_GLOBAL; process.env.GIT_CONFIG_GLOBAL = '/dev/null'; return () => { if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous; }; };
-it('pulls remote commits and syncs diverged branches by merging, like VS Code', async () => {
+it('pulls remote commits and merges diverged branches before pushing, like VS Code', async () => {
   const restore = isolatedConfig();
   try {
     const { repo, other, service, commitIn, status } = await diverged();
@@ -130,7 +134,8 @@ it('pulls remote commits and syncs diverged branches by merging, like VS Code', 
     await service.handle({ method: 'pull', repository: repo }); expect(await status()).toMatchObject({ ahead: 0, behind: 0 });
     await commitIn(other, 'remote.md', 'remote two\n'); git(other, 'push', '-q'); await commitIn(repo, 'local.md', 'local\n');
     await service.handle({ method: 'fetch', repository: repo }); expect(await status()).toMatchObject({ ahead: 1, behind: 1 });
-    await service.handle({ method: 'sync', repository: repo });
+    await service.handle({ method: 'pull', repository: repo }); expect(await status()).toMatchObject({ ahead: 2, behind: 0 });
+    await service.handle({ method: 'push', repository: repo });
     expect(await status()).toMatchObject({ ahead: 0, behind: 0 });
     expect(git(repo, 'log', '-1', '--format=%P').split(' ')).toHaveLength(2);
     git(other, 'pull', '-q', '--no-rebase'); expect(await readFile(path.join(other, 'local.md'), 'utf8')).toBe('local\n');
@@ -140,9 +145,53 @@ it('restores the branch when a configured rebase pull stops on a conflict', asyn
   const { repo, other, service, commitIn, status } = await diverged(); git(repo, 'config', 'pull.rebase', 'true');
   await commitIn(other, 'file', 'remote\n'); git(other, 'push', '-q'); await commitIn(repo, 'file', 'local\n');
   const head = git(repo, 'rev-parse', 'HEAD');
-  await expect(service.handle({ method: 'sync', repository: repo })).rejects.toThrow();
+  await expect(service.handle({ method: 'pull', repository: repo })).rejects.toThrow();
   expect(git(repo, 'rev-parse', 'HEAD')).toBe(head); expect(git(repo, 'status', '--porcelain')).toBe('');
   expect(await status()).toMatchObject({ ahead: 1, behind: 1 });
+});
+it('amends and undoes only commits that are not on a remote yet', async () => {
+  const { repo, service, commitIn, status } = await diverged();
+  await expect(service.handle({ method: 'undoCommit', repository: repo })).rejects.toThrow('already on a remote');
+  await expect(service.handle({ method: 'commit', repository: repo, amend: true })).rejects.toThrow('already on a remote');
+  await commitIn(repo, 'local.md', 'local\n');
+  await writeFile(path.join(repo, 'extra.md'), 'extra'); git(repo, 'add', 'extra.md');
+  await service.handle({ method: 'commit', repository: repo, amend: true });
+  expect(git(repo, 'log', '-1', '--format=%s')).toBe('local'); expect(git(repo, 'ls-tree', '--name-only', 'HEAD')).toContain('extra.md');
+  await service.handle({ method: 'commit', repository: repo, amend: true, message: 'local and extra' });
+  expect(git(repo, 'log', '-1', '--format=%s')).toBe('local and extra'); expect((await status()).ahead).toBe(1);
+  expect(await service.handle({ method: 'undoCommit', repository: repo })).toBe('local and extra');
+  expect((await status()).ahead).toBe(0);
+  expect(git(repo, 'status', '--porcelain').split('\n').sort()).toEqual(['A  extra.md', 'A  local.md']);
+});
+it('undoes the very first commit, keeping its files staged', async () => {
+  const { repo, service } = await fixture(); await writeFile(path.join(repo, 'first.md'), 'first'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'first');
+  await service.discover();
+  expect(await service.handle({ method: 'undoCommit', repository: repo })).toBe('first');
+  expect((await service.status(await service.repository(repo))).head).toBe('(initial)'); expect(git(repo, 'status', '--porcelain')).toBe('A  first.md');
+});
+it('stashes every local change including new files and restores them', async () => {
+  const { repo, service } = await fixture(); await writeFile(path.join(repo, 'file'), 'base'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'base');
+  await service.discover();
+  await expect(service.handle({ method: 'stash', repository: repo })).rejects.toThrow('No local changes');
+  await writeFile(path.join(repo, 'file'), 'edited'); await writeFile(path.join(repo, 'new.md'), 'new');
+  await service.handle({ method: 'stash', repository: repo });
+  expect(git(repo, 'status', '--porcelain')).toBe('');
+  await service.handle({ method: 'stashPop', repository: repo });
+  expect(await readFile(path.join(repo, 'file'), 'utf8')).toBe('edited'); expect(await readFile(path.join(repo, 'new.md'), 'utf8')).toBe('new');
+});
+it('keeps serving status for known repositories while a rediscovery walks the folder', async () => {
+  const { repo, service } = await fixture(); await service.discover();
+  const rediscovery = service.discover();
+  await expect(service.handle({ method: 'status', repository: repo })).resolves.toMatchObject({ files: [] });
+  expect((await rediscovery).map(item => item.rootPath)).toEqual([repo]);
+});
+it('reports a full refresh when it becomes active again, since nothing was watched meanwhile', async () => {
+  const { service } = await fixture(); await service.discover();
+  const changes: Array<string[] | null> = []; const changed = (paths: string[] | null) => changes.push(paths);
+  service.setActive(true, changed); service.setActive(true, changed);
+  expect(changes).toEqual([null]);
+  service.setActive(false); service.setActive(true, changed);
+  expect(changes).toEqual([null, null]);
 });
 it('rejects workspace escapes, nested file ownership and Git metadata paths', async () => {
   const { root, repo, service } = await fixture(); const nested = path.join(repo, 'child'); await mkdir(nested); init(nested); await service.discover();

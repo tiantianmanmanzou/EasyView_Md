@@ -16,6 +16,8 @@
   "command.versionGuard.refresh.title": "Refresh Repositories",
   "command.versionGuard.expandAll.title": "Expand All",
   "command.versionGuard.collapseAll.title": "Collapse All",
+  "command.versionGuard.soloOn.title": "Focus one repository: off (click to enable)",
+  "command.versionGuard.soloOff.title": "Focus one repository: on (click to show all)",
   "command.workspace.configureSort.title": "Configure Sort",
   "command.workspace.search.title": "Search Files and Folders",
   "command.workspace.newFile.title": "New File",

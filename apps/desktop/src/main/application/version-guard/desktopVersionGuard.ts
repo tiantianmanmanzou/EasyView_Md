@@ -1,5 +1,5 @@
 import { flushDesktopEditors } from '../document/flushDesktopEditors';
-import { dialog, shell, type WebContents } from 'electron';
+import { clipboard, dialog, shell, type WebContents } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { VersionGuardService, guardDiagnostics } from '@easyview/node-runtime';
@@ -9,6 +9,7 @@ import { saveSession, openWorkspaceEntryTab, stopWatcher, watchDocumentSession, 
 import { openReadOnlyComparison } from '../timeline/desktopTimeline';
 import { tGuardHost } from './guardHost.i18n';
 const services = new Map<number, VersionGuardService>();
+const listFiles = (files: string[]): string => [...files.slice(0, 10), ...(files.length > 10 ? [`… +${files.length - 10}`] : [])].join('\n');
 async function flushFiles(files: string[]): Promise<void> {
   for (const window of windowSessions.values()) await flushDesktopEditors(window.context, files.flatMap(file => window.context.documentSessions.findByFilePath(file)));
 }
@@ -32,7 +33,7 @@ export async function handleVersionGuard(sender: WebContents, request: GuardRequ
       discard: async (files, action) => {
         await flushFiles(files);
         const entries = matching(files); const baselines = entries.map(entry => entry.session.content);
-        const response = await dialog.showMessageBox(context.window!, { type: 'warning', buttons: [tGuardHost('cancel'), tGuardHost('discard')], defaultId: 0, cancelId: 0, message: tGuardHost('confirm'), detail: files.join('\n') });
+        const response = await dialog.showMessageBox(context.window!, { type: 'warning', buttons: [tGuardHost('cancel'), tGuardHost('discard')], defaultId: 0, cancelId: 0, message: tGuardHost('confirm'), detail: listFiles(files) });
         if (response.response !== 1) return false;
         const owners = [...new Set(entries.map(entry => entry.context))];
         const lock = (index: number): Promise<void> => index === owners.length ? perform() : owners[index].documentSessions.mutateGitFiles(files, () => lock(index + 1));
@@ -56,6 +57,11 @@ export async function handleVersionGuard(sender: WebContents, request: GuardRequ
     });
     services.set(sender.id, service); sender.once('destroyed', () => { service?.dispose(); services.delete(sender.id); });
   }
+  if (request?.method === 'confirm') {
+    const choices = (request.choices ?? []).map(String);
+    const { response } = await dialog.showMessageBox(context.window!, { type: 'question', buttons: [...choices, tGuardHost('cancel')], defaultId: 0, cancelId: choices.length, message: String(request.message ?? ''), detail: request.detail });
+    return response < choices.length ? response : -1;
+  }
   if (request?.method === 'active') { service.setActive(request.active === true, paths => { if (!sender.isDestroyed()) sender.send('versionGuard.changed', paths); }); return true; }
   if (request?.method === 'openDiff') {
     const comparison = await service.handle({ ...request, method: 'comparison' }) as GuardComparison;
@@ -65,6 +71,17 @@ export async function handleVersionGuard(sender: WebContents, request: GuardRequ
     const repository = await service.repository(request.repository); const [relative] = await service.files(repository, request.paths);
     const result = await openWorkspaceEntryTab(path.relative(workspaceRoot()!, path.join(repository.rootPath, relative)));
     if (!result.ok) throw new Error(result.message); return true;
+  }
+  if (request?.method === 'copyText') {
+    clipboard.writeText(String(request.text ?? '')); return true;
+  }
+  if (request?.method === 'copyPath' || request?.method === 'copyRelativePath') {
+    const files = await service.absolutePaths(request); const root = workspaceRoot();
+    clipboard.writeText(files.map(file => request.method === 'copyRelativePath' && root ? path.relative(root, file) : file).join('\n')); return true;
+  }
+  if (request?.method === 'revealInIndexArea') {
+    const [file] = await service.absolutePaths(request); const root = workspaceRoot();
+    if (root) sender.send('workspace.revealInIndexArea', path.relative(root, file).split(path.sep).join('/')); return true;
   }
   return service.handle(request);
 }

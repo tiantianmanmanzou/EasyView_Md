@@ -666,6 +666,18 @@
         "icon": "$(collapse-all)"
       },
       {
+        "command": "easyviewMd.versionGuard.soloOn",
+        "title": "%command.versionGuard.soloOn.title%",
+        "category": "EasyView_Md",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "easyviewMd.versionGuard.soloOff",
+        "title": "%command.versionGuard.soloOff.title%",
+        "category": "EasyView_Md",
+        "icon": "$(pinned)"
+      },
+      {
         "command": "easyviewMd.workspace.configureSort",
         "title": "%command.workspace.configureSort.title%",
         "category": "EasyView_Md",
@@ -848,6 +860,16 @@
           "command": "easyviewMd.versionGuard.collapseAll",
           "when": "view == easyviewMd.versionGuard && easyviewMd.versionGuard.allExpanded",
           "group": "navigation@1"
+        },
+        {
+          "command": "easyviewMd.versionGuard.soloOn",
+          "when": "view == easyviewMd.versionGuard && !easyviewMd.versionGuard.solo",
+          "group": "navigation@2"
+        },
+        {
+          "command": "easyviewMd.versionGuard.soloOff",
+          "when": "view == easyviewMd.versionGuard && easyviewMd.versionGuard.solo",
+          "group": "navigation@2"
         },
         {
           "command": "easyviewMd.workspace.collapseAll",

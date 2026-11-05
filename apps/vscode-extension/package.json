@@ -675,7 +675,7 @@
         "command": "easyviewMd.versionGuard.soloOff",
         "title": "%command.versionGuard.soloOff.title%",
         "category": "EasyView_Md",
-        "icon": "$(pass-filled)"
+        "icon": "$(pinned)"
       },
       {
         "command": "easyviewMd.workspace.configureSort",

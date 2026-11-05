@@ -79,8 +79,8 @@ describe('VersionGuardPanel', () => {
     expect(states).toEqual([false, true, false]);
     panel.dispose();
   });
-  it('pins other repositories above/below the focused one when solo mode is on', async () => {
-    const guard = client(); const base = guard.request; const soloStates: boolean[] = [];
+  it('keeps pinned repositories on top and syncs the header Focus toggle with row pins', async () => {
+    const guard = client(); const base = guard.request; const soloStates: boolean[] = []; const saved: GuardUiState[] = [];
     const ids = ['/a', '/b', '/c'];
     guard.request = vi.fn(async (request: GuardRequest) => {
       if (request.method === 'discover') return ids.map(id => ({ id, name: id.slice(1), rootPath: id }));
@@ -88,32 +88,41 @@ describe('VersionGuardPanel', () => {
       return base(request);
     });
     guard.loadState = () => ({ expanded: ['/b'], drafts: {}, selected: '/b' });
+    guard.saveState = state => saved.push(structuredClone(state));
     const panel = new VersionGuardPanel({ client: guard, onSoloStateChange: state => soloStates.push(state) }); document.body.append(panel.element);
     panel.setVisible(true); for (let i = 0; i < 8; i++) await flush();
     const solo = () => panel.element.querySelector<HTMLButtonElement>('header [aria-pressed]')!;
+    const pinOf = (id: string) => panel.element.querySelector<HTMLButtonElement>(`.guard-repository[data-repository="${id}"] .guard-repo-pin`)!;
     expect(solo().getAttribute('aria-pressed')).toBe('false');
+    expect(panel.element.querySelectorAll('.guard-repo-pin')).toHaveLength(3);
+    // Header on → pins the current selection at the top.
     solo().click(); await flush();
     expect(solo().getAttribute('aria-pressed')).toBe('true');
-    expect(solo().title).toBe('单仓聚焦：开（点击关闭）');
     expect(solo().classList.contains('is-active')).toBe(true);
-    expect(panel.element.querySelector('.guard-solo-banner')).toBeNull();
     expect(soloStates).toEqual([false, true]);
-    expect(panel.element.querySelector('.guard-repositories')?.classList.contains('is-solo')).toBe(true);
-    expect(panel.element.querySelector('.guard-solo-above')).toBeNull();
-    expect(panel.element.querySelector('.guard-solo-main .guard-repository')?.getAttribute('data-repository')).toBe('/b');
+    expect(pinOf('/b').classList.contains('is-pinned')).toBe(true);
+    expect([...panel.element.querySelectorAll('.guard-solo-main .guard-repository')].map(el => el.getAttribute('data-repository'))).toEqual(['/b']);
     expect([...panel.element.querySelectorAll('.guard-solo-below .guard-repository')].map(el => el.getAttribute('data-repository'))).toEqual(['/a', '/c']);
-    expect(panel.element.querySelector('.guard-solo-main .guard-repo-title')?.getAttribute('aria-expanded')).toBe('true');
-    expect(panel.element.querySelector('.guard-solo-below .guard-repo-title')?.getAttribute('aria-expanded')).toBe('false');
-    // Click the second below row (/c); keep original list order in the bottom stack.
-    panel.element.querySelectorAll<HTMLElement>('.guard-solo-below .guard-repo-title')[1]!.click(); await flush();
-    expect(panel.element.querySelector('.guard-solo-main .guard-repository')?.getAttribute('data-repository')).toBe('/c');
-    expect([...panel.element.querySelectorAll('.guard-solo-below .guard-repository')].map(el => el.getAttribute('data-repository'))).toEqual(['/a', '/b']);
+    // Row pin adds another repo to the focused top stack and keeps header on.
+    pinOf('/c').click(); await flush();
+    expect(solo().getAttribute('aria-pressed')).toBe('true');
+    expect([...panel.element.querySelectorAll('.guard-solo-main .guard-repository')].map(el => el.getAttribute('data-repository'))).toEqual(['/b', '/c']);
+    expect([...panel.element.querySelectorAll('.guard-solo-below .guard-repository')].map(el => el.getAttribute('data-repository'))).toEqual(['/a']);
+    expect(saved.at(-1)?.pinned).toEqual(['/b', '/c']);
+    expect(saved.at(-1)?.solo).toBe(true);
+    // Unpinning the last focused repos turns Focus mode off and clears the header.
+    pinOf('/b').click(); await flush();
+    pinOf('/c').click(); await flush();
+    expect(solo().getAttribute('aria-pressed')).toBe('false');
+    expect(panel.element.querySelector('.guard-solo-main')).toBeNull();
+    expect(soloStates.at(-1)).toBe(false);
+    // Pinning from a normal list turns Focus mode on without using the header first.
+    pinOf('/a').click(); await flush();
+    expect(solo().getAttribute('aria-pressed')).toBe('true');
+    expect([...panel.element.querySelectorAll('.guard-solo-main .guard-repository')].map(el => el.getAttribute('data-repository'))).toEqual(['/a']);
     solo().click(); await flush();
     expect(solo().getAttribute('aria-pressed')).toBe('false');
-    expect(solo().classList.contains('is-active')).toBe(false);
-    expect(panel.element.querySelector('.guard-repositories')?.classList.contains('is-solo')).toBe(false);
-    expect(panel.element.querySelector('.guard-solo-main')).toBeNull();
-    expect(soloStates).toEqual([false, true, false]);
+    expect(saved.at(-1)?.pinned).toEqual([]);
     panel.dispose();
   });
   it('opens the diff when clicking anywhere on a change row, but not from its action buttons', async () => {

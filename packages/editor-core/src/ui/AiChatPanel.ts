@@ -5,6 +5,10 @@
 
 import type {
   AiOfficeCellChange,
+  AiOfficeDocxChange,
+  AiOfficeDocxComment,
+  AiOfficeDocxItemDecision,
+  AiOfficeDocxResolution,
   AiChatAttachment,
   AiChatSettings,
   EditorToHostMessage,
@@ -21,7 +25,11 @@ import { AI_CHAT_ICON_HTML } from './aiChatIcon';
 const PANEL_WIDTH_STORAGE_KEY = 'easyview-ai-chat-width';
 const MODEL_STORAGE_KEY = 'easyview-ai-chat-model';
 const MODE_STORAGE_KEY = 'easyview-ai-chat-mode';
-const HISTORY_KEY_PREFIX = 'easyview-ai-chat-history:';
+/** @deprecated Migrated once into thread storage; kept for read/migrate only. */
+const LEGACY_HISTORY_KEY_PREFIX = 'easyview-ai-chat-history:';
+const THREAD_INDEX_KEY = 'easyview-ai-chat-threads';
+const THREAD_ACTIVE_KEY = 'easyview-ai-chat-active-thread';
+const THREAD_BODY_PREFIX = 'easyview-ai-chat-thread:';
 const PANEL_MIN_WIDTH = 280;
 const PANEL_DEFAULT_WIDTH = 360;
 export const MAX_CHAT_MESSAGES = 200;
@@ -30,6 +38,7 @@ const MAX_REPLY_CHARS = 256_000;
 const MAX_VISIBLE_MESSAGES = 80;
 const MAX_ATTACHMENT_BYTES = AI_CHAT_MAX_IMAGE_BYTES;
 const MAX_STORED_MESSAGES = MAX_CHAT_MESSAGES;
+const MAX_THREADS = 50;
 /** A settings save that gets no host reply within this time is reported as failed. */
 export const SETTINGS_SAVE_TIMEOUT_MS = 15_000;
 const MAX_STORED_MESSAGE_CHARS = 32_000;
@@ -46,10 +55,15 @@ type OfficeEditStatus = 'pending' | 'applying' | 'applied' | 'rejected' | 'undoi
 interface OfficeEditState {
   proposalId: string;
   fileName: string;
+  kind: 'xlsx' | 'docx';
   changes: AiOfficeCellChange[];
   total: number;
   structural: string[];
   truncated: boolean;
+  docxChanges?: AiOfficeDocxChange[];
+  docxComments?: AiOfficeDocxComment[];
+  /** Per-revision toggles for docx; true = keep, false = exclude. */
+  itemAccepted?: Record<number, boolean>;
   status: OfficeEditStatus;
   commitId?: string;
   error?: string;
@@ -68,16 +82,31 @@ interface ChatUiMessage {
   streaming?: boolean;
 }
 
-interface StoredAiChatSession {
-  version: 1;
+interface ThreadIndexEntry {
+  id: string;
+  title: string;
   mode: ChatMode;
-  messages: Array<{
-    role: 'user' | 'assistant';
-    content: string;
-    reasoning?: string;
-    badge?: MessageBadge;
-    error?: string;
-  }>;
+  fileLabel?: string;
+  updatedAt: number;
+}
+
+interface StoredThreadMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  reasoning?: string;
+  badge?: MessageBadge;
+  error?: string;
+  toolCalls?: Array<{ name: string; done: boolean }>;
+  officeEdits?: OfficeEditState[];
+}
+
+/** Persisted conversation thread — not bound to a document path. */
+interface StoredAiChatThread {
+  version: 2;
+  mode: ChatMode;
+  fileLabel?: string;
+  updatedAt: number;
+  messages: StoredThreadMessage[];
 }
 
 export interface AiChatPanelDeps {
@@ -108,6 +137,31 @@ function createRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function fileLabelFromPath(filePath: string): string | undefined {
+  if (!filePath) return undefined;
+  const cleaned = filePath.replace(/^preview:/i, '');
+  const base = cleaned.split(/[\\/]/).pop()?.trim();
+  return base || undefined;
+}
+
+function threadTitleFromMessages(messages: Array<{ role: string; content: string }>): string {
+  const first = messages.find((message) => message.role === 'user' && message.content.trim());
+  if (!first) return '';
+  return first.content.trim().replace(/\s+/g, ' ').slice(0, 48);
+}
+
+function sanitizeOfficeEditForStorage(edit: OfficeEditState): OfficeEditState {
+  const terminal =
+    edit.status === 'pending' || edit.status === 'applying' || edit.status === 'undoing'
+      ? 'rejected'
+      : edit.status;
+  return {
+    ...edit,
+    status: terminal,
+    commitId: undefined,
+  };
+}
+
 function ensureAiChatPanelStyles(): void {
   const styleId = 'easyview-ai-chat-panel-styles';
   if (document.getElementById(styleId)) return;
@@ -122,9 +176,15 @@ function ensureAiChatPanelStyles(): void {
     .ai-chat-office-diff th, .ai-chat-office-diff td { text-align: left; padding: 2px 6px; border-bottom: 1px solid rgba(128,128,128,0.18); word-break: break-all; }
     .ai-chat-office-diff td.before { color: #dc2626; text-decoration: line-through; }
     .ai-chat-office-diff td.after { color: #16a34a; }
-    .ai-chat-office-actions { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+    .ai-chat-office-actions { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
     .ai-chat-office-btn { padding: 2px 10px; border-radius: 4px; border: 1px solid rgba(128,128,128,0.4); background: transparent; color: inherit; cursor: pointer; }
     .ai-chat-office-btn.apply { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .ai-chat-office-btn.accept-all { background: #15803d; border-color: #15803d; color: #fff; }
+    .ai-chat-office-item-actions { display: flex; gap: 4px; white-space: nowrap; }
+    .ai-chat-office-item-actions button { padding: 0 6px; font-size: 11px; border-radius: 3px; border: 1px solid rgba(128,128,128,0.35); background: transparent; color: inherit; cursor: pointer; }
+    .ai-chat-office-item-actions button.active-accept { border-color: #16a34a; color: #16a34a; }
+    .ai-chat-office-item-actions button.active-reject { border-color: #dc2626; color: #dc2626; }
+    .ai-chat-office-row-rejected td { opacity: 0.45; }
     .ai-chat-office-status { color: var(--vscode-descriptionForeground, #94a3b8); }
     .ai-chat-panel {
       display: flex;
@@ -189,6 +249,77 @@ function ensureAiChatPanelStyles(): void {
       margin-right: auto;
       opacity: 0.85;
       cursor: default;
+    }
+    .ai-chat-history-panel {
+      display: none;
+      flex-direction: column;
+      position: absolute;
+      top: 41px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 20;
+      background: var(--vscode-editor-background, #1e1e1e);
+      border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.2));
+    }
+    .ai-chat-history-panel.open { display: flex; }
+    .ai-chat-history-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.2));
+      flex-shrink: 0;
+    }
+    .ai-chat-history-new {
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid rgba(128, 128, 128, 0.35);
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .ai-chat-history-new:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)); }
+    .ai-chat-history-list {
+      flex: 1;
+      overflow: auto;
+      padding: 6px;
+    }
+    .ai-chat-history-empty {
+      padding: 16px 10px;
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground, #94a3b8);
+      text-align: center;
+    }
+    .ai-chat-history-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+    .ai-chat-history-item:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)); }
+    .ai-chat-history-item.active { background: color-mix(in srgb, var(--mdpre-accent, #4080d0) 18%, transparent); }
+    .ai-chat-history-item-title {
+      font-size: 12px;
+      font-weight: 560;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ai-chat-history-item-meta {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, #94a3b8);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .ai-chat-panel-icon .ai-chat-icon {
       display: block;
@@ -539,12 +670,24 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     <div class="ai-chat-resizer" title="${tHtml('resize')}"></div>
     <div class="ai-chat-header">
       <span class="ai-chat-panel-icon" role="img" title="${tHtml('title')}" aria-label="${tHtml('title')}">${AI_CHAT_ICON_HTML}</span>
+      <button class="ai-chat-icon-btn" data-action="history" type="button" title="${tHtml('history')}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
+      </button>
+      <button class="ai-chat-icon-btn" data-action="new-chat" type="button" title="${tHtml('history.new')}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
       <button class="ai-chat-icon-btn" data-action="settings" type="button" title="${tHtml('settings')}">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
       <button class="ai-chat-icon-btn" data-action="clear" type="button" title="${tHtml('clear')}">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g transform="rotate(40 12 12)"><path d="M12 3v8M8.5 11h7l2.5 9H6l2.5-9Z"/><path d="m10 15-1 5m5-5 1 5"/></g></svg>
       </button>
+    </div>
+    <div class="ai-chat-history-panel" data-history-panel>
+      <div class="ai-chat-history-toolbar">
+        <button class="ai-chat-history-new" data-action="new-chat" type="button">${tHtml('history.new')}</button>
+      </div>
+      <div class="ai-chat-history-list" data-history-list></div>
     </div>
     <div class="ai-chat-messages"></div>
     <div class="ai-chat-composer">
@@ -604,6 +747,8 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
   }
 
   const messagesEl = root.querySelector('.ai-chat-messages') as HTMLElement;
+  const historyPanelEl = root.querySelector('[data-history-panel]') as HTMLElement;
+  const historyListEl = root.querySelector('[data-history-list]') as HTMLElement;
   const inputEl = root.querySelector('.ai-chat-input') as HTMLTextAreaElement;
   const sendBtn = root.querySelector('.ai-chat-send-btn') as HTMLButtonElement;
   const modelBtn = root.querySelector('.ai-chat-model-btn') as HTMLButtonElement;
@@ -633,7 +778,9 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
   let settingsLoaded = false;
   let activeRequestId: string | null = null;
   let streamingMessageId: string | null = null;
+  /** Active document path for Agent tools only — does not select the chat thread. */
   let currentFilePath = '';
+  let activeThreadId = '';
   let renderScheduled = false;
   let renderTimer: ReturnType<typeof setTimeout> | undefined;
   let renderFrame: number | undefined;
@@ -711,7 +858,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     resizer.addEventListener('pointercancel', onUp);
   };
 
-  // -------------------------------------------------------------- history
+  // -------------------------------------------------------------- history (thread-based; not bound to files)
 
   const trimMessages = (): void => {
     let chars = messages.reduce((sum, message) => sum + message.content.length + (message.reasoning?.length ?? 0), 0);
@@ -725,52 +872,302 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     }
   };
 
-  const historyStorageKey = (): string => `${HISTORY_KEY_PREFIX}${currentFilePath}`;
+  const readThreadIndex = (): ThreadIndexEntry[] => {
+    try {
+      const raw = window.localStorage.getItem(THREAD_INDEX_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as ThreadIndexEntry[];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((entry) => entry && typeof entry.id === 'string' && entry.id);
+    } catch {
+      return [];
+    }
+  };
+
+  const writeThreadIndex = (entries: ThreadIndexEntry[]): void => {
+    try {
+      window.localStorage.setItem(THREAD_INDEX_KEY, JSON.stringify(entries.slice(0, MAX_THREADS)));
+    } catch { /* quota */ }
+  };
+
+  const setActiveThreadId = (id: string): void => {
+    activeThreadId = id;
+    try {
+      window.localStorage.setItem(THREAD_ACTIVE_KEY, id);
+    } catch { /* storage unavailable */ }
+  };
+
+  const threadBodyKey = (id: string): string => `${THREAD_BODY_PREFIX}${id}`;
+
+  const deleteThreadBody = (id: string): void => {
+    try {
+      window.localStorage.removeItem(threadBodyKey(id));
+    } catch { /* storage unavailable */ }
+  };
+
+  const closeHistoryPanel = (): void => {
+    historyPanelEl.classList.remove('open');
+  };
+
+  const formatThreadTime = (updatedAt: number): string => {
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) return '';
+    try {
+      return new Date(updatedAt).toLocaleString();
+    } catch {
+      return '';
+    }
+  };
+
+  const renderHistoryPanel = (): void => {
+    const entries = readThreadIndex();
+    historyListEl.replaceChildren();
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ai-chat-history-empty';
+      empty.textContent = tAiChat('history.empty');
+      historyListEl.appendChild(empty);
+      return;
+    }
+    for (const entry of entries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `ai-chat-history-item${entry.id === activeThreadId ? ' active' : ''}`;
+      button.dataset.threadId = entry.id;
+      const title = document.createElement('div');
+      title.className = 'ai-chat-history-item-title';
+      title.textContent = entry.title.trim() || tAiChat('history.untitled');
+      const meta = document.createElement('div');
+      meta.className = 'ai-chat-history-item-meta';
+      const parts = [
+        entry.mode === 'agent' ? 'Agent' : 'Chat',
+        entry.fileLabel,
+        formatThreadTime(entry.updatedAt),
+      ].filter(Boolean);
+      meta.textContent = parts.join(' · ');
+      button.append(title, meta);
+      button.addEventListener('click', () => {
+        switchToThread(entry.id);
+        closeHistoryPanel();
+      });
+      historyListEl.appendChild(button);
+    }
+  };
+
+  const openHistoryPanel = (): void => {
+    closeModelMenu();
+    renderHistoryPanel();
+    historyPanelEl.classList.add('open');
+  };
+
+  const serializeMessages = (): StoredThreadMessage[] =>
+    messages.slice(-MAX_STORED_MESSAGES).map((message) => ({
+      role: message.role,
+      content: message.content.slice(0, MAX_STORED_MESSAGE_CHARS),
+      reasoning: message.reasoning?.slice(0, MAX_STORED_MESSAGE_CHARS),
+      badge: message.badge,
+      error: message.error,
+      toolCalls: message.toolCalls?.map((call) => ({ name: call.name, done: call.done })),
+      officeEdits: message.officeEdits?.map(sanitizeOfficeEditForStorage),
+    }));
+
+  const hydrateMessages = (stored: StoredThreadMessage[]): ChatUiMessage[] =>
+    stored
+      .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
+      .map((message) => ({
+        id: createRequestId(),
+        role: message.role,
+        content: typeof message.content === 'string' ? message.content : '',
+        reasoning: typeof message.reasoning === 'string' ? message.reasoning : undefined,
+        badge: message.badge,
+        error: message.error,
+        toolCalls: Array.isArray(message.toolCalls)
+          ? message.toolCalls.filter((call) => call && typeof call.name === 'string').map((call) => ({
+            name: call.name,
+            done: call.done !== false,
+          }))
+          : undefined,
+        officeEdits: Array.isArray(message.officeEdits)
+          ? message.officeEdits.map((edit) => sanitizeOfficeEditForStorage({
+            ...edit,
+            status: edit.status ?? 'rejected',
+          }))
+          : undefined,
+      }));
+
+  const upsertIndexEntry = (entry: ThreadIndexEntry): void => {
+    const previous = readThreadIndex();
+    const next = [entry, ...previous.filter((item) => item.id !== entry.id)]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_THREADS);
+    const kept = new Set(next.map((item) => item.id));
+    for (const item of previous) {
+      if (!kept.has(item.id)) deleteThreadBody(item.id);
+    }
+    writeThreadIndex(next);
+  };
+
+  const removeIndexEntry = (id: string): void => {
+    writeThreadIndex(readThreadIndex().filter((entry) => entry.id !== id));
+    deleteThreadBody(id);
+  };
 
   const persistSession = (): void => {
     trimMessages();
+    if (!activeThreadId) activeThreadId = createRequestId();
     if (messages.length === 0) {
+      removeIndexEntry(activeThreadId);
       try {
-        window.localStorage.removeItem(historyStorageKey());
+        window.localStorage.setItem(THREAD_ACTIVE_KEY, activeThreadId);
       } catch { /* storage unavailable */ }
       return;
     }
-    const stored: StoredAiChatSession = {
-      version: 1,
+    const updatedAt = Date.now();
+    const fileLabel = fileLabelFromPath(currentFilePath) ?? fileLabelFromPath(deps.getFilePath());
+    const stored: StoredAiChatThread = {
+      version: 2,
       mode,
-      messages: messages
-        .slice(-MAX_STORED_MESSAGES)
-        .map((message) => ({
-          role: message.role,
-          content: message.content.slice(0, MAX_STORED_MESSAGE_CHARS),
-          reasoning: message.reasoning?.slice(0, MAX_STORED_MESSAGE_CHARS),
-          badge: message.badge,
-          error: message.error,
-        })),
+      fileLabel,
+      updatedAt,
+      messages: serializeMessages(),
     };
     try {
-      window.localStorage.setItem(historyStorageKey(), JSON.stringify(stored));
+      window.localStorage.setItem(threadBodyKey(activeThreadId), JSON.stringify(stored));
+      upsertIndexEntry({
+        id: activeThreadId,
+        title: threadTitleFromMessages(stored.messages) || tAiChat('history.untitled'),
+        mode: stored.mode,
+        fileLabel: stored.fileLabel,
+        updatedAt,
+      });
+      window.localStorage.setItem(THREAD_ACTIVE_KEY, activeThreadId);
     } catch { /* quota exceeded — keep in-memory session */ }
   };
 
-  const restoreSession = (): void => {
-    messages = [];
-    visibleMessageCount = MAX_VISIBLE_MESSAGES;
+  const loadThreadMessages = (id: string): StoredAiChatThread | null => {
     try {
-      const raw = window.localStorage.getItem(historyStorageKey());
-      if (raw) {
-        const parsed = JSON.parse(raw) as StoredAiChatSession;
-        if (parsed && parsed.version === 1 && Array.isArray(parsed.messages)) {
-          messages = parsed.messages
-            .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-            .map((message) => ({ ...message, id: createRequestId() }));
-        }
-      }
-    } catch { /* corrupt entry — start fresh */ }
+      const raw = window.localStorage.getItem(threadBodyKey(id));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as StoredAiChatThread;
+      if (!parsed || parsed.version !== 2 || !Array.isArray(parsed.messages)) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const applyThreadToUi = (thread: StoredAiChatThread | null): void => {
+    messages = thread ? hydrateMessages(thread.messages) : [];
+    visibleMessageCount = MAX_VISIBLE_MESSAGES;
     trimMessages();
     mode = documentContextAvailable ? preferredMode : 'chat';
     updateModeButtons();
     renderMessages();
+  };
+
+  const ensureActiveThread = (): void => {
+    let id = '';
+    try {
+      id = window.localStorage.getItem(THREAD_ACTIVE_KEY) ?? '';
+    } catch { /* storage unavailable */ }
+    if (!id) id = createRequestId();
+    setActiveThreadId(id);
+  };
+
+  const restoreActiveThread = (): void => {
+    ensureActiveThread();
+    applyThreadToUi(loadThreadMessages(activeThreadId));
+  };
+
+  const switchToThread = (id: string): void => {
+    if (id === activeThreadId) return;
+    if (activeRequestId) {
+      deps.postMessage({ type: 'aiChat.abort', requestId: activeRequestId });
+      finishStreaming();
+    }
+    persistSession();
+    setActiveThreadId(id);
+    applyThreadToUi(loadThreadMessages(id));
+    pendingAttachments = [];
+    updatePendingAttachments();
+    inputEl.value = '';
+    autoResizeInput();
+  };
+
+  const startNewThread = (): void => {
+    if (activeRequestId) {
+      deps.postMessage({ type: 'aiChat.abort', requestId: activeRequestId });
+      finishStreaming();
+    }
+    persistSession();
+    setActiveThreadId(createRequestId());
+    messages = [];
+    visibleMessageCount = MAX_VISIBLE_MESSAGES;
+    pendingAttachments = [];
+    updatePendingAttachments();
+    inputEl.value = '';
+    autoResizeInput();
+    mode = documentContextAvailable ? preferredMode : 'chat';
+    updateModeButtons();
+    renderMessages();
+    closeHistoryPanel();
+  };
+
+  const migrateLegacyFileSessions = (): void => {
+    try {
+      const legacyKeys: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const key = window.localStorage.key(i);
+        if (key?.startsWith(LEGACY_HISTORY_KEY_PREFIX)) legacyKeys.push(key);
+      }
+      if (legacyKeys.length === 0) return;
+      const existing = readThreadIndex();
+      const migrated: ThreadIndexEntry[] = [];
+      for (const key of legacyKeys) {
+        try {
+          const raw = window.localStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw) as { version?: number; mode?: ChatMode; messages?: StoredThreadMessage[] };
+          if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
+            window.localStorage.removeItem(key);
+            continue;
+          }
+          const id = createRequestId();
+          const fileLabel = fileLabelFromPath(key.slice(LEGACY_HISTORY_KEY_PREFIX.length));
+          const updatedAt = Date.now();
+          const modeValue: ChatMode = parsed.mode === 'chat' ? 'chat' : 'agent';
+          const body: StoredAiChatThread = {
+            version: 2,
+            mode: modeValue,
+            fileLabel,
+            updatedAt,
+            messages: parsed.messages.map((message) => ({
+              role: message.role,
+              content: String(message.content ?? '').slice(0, MAX_STORED_MESSAGE_CHARS),
+              reasoning: message.reasoning,
+              badge: message.badge,
+              error: message.error,
+            })),
+          };
+          window.localStorage.setItem(threadBodyKey(id), JSON.stringify(body));
+          migrated.push({
+            id,
+            title: threadTitleFromMessages(body.messages) || tAiChat('history.untitled'),
+            mode: modeValue,
+            fileLabel,
+            updatedAt,
+          });
+        } catch { /* skip corrupt */ }
+        try {
+          window.localStorage.removeItem(key);
+        } catch { /* ignore */ }
+      }
+      if (migrated.length > 0) {
+        writeThreadIndex([...migrated, ...existing].slice(0, MAX_THREADS));
+        if (!window.localStorage.getItem(THREAD_ACTIVE_KEY)) {
+          setActiveThreadId(migrated[0]!.id);
+        }
+      }
+    } catch { /* storage unavailable */ }
   };
 
   // --------------------------------------------------------------- render
@@ -824,9 +1221,19 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     const box = document.createElement('div');
     box.className = `ai-chat-office-edit ${edit.status}`;
     box.dataset.proposalId = edit.proposalId;
+    const isDocx = edit.kind === 'docx';
+    const docxChanges = edit.docxChanges ?? [];
+    const docxComments = edit.docxComments ?? [];
+    const itemAccepted = edit.itemAccepted ?? Object.fromEntries(docxChanges.map((change) => [change.index, true]));
     const title = document.createElement('div');
     title.className = 'ai-chat-office-title';
-    title.textContent = tAiChat('office.title', { name: edit.fileName, count: edit.total });
+    title.textContent = isDocx
+      ? tAiChat('office.titleDocx', {
+          name: edit.fileName,
+          changes: edit.total,
+          comments: docxComments.length,
+        })
+      : tAiChat('office.title', { name: edit.fileName, count: edit.total });
     box.appendChild(title);
     if (edit.structural.length > 0) {
       const notes = document.createElement('div');
@@ -834,7 +1241,63 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
       notes.textContent = edit.structural.join('；');
       box.appendChild(notes);
     }
-    if (edit.changes.length > 0) {
+
+    if (isDocx && docxChanges.length > 0) {
+      const table = document.createElement('table');
+      table.className = 'ai-chat-office-diff';
+      const head = table.createTHead().insertRow();
+      for (const label of [
+        tAiChat('office.paragraph'),
+        tAiChat('office.before'),
+        tAiChat('office.after'),
+        '',
+      ]) {
+        const th = document.createElement('th');
+        th.textContent = label;
+        head.appendChild(th);
+      }
+      const body = table.createTBody();
+      for (const change of docxChanges.slice(0, MAX_OFFICE_DIFF_ROWS)) {
+        const accepted = itemAccepted[change.index] !== false;
+        const row = body.insertRow();
+        if (!accepted) row.className = 'ai-chat-office-row-rejected';
+        row.insertCell().textContent = `¶${change.paragraphIndex}`;
+        const before = row.insertCell();
+        before.className = 'before';
+        before.textContent = change.before;
+        const after = row.insertCell();
+        after.className = 'after';
+        after.textContent = change.after;
+        const actionCell = row.insertCell();
+        if (edit.status === 'pending') {
+          const wrap = document.createElement('div');
+          wrap.className = 'ai-chat-office-item-actions';
+          const acceptBtn = document.createElement('button');
+          acceptBtn.type = 'button';
+          acceptBtn.textContent = tAiChat('office.itemAccept');
+          acceptBtn.className = accepted ? 'active-accept' : '';
+          acceptBtn.onclick = () => {
+            updateOfficeEdit(messageId, edit.proposalId, {
+              itemAccepted: { ...itemAccepted, [change.index]: true },
+            });
+          };
+          const rejectBtn = document.createElement('button');
+          rejectBtn.type = 'button';
+          rejectBtn.textContent = tAiChat('office.itemReject');
+          rejectBtn.className = accepted ? '' : 'active-reject';
+          rejectBtn.onclick = () => {
+            updateOfficeEdit(messageId, edit.proposalId, {
+              itemAccepted: { ...itemAccepted, [change.index]: false },
+            });
+          };
+          wrap.append(acceptBtn, rejectBtn);
+          actionCell.appendChild(wrap);
+        } else if (!accepted) {
+          actionCell.textContent = tAiChat('office.itemRejected');
+        }
+      }
+      box.appendChild(table);
+    } else if (edit.changes.length > 0) {
       const table = document.createElement('table');
       table.className = 'ai-chat-office-diff';
       const head = table.createTHead().insertRow();
@@ -850,7 +1313,8 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
       }
       box.appendChild(table);
     }
-    const shown = Math.min(edit.changes.length, MAX_OFFICE_DIFF_ROWS);
+
+    const shown = Math.min(isDocx ? docxChanges.length : edit.changes.length, MAX_OFFICE_DIFF_ROWS);
     if (edit.total > shown) {
       const more = document.createElement('div');
       more.className = 'ai-chat-office-notes ai-chat-office-more';
@@ -867,14 +1331,52 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
       element.onclick = onClick;
       actions.appendChild(element);
     };
-    const decide = (accepted: boolean) => {
+    const collectItemDecisions = (): AiOfficeDocxItemDecision[] =>
+      docxChanges.map((change) => ({
+        index: change.index,
+        accept: itemAccepted[change.index] !== false,
+      }));
+    const decide = (accepted: boolean, resolution?: AiOfficeDocxResolution) => {
       if (!activeRequestId) return;
-      deps.postMessage({ type: 'aiChat.officeDecision', requestId: activeRequestId, proposalId: edit.proposalId, accepted });
+      const payload: Extract<EditorToHostMessage, { type: 'aiChat.officeDecision' }> = {
+        type: 'aiChat.officeDecision',
+        requestId: activeRequestId,
+        proposalId: edit.proposalId,
+        accepted,
+      };
+      if (accepted && isDocx) {
+        payload.resolution = resolution ?? 'tracked';
+        payload.itemDecisions = collectItemDecisions();
+      }
+      deps.postMessage(payload);
       updateOfficeEdit(messageId, edit.proposalId, { status: accepted ? 'applying' : 'rejected' });
     };
     if (edit.status === 'pending') {
-      button(tAiChat('office.apply'), 'apply', () => decide(true));
-      button(tAiChat('office.reject'), 'reject', () => decide(false));
+      if (isDocx) {
+        button(tAiChat('office.applyTracked'), 'apply', () => decide(true, 'tracked'));
+        button(tAiChat('office.acceptAll'), 'accept-all', () => {
+          const allAccepted = Object.fromEntries(docxChanges.map((change) => [change.index, true]));
+          updateOfficeEdit(messageId, edit.proposalId, { itemAccepted: allAccepted });
+          // decide after state patch uses collect from current edit; force accept-all with all true
+          if (!activeRequestId) return;
+          deps.postMessage({
+            type: 'aiChat.officeDecision',
+            requestId: activeRequestId,
+            proposalId: edit.proposalId,
+            accepted: true,
+            resolution: 'accept-all',
+            itemDecisions: docxChanges.map((change) => ({ index: change.index, accept: true })),
+          });
+          updateOfficeEdit(messageId, edit.proposalId, {
+            itemAccepted: allAccepted,
+            status: 'applying',
+          });
+        });
+        button(tAiChat('office.reject'), 'reject', () => decide(false));
+      } else {
+        button(tAiChat('office.apply'), 'apply', () => decide(true));
+        button(tAiChat('office.reject'), 'reject', () => decide(false));
+      }
     } else if (edit.status === 'applied' && edit.commitId) {
       const commitId = edit.commitId;
       button(tAiChat('office.undo'), 'undo', () => {
@@ -884,7 +1386,12 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     }
     const status = document.createElement('span');
     status.className = 'ai-chat-office-status';
-    status.textContent = edit.status === 'error' && edit.error ? edit.error : tAiChat(`office.status.${edit.status}`);
+    status.textContent =
+      edit.status === 'error' && edit.error
+        ? edit.error
+        : edit.status === 'pending' && isDocx
+          ? tAiChat('office.status.pendingDocx')
+          : tAiChat(`office.status.${edit.status}`);
     actions.appendChild(status);
     box.appendChild(actions);
     return box;
@@ -1069,11 +1576,13 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
 
   modeCurrent.addEventListener('click', () => {
     modelMenu.classList.remove('open');
+    closeHistoryPanel();
     modeMenu.classList.toggle('open');
   });
 
   modelBtn.addEventListener('click', () => {
     modeMenu.classList.remove('open');
+    closeHistoryPanel();
     modelMenu.classList.toggle('open');
   });
   const onDocumentClick = (event: MouseEvent): void => {
@@ -1081,6 +1590,9 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     const target = event.target as HTMLElement;
     if (modelMenu.classList.contains('open') && !target.closest('.ai-chat-model-switcher')) modelMenu.classList.remove('open');
     if (modeMenu.classList.contains('open') && !target.closest('.ai-chat-mode-picker')) modeMenu.classList.remove('open');
+    if (historyPanelEl.classList.contains('open') && !target.closest('[data-history-panel]') && !target.closest('[data-action="history"]')) {
+      closeHistoryPanel();
+    }
   };
   document.addEventListener('click', onDocumentClick);
 
@@ -1478,13 +1990,32 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     const action = button.dataset.action;
     switch (action) {
       case 'clear':
+        if (activeRequestId) {
+          deps.postMessage({ type: 'aiChat.abort', requestId: activeRequestId });
+          finishStreaming();
+        }
+        // Discard the current thread instead of keeping it in history.
         messages = [];
-            persistSession();
+        persistSession();
+        setActiveThreadId(createRequestId());
+        pendingAttachments = [];
+        updatePendingAttachments();
+        inputEl.value = '';
+        autoResizeInput();
+        closeHistoryPanel();
         renderMessages();
+        break;
+      case 'history':
+        if (historyPanelEl.classList.contains('open')) closeHistoryPanel();
+        else openHistoryPanel();
+        break;
+      case 'new-chat':
+        startNewThread();
         break;
       case 'settings':
       case 'open-settings':
         closeModelMenu();
+        closeHistoryPanel();
         openSettings();
         break;
       case 'attach':
@@ -1594,13 +2125,19 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
           deps.postMessage({ type: 'aiChat.officeDecision', requestId: message.requestId, proposalId: message.proposalId, accepted: false });
           return true;
         }
+        const kind = message.kind === 'docx' ? 'docx' : 'xlsx';
+        const docxChanges = message.docxChanges ?? [];
         target.officeEdits = [...(target.officeEdits ?? []), {
           proposalId: message.proposalId,
           fileName: message.fileName,
+          kind,
           changes: message.changes,
           total: message.total,
           structural: message.structural,
           truncated: message.truncated,
+          docxChanges,
+          docxComments: message.docxComments ?? [],
+          itemAccepted: Object.fromEntries(docxChanges.map((change) => [change.index, true])),
           status: 'pending',
         }];
         renderMessages();
@@ -1722,6 +2259,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     } else {
       if (activeRequestId) stopGeneration();
       closeModelMenu();
+      closeHistoryPanel();
       closeSettings();
       notifyLayoutChange();
     }
@@ -1733,13 +2271,14 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
 
   const setFilePath = (filePath: string): void => {
     if (filePath === currentFilePath) return;
+    // Keep the conversation; only the Agent document context changes.
+    // Abort an in-flight Agent turn so patches cannot land on the newly focused file.
     if (activeRequestId) {
       deps.postMessage({ type: 'aiChat.abort', requestId: activeRequestId });
       finishStreaming();
+      persistSession();
     }
-    persistSession();
     currentFilePath = filePath;
-    restoreSession();
   };
 
   const setDocumentContextAvailable = (available: boolean): void => {
@@ -1752,9 +2291,14 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
 
   const setSuspended = (suspended: boolean): void => {
     if (disposed || root.classList.contains('suspended') === suspended) return;
+    if (suspended) persistSession();
     suspendedState = suspended;
     root.classList.toggle('suspended', suspended);
-    if (!suspended && openState) renderMessages();
+    if (!suspended) {
+      // Desktop hosts a Markdown panel and a standalone Office panel that share localStorage.
+      restoreActiveThread();
+      if (openState) renderMessages();
+    }
     if (openState) notifyLayoutChange();
   };
 
@@ -1782,7 +2326,9 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
 
   loadPanelWidth();
   applyPanelWidth();
-  setFilePath(deps.getFilePath());
+  currentFilePath = deps.getFilePath();
+  migrateLegacyFileSessions();
+  restoreActiveThread();
   updateModeButtons();
   updateSendButton();
   updatePendingAttachments();

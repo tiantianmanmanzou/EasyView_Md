@@ -1,4 +1,13 @@
-import type { AiChatAttachment, AiChatHistoryEntry, AiChatSettings, AiOfficeCellChange } from '../ai/ai-chat';
+import type {
+  AiChatAttachment,
+  AiChatHistoryEntry,
+  AiChatSettings,
+  AiOfficeCellChange,
+  AiOfficeDocxChange,
+  AiOfficeDocxComment,
+  AiOfficeDocxItemDecision,
+  AiOfficeDocxResolution,
+} from '../ai/ai-chat';
 import type { AiTextPatch } from '../ai/text-patch';
 import type { XlsxTablePayload } from '../export/xlsx-export';
 
@@ -146,8 +155,17 @@ export type EditorToHostMessage =
   | { type: 'aiChat.saveWebSearchApiKey'; requestId: string; apiKey: string }
   | { type: 'aiChat.pickImage'; requestId: string }
   | { type: 'aiChat.patchesApplied'; requestId: string; operationId: string; error?: string }
-  /** User decision on a pending Office (xlsx) edit proposal. */
-  | { type: 'aiChat.officeDecision'; requestId: string; proposalId: string; accepted: boolean }
+  /** User decision on a pending Office (xlsx/docx) edit proposal. */
+  | {
+      type: 'aiChat.officeDecision';
+      requestId: string;
+      proposalId: string;
+      accepted: boolean;
+      /** DOCX: write as tracked changes, or fold into body. Ignored for xlsx. */
+      resolution?: AiOfficeDocxResolution;
+      /** DOCX: per-revision accept/reject. Missing entries default to accept. */
+      itemDecisions?: AiOfficeDocxItemDecision[];
+    }
   /** Restores the backup taken before an applied Office edit. */
   | { type: 'aiChat.officeUndo'; requestId: string; commitId: string }
   | { type: 'productThemeChanged'; mode: 'light' | 'gray' | 'dark' };
@@ -190,7 +208,20 @@ export type HostToEditorMessage =
   | { type: 'aiChat.done'; requestId: string; content: string; reasoning?: string; finishReason?: string }
   | { type: 'aiChat.tool'; requestId: string; phase: 'call' | 'result'; toolName: string; input: unknown; output?: unknown }
   | { type: 'aiChat.applyPatches'; requestId: string; operationId: string; path: string; patches: AiTextPatch[] }
-  | { type: 'aiChat.officeProposal'; requestId: string; proposalId: string; fileName: string; changes: AiOfficeCellChange[]; total: number; structural: string[]; truncated: boolean }
+  | {
+      type: 'aiChat.officeProposal';
+      requestId: string;
+      proposalId: string;
+      fileName: string;
+      /** Defaults to xlsx when omitted (older hosts). */
+      kind?: 'xlsx' | 'docx';
+      changes: AiOfficeCellChange[];
+      total: number;
+      structural: string[];
+      truncated: boolean;
+      docxChanges?: AiOfficeDocxChange[];
+      docxComments?: AiOfficeDocxComment[];
+    }
   | { type: 'aiChat.officeCommitted'; requestId: string; commitId: string; filePath: string; backup: string }
   | { type: 'aiChat.officeUndone'; requestId: string; commitId: string; filePath?: string; error?: string }
   | { type: 'aiChat.error'; requestId: string; message: string; aborted?: boolean }

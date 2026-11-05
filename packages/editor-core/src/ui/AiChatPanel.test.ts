@@ -34,6 +34,7 @@ describe('AiChatPanel host and document context', () => {
     expect(agent?.disabled).toBe(true);
     expect(agent?.title).toContain('仅 Markdown');
     expect(agent?.title).toContain('.xlsx');
+    expect(agent?.title).toContain('.docx');
     expect(root?.querySelector('[data-mode="chat"]')?.classList.contains('active')).toBe(true);
 
     panel.setDocumentContextAvailable(true);
@@ -63,8 +64,7 @@ describe('AiChatPanel host and document context', () => {
     panel.destroy();
   });
 
-  it('picks the mode from a dropdown beside the model, defaulting to Agent over older per-file sessions', () => {
-    window.localStorage.setItem('easyview-ai-chat-history:/workspace/document.md', JSON.stringify({ version: 1, mode: 'chat', messages: [] }));
+  it('picks the mode from a dropdown beside the model, defaulting to Agent over a stored preference of chat only after the user chooses Chat', () => {
     const host = document.getElementById('global-ai-host')!;
     const create = () => createAiChatPanel({
       container: host,
@@ -82,6 +82,7 @@ describe('AiChatPanel host and document context', () => {
     expect(host.querySelector('.ai-chat-header .ai-chat-panel-icon')?.getAttribute('title')).toBe('AI 对话');
     expect(host.querySelector('.ai-chat-title')).toBeNull();
     expect(host.querySelector('.ai-chat-mode-label')?.textContent).toBe('Agent');
+    expect(host.querySelector('[data-action="history"]')).not.toBeNull();
 
     host.querySelector<HTMLButtonElement>('.ai-chat-mode-current')!.click();
     expect(host.querySelector('.ai-chat-mode-menu')?.classList.contains('open')).toBe(true);
@@ -241,9 +242,82 @@ describe('AI conversation lifetime', () => {
       id = send(`message ${i}`); panel.handleMessage({ type: 'aiChat.done', requestId: id, content: `answer ${i}`, finishReason: 'stop' });
     }
     expect(document.querySelectorAll('.ai-chat-msg')).toHaveLength(80);
-    expect(JSON.parse(localStorage.getItem('easyview-ai-chat-history:/audit.md')!).messages).toHaveLength(200);
+    const activeId = localStorage.getItem('easyview-ai-chat-active-thread')!;
+    expect(JSON.parse(localStorage.getItem(`easyview-ai-chat-thread:${activeId}`)!).messages).toHaveLength(200);
     document.querySelector<HTMLButtonElement>('.ai-chat-earlier')!.click();
     expect(document.querySelectorAll('.ai-chat-msg')).toHaveLength(160);
+    panel.destroy();
+  });
+
+  it('keeps the conversation when the focused file changes, and history can jump back', () => {
+    let path = '/a.md';
+    document.body.innerHTML = '<div id="editor-body"></div>';
+    window.localStorage.clear();
+    const sent: EditorToHostMessage[] = [];
+    const panel = createAiChatPanel({
+      postMessage: (message) => sent.push(message),
+      getDocumentContent: () => 'doc',
+      getFilePath: () => path,
+      getFileName: () => path.split('/').pop()!,
+      applyDocumentEdit: () => undefined,
+      copyText: () => undefined,
+    });
+    panel.open();
+    const settingsReq = sent.find((message) => message.type === 'aiChat.getSettings')! as { requestId: string };
+    panel.handleMessage({
+      type: 'aiChat.settingsResponse',
+      requestId: settingsReq.requestId,
+      settings: { baseUrl: '', models: ['test'], defaultModel: 'test', temperature: 1, topP: 1, maxTokens: 100, systemPrompt: '', stream: true },
+      hasApiKey: true,
+      hasWebSearchApiKey: false,
+    });
+    document.querySelector<HTMLTextAreaElement>('.ai-chat-input')!.value = 'first thread';
+    document.querySelector<HTMLButtonElement>('.ai-chat-send-btn')!.click();
+    const firstId = (sent.filter((message) => message.type === 'aiChat.send').at(-1)! as { requestId: string }).requestId;
+    panel.handleMessage({ type: 'aiChat.done', requestId: firstId, content: 'answer one', finishReason: 'stop' });
+    expect(document.querySelector('.ai-chat-msg.user')!.textContent).toContain('first thread');
+
+    path = '/b.md';
+    panel.setFilePath('/b.md');
+    expect(document.querySelector('.ai-chat-msg.user')!.textContent).toContain('first thread');
+
+    document.querySelector<HTMLButtonElement>('[data-action="new-chat"]')!.click();
+    expect(document.querySelector('.ai-chat-msg')).toBeNull();
+    document.querySelector<HTMLTextAreaElement>('.ai-chat-input')!.value = 'second thread';
+    document.querySelector<HTMLButtonElement>('.ai-chat-send-btn')!.click();
+    const secondId = (sent.filter((message) => message.type === 'aiChat.send').at(-1)! as { requestId: string }).requestId;
+    panel.handleMessage({ type: 'aiChat.done', requestId: secondId, content: 'answer two', finishReason: 'stop' });
+
+    document.querySelector<HTMLButtonElement>('[data-action="history"]')!.click();
+    expect(document.querySelector('[data-history-panel]')!.classList.contains('open')).toBe(true);
+    const items = document.querySelectorAll<HTMLButtonElement>('.ai-chat-history-item');
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    items[items.length - 1]!.click(); // older first thread (list is newest-first)
+    expect(document.querySelector('.ai-chat-msg.user')!.textContent).toContain('first thread');
+    expect(document.querySelector('[data-history-panel]')!.classList.contains('open')).toBe(false);
+    panel.destroy();
+  });
+
+  it('migrates legacy per-file history into unbound threads', () => {
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      'easyview-ai-chat-history:/workspace/old.md',
+      JSON.stringify({ version: 1, mode: 'agent', messages: [{ role: 'user', content: 'legacy hello' }, { role: 'assistant', content: 'legacy reply' }] }),
+    );
+    document.body.innerHTML = '<div id="editor-body"></div>';
+    const panel = createAiChatPanel({
+      postMessage: () => undefined,
+      getDocumentContent: () => '#',
+      getFilePath: () => '/workspace/other.md',
+      getFileName: () => 'other.md',
+      applyDocumentEdit: () => undefined,
+      copyText: () => undefined,
+    });
+    expect(window.localStorage.getItem('easyview-ai-chat-history:/workspace/old.md')).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem('easyview-ai-chat-threads')!).length).toBe(1);
+    expect(document.body.querySelector('.ai-chat-msg.user')?.textContent ?? '').toContain('legacy hello');
+    panel.setFilePath('/workspace/another.md');
+    expect(document.body.querySelector('.ai-chat-msg.user')?.textContent ?? '').toContain('legacy hello');
     panel.destroy();
   });
   it('acknowledges a background edit only after its document accepts it', async () => {
@@ -306,6 +380,90 @@ describe('AI conversation lifetime', () => {
     expect(box.querySelectorAll('tbody tr')).toHaveLength(50);
     expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('共 30000 处');
     expect(box.querySelector('.ai-chat-office-more')!.textContent).toBe('共 30000 处修改，仅显示前 50 处');
+    panel.destroy();
+  });
+
+  it('docx proposal: per-item reject + write as revisions, or accept-all into body', () => {
+    const { panel, sent, send } = setup();
+    const requestId = send('改合同措辞');
+    panel.handleMessage({
+      type: 'aiChat.officeProposal',
+      requestId,
+      proposalId: 'd1',
+      fileName: 'contract.docx',
+      kind: 'docx',
+      changes: [
+        { sheet: '¶0', ref: '甲方', before: '甲方', after: '委托方' },
+        { sheet: '¶1', ref: '乙方', before: '乙方', after: '受托方' },
+      ],
+      total: 2,
+      structural: [],
+      truncated: false,
+      docxChanges: [
+        { index: 0, paragraphIndex: 0, search: '甲方', replaceWith: '委托方', before: '甲方', after: '委托方' },
+        { index: 1, paragraphIndex: 1, search: '乙方', replaceWith: '受托方', before: '乙方', after: '受托方' },
+      ],
+      docxComments: [{ paragraphIndex: 0, text: '请法务确认' }],
+    });
+    const box = document.querySelector('.ai-chat-office-edit')!;
+    expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('contract.docx');
+    expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('2 处修订');
+    expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('1 条批注');
+    expect(box.querySelector('.ai-chat-office-status')!.textContent).toContain('写入修订');
+    expect(box.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(box.querySelector('.ai-chat-office-btn.accept-all')).not.toBeNull();
+    expect(box.querySelector('.ai-chat-office-btn.apply')).not.toBeNull();
+
+    const rejectButtons = box.querySelectorAll<HTMLButtonElement>('.ai-chat-office-item-actions button');
+    // each row: Accept + Reject
+    expect(rejectButtons.length).toBe(4);
+    rejectButtons[3]!.click(); // reject second revision
+    expect(document.querySelectorAll('tr.ai-chat-office-row-rejected')).toHaveLength(1);
+
+    document.querySelector<HTMLButtonElement>('.ai-chat-office-btn.apply')!.click();
+    expect(sent).toContainEqual({
+      type: 'aiChat.officeDecision',
+      requestId,
+      proposalId: 'd1',
+      accepted: true,
+      resolution: 'tracked',
+      itemDecisions: [
+        { index: 0, accept: true },
+        { index: 1, accept: false },
+      ],
+    });
+    panel.destroy();
+  });
+
+  it('docx accept-all forces every revision on and writes resolution accept-all', () => {
+    const { panel, sent, send } = setup();
+    const requestId = send('全部接受');
+    panel.handleMessage({
+      type: 'aiChat.officeProposal',
+      requestId,
+      proposalId: 'd2',
+      fileName: 'a.docx',
+      kind: 'docx',
+      changes: [{ sheet: '¶0', ref: 'x', before: 'x', after: 'y' }],
+      total: 1,
+      structural: [],
+      truncated: false,
+      docxChanges: [
+        { index: 0, paragraphIndex: 0, search: 'x', replaceWith: 'y', before: 'x', after: 'y' },
+      ],
+      docxComments: [],
+    });
+    // Mark rejected first, then accept-all should still send accept:true for all.
+    document.querySelectorAll<HTMLButtonElement>('.ai-chat-office-item-actions button')[1]!.click();
+    document.querySelector<HTMLButtonElement>('.ai-chat-office-btn.accept-all')!.click();
+    expect(sent).toContainEqual({
+      type: 'aiChat.officeDecision',
+      requestId,
+      proposalId: 'd2',
+      accepted: true,
+      resolution: 'accept-all',
+      itemDecisions: [{ index: 0, accept: true }],
+    });
     panel.destroy();
   });
 });

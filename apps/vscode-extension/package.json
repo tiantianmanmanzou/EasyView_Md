@@ -669,13 +669,13 @@
         "command": "easyviewMd.versionGuard.soloOn",
         "title": "%command.versionGuard.soloOn.title%",
         "category": "EasyView_Md",
-        "icon": "$(list-selection)"
+        "icon": "$(list-tree)"
       },
       {
         "command": "easyviewMd.versionGuard.soloOff",
         "title": "%command.versionGuard.soloOff.title%",
         "category": "EasyView_Md",
-        "icon": "$(list-flat)"
+        "icon": "$(pass-filled)"
       },
       {
         "command": "easyviewMd.workspace.configureSort",

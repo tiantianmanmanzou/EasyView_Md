@@ -353,7 +353,9 @@ export class VersionGuardPanel {
           const conflicts = status.files.some(file => file.index === 'U');
           // The counts are the pull and push buttons themselves; 0 stays visible (dimmed) so the layout never shifts.
           const count = (method: 'pull' | 'push', value: number, ready: boolean, title: string): void => {
-            const button = this.button(`${method === 'pull' ? '↓' : '↑'}${checking ? '…' : value}`, checking ? tGuard('checking') : title, () => this.operation(repo.id, { method }));
+            // Empty label so aria-label stays the hint; visible ↑N/↓N is filled in afterward.
+            const button = this.button('', checking ? tGuard('checking') : title, () => this.operation(repo.id, { method }));
+            button.textContent = `${method === 'pull' ? '↓' : '↑'}${checking ? '…' : value}`;
             button.className = `guard-sync-count${ready ? ' is-ready' : ''}`; button.dataset.method = method; button.disabled = busy || checking || !ready; controls.append(button);
           };
           count('pull', status.behind, status.behind > 0 && !conflicts, !status.behind ? tGuard('noIncoming') : conflicts ? tGuard('resolveConflicts') : formatGuard('pullHint', { count: String(status.behind), upstream }));

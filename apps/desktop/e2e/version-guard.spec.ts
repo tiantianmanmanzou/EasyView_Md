@@ -41,8 +41,8 @@ test('Version Guard discovers nested repositories, commits index only, pushes, d
     await expect(main.locator('.guard-group', { hasText: '已暂存' })).toBeVisible();
     await main.locator('textarea').fill('Guard runtime commit'); await main.getByRole('button', { name: '提交', exact: true }).click();
     await expect.poll(() => git(repo, 'log', '-1', '--format=%s')).toBe('Guard runtime commit'); expect(git(repo, 'ls-tree', '--name-only', 'HEAD')).not.toContain('other.txt');
-    await main.getByRole('button', { name: '把本地提交推送到远程', exact: true }).click(); await expect.poll(() => git(remote, 'log', '-1', '--format=%s')).toBe('Guard runtime commit');
-    await main.getByRole('button', { name: /^检查更新/ }).click(); await expect(main.getByRole('button', { name: /^检查更新 · 上次检查远程/ })).toBeVisible(); await expect(main.locator('.guard-checked')).toHaveCount(0);
+    await main.locator('.guard-sync-count[data-method="push"]').click(); await expect.poll(() => git(remote, 'log', '-1', '--format=%s')).toBe('Guard runtime commit');
+    await main.locator('.guard-repo-refresh').click(); await expect(main.getByRole('button', { name: /刷新此仓库并检查远程 · 上次检查远程/ })).toBeVisible(); await expect(main.locator('.guard-checked')).toHaveCount(0);
     await expect(panel.locator('.guard-commit', { hasText: 'Guard runtime commit' })).toBeVisible();
     // Open working file, edit without manually saving, and stage through the panel.
     const api = (request: object) => page.evaluate(async request => { const result = await (window as any).easyViewDesktop.versionGuard.request(request); if (!result.ok) throw new Error(result.message); return result.value; }, request);

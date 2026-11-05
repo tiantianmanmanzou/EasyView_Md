@@ -15,6 +15,8 @@
   "command.workspace.refresh.title": "刷新",
   "command.versionGuard.refresh.title": "刷新仓库",
   "command.versionGuard.expandAll.title": "展开全部",
+  "command.versionGuard.soloOn.title": "每次只查看一个仓库",
+  "command.versionGuard.soloOff.title": "显示全部仓库",
   "command.versionGuard.collapseAll.title": "收起全部",
   "command.workspace.configureSort.title": "设置排序",
   "command.workspace.search.title": "搜索文件和文件夹",

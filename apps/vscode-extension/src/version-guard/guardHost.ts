@@ -68,6 +68,7 @@ export function registerVersionGuard(context: vscode.ExtensionContext): vscode.D
       const messages = webview.onDidReceiveMessage(async message => {
         if (message.type === 'guard.ready') { post({ type: 'guard.visible', visible: view?.visible }); active(); return; }
         if (message.type === 'guard.expandState') { void vscode.commands.executeCommand('setContext', 'easyviewMd.versionGuard.allExpanded', message.allExpanded === true); return; }
+        if (message.type === 'guard.soloState') { void vscode.commands.executeCommand('setContext', 'easyviewMd.versionGuard.solo', message.solo === true); return; }
         if (message.type !== 'guard.request' || !Number.isSafeInteger(message.id)) return;
         try {
           if (!vscode.workspace.isTrusted) throw new Error(tGuardHost('trust'));
@@ -107,7 +108,9 @@ export function registerVersionGuard(context: vscode.ExtensionContext): vscode.D
   const refresh = vscode.commands.registerCommand('easyviewMd.versionGuard.refresh', () => post({ type: 'guard.refresh' }));
   const expandAll = vscode.commands.registerCommand('easyviewMd.versionGuard.expandAll', () => post({ type: 'guard.expandAll' }));
   const collapseAll = vscode.commands.registerCommand('easyviewMd.versionGuard.collapseAll', () => post({ type: 'guard.collapseAll' }));
+  const soloOn = vscode.commands.registerCommand('easyviewMd.versionGuard.soloOn', () => post({ type: 'guard.soloOn' }));
+  const soloOff = vscode.commands.registerCommand('easyviewMd.versionGuard.soloOff', () => post({ type: 'guard.soloOff' }));
   const focus = vscode.window.onDidChangeWindowState(active);
   const roots = vscode.workspace.onDidChangeWorkspaceFolders(() => { post({ type: 'guard.reset' }); active(); });
-  return vscode.Disposable.from(provider, refresh, expandAll, collapseAll, focus, roots, { dispose: () => { watcher?.dispose(); service.dispose(); for (const panel of panels) panel.dispose(); } });
+  return vscode.Disposable.from(provider, refresh, expandAll, collapseAll, soloOn, soloOff, focus, roots, { dispose: () => { watcher?.dispose(); service.dispose(); for (const panel of panels) panel.dispose(); } });
 }

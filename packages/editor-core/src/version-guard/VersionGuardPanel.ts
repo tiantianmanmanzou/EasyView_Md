@@ -319,7 +319,8 @@ export class VersionGuardPanel {
       if (pinned.has(repo.id)) section.classList.add('is-focus');
       const expanded = this.ui.expanded.includes(repo.id);
       const loading = this.pending.has(repo.id) || (this.scanning && !this.statuses.has(repo.id));
-      const row = document.createElement('div'); row.className = `guard-repo-title${this.ui.selected === repo.id ? ' is-selected' : ''}${loading ? ' is-loading' : ''}`; row.title = repo.rootPath;
+      // Selected fill only while expanded — a collapsed row should not look “active”.
+      const row = document.createElement('div'); row.className = `guard-repo-title${this.ui.selected === repo.id && expanded ? ' is-selected' : ''}${loading ? ' is-loading' : ''}`; row.title = repo.rootPath;
       row.tabIndex = 0; row.setAttribute('role', 'treeitem'); row.setAttribute('aria-expanded', String(expanded)); if (loading) row.setAttribute('aria-busy', 'true');
       // The whole header row toggles expansion and selects the repository, like a tree node.
       const toggle = (): void => {

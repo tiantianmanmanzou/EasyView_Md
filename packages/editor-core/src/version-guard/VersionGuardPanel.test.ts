@@ -77,6 +77,11 @@ describe('VersionGuardPanel', () => {
     expect(expanded()).toEqual(['false', 'false']);
     expect(titles()).toEqual(['刷新仓库', '展开全部', '单仓聚焦：关（点击开启）']);
     expect(states).toEqual([false, true, false]);
+    expect(panel.element.querySelector('.guard-repo-title.is-selected')).toBeNull();
+    panel.element.querySelectorAll<HTMLElement>('.guard-repo-title')[0]!.click(); await flush();
+    expect(panel.element.querySelector('.guard-repository[data-repository="/repo"] .guard-repo-title')?.classList.contains('is-selected')).toBe(true);
+    panel.element.querySelectorAll<HTMLElement>('.guard-repo-title')[0]!.click(); await flush();
+    expect(panel.element.querySelector('.guard-repo-title.is-selected')).toBeNull();
     panel.dispose();
   });
   it('keeps pinned repositories on top and syncs the header Focus toggle with row pins', async () => {

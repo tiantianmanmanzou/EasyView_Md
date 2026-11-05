@@ -186,12 +186,17 @@ test('keeps Markdown dirty content while preview tabs occupy the central surface
     await expect(page.locator('.desktop-tab')).toHaveCount(3);
     await expect(page.locator('.desktop-tab.active .desktop-tab-label')).toHaveText('second.md');
     await expect(page.locator('.desktop-editor-session:not([hidden]) .ProseMirror')).toContainText('Second original.');
-    const secondParagraph = page.locator('.desktop-editor-session:not([hidden]) .ProseMirror p').last();
-    await secondParagraph.click();
-    await page.keyboard.press('End');
-    await page.keyboard.type(' Second saved.');
-    // Under CI load the save shortcut can fire before the edit reaches the document model.
-    await expect(page.locator('.desktop-editor-session:not([hidden]) .ProseMirror')).toContainText('Second saved.');
+    const secondEditor = page.locator('.desktop-editor-session:not([hidden]) .ProseMirror');
+    const secondParagraph = secondEditor.locator('p').last();
+    // Under CI load, the first click/type can miss ProseMirror focus — retry until the edit sticks.
+    await expect(async () => {
+      if (!(await secondEditor.innerText()).includes('Second saved.')) {
+        await secondParagraph.click();
+        await page.keyboard.press('End');
+        await page.keyboard.type(' Second saved.');
+      }
+      await expect(secondEditor).toContainText('Second saved.', { timeout: 2000 });
+    }).toPass({ timeout: 30000 });
     await expect(page.locator('.desktop-tab.active .desktop-tab-dirty')).toHaveCount(1);
     // Save through File > Save: a CDP-synthesized Cmd/Ctrl+S reaches the renderer first and is only
     // sometimes forwarded to the menu accelerator (flaky on CI and on busy desktops). The shortcut

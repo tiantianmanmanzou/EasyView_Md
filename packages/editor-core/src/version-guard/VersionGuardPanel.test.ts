@@ -519,7 +519,7 @@ describe('VersionGuardPanel', () => {
     const panel = new VersionGuardPanel({ client: guard }); document.body.append(panel.element); panel.setVisible(true);
     for (let i = 0; i < 5; i++) await flush();
     for (let page = 0; page < 9; page++) {
-      panel.element.querySelector<HTMLButtonElement>('.guard-history button[aria-label="加载更多"]')!.click();
+      [...panel.element.querySelectorAll<HTMLButtonElement>('.guard-history button')].find(button => button.textContent === '加载更多')!.click();
       for (let i = 0; i < 3; i++) await flush();
     }
     const internal = panel as unknown as { histories: { get(key: string): { entries: unknown[] } }; commitFiles: { size: number } };

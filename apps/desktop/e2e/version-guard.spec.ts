@@ -34,7 +34,7 @@ test('Version Guard discovers nested repositories, commits index only, pushes, d
     await expect.poll(() => fontSize('.version-guard .guard-file-name')).toBe(treeFont);
     await expect.poll(() => fontSize('.version-guard .guard-group')).toBe(treeFont);
     const change = main.locator('.guard-file').filter({ has: page.locator('.guard-file-name', { hasText: /^notes\.md$/ }) });
-    await change.getByRole('button', { name: 'notes.md', exact: true }).click();
+    await change.locator('.guard-file-name').click();
     await expect(page.locator('.easyview-history-view .cm-content')).toContainText('Changed');
     await expect(page.locator('.easyview-history-view .cm-content')).toHaveAttribute('contenteditable', 'false');
     await change.getByRole('button', { name: '暂存', exact: true }).click();

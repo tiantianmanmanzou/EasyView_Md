@@ -191,7 +191,10 @@ export class VersionGuardPanel {
   }
   private iconButton(icon: string, title: string, action: () => void): HTMLButtonElement { const button = this.button('', title, action); button.classList.add('guard-header-icon'); button.innerHTML = icon; return button; }
   private button(label: string, title: string, action: () => void | Promise<unknown>): HTMLButtonElement {
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.title = title; button.setAttribute('aria-label', title);
+    // Only icon/empty-label controls need aria-label. Visible text (e.g. file names) must stay the
+    // accessible name — overriding it with the tooltip path breaks getByRole({ name }) in e2e.
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.title = title;
+    if (!label) button.setAttribute('aria-label', title);
     button.onclick = event => { event.stopPropagation(); void Promise.resolve().then(action).catch(error => this.error(error)); }; return button;
   }
   private async initRepository(): Promise<void> {

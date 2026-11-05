@@ -1,5 +1,5 @@
 import { flushDesktopEditors } from '../document/flushDesktopEditors';
-import { dialog, shell, type WebContents } from 'electron';
+import { clipboard, dialog, shell, type WebContents } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { VersionGuardService, guardDiagnostics } from '@easyview/node-runtime';
@@ -65,6 +65,9 @@ export async function handleVersionGuard(sender: WebContents, request: GuardRequ
     const repository = await service.repository(request.repository); const [relative] = await service.files(repository, request.paths);
     const result = await openWorkspaceEntryTab(path.relative(workspaceRoot()!, path.join(repository.rootPath, relative)));
     if (!result.ok) throw new Error(result.message); return true;
+  }
+  if (request?.method === 'copyText') {
+    clipboard.writeText(String(request.text ?? '')); return true;
   }
   return service.handle(request);
 }

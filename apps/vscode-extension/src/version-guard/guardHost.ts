@@ -82,6 +82,8 @@ export function registerVersionGuard(context: vscode.ExtensionContext): vscode.D
             const css = panel.webview.asWebviewUri(vscode.Uri.joinPath(dist, 'webview.css')); const script = panel.webview.asWebviewUri(vscode.Uri.joinPath(dist, 'history-view.js')); const workerUrl = panel.webview.asWebviewUri(vscode.Uri.joinPath(dist, 'history-diff-worker.js')).toString();
             panel.webview.html = `<!doctype html><html lang="${getLocale()}"><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${panel.webview.cspSource}; worker-src blob:; connect-src ${panel.webview.cspSource}; style-src ${panel.webview.cspSource} 'unsafe-inline';"><link rel="stylesheet" href="${css}"></head><body style="padding:0;height:100vh;overflow:hidden"><main id="history-root"></main><script type="module" src="${script}"></script></body></html>`;
             const listener = panel.webview.onDidReceiveMessage(message => { if (message.type === 'history.ready') void panel.webview.postMessage({ type: 'history.init', comparison, workerUrl }); }); panel.onDidDispose(() => { listener.dispose(); panels.delete(panel); }); value = true;
+          } else if (request?.method === 'copyText') {
+            await vscode.env.clipboard.writeText(String(request.text ?? '')); value = true;
           } else value = await service.handle(request);
           post({ type: 'guard.result', id: message.id, value });
         } catch (error) { post({ type: 'guard.result', id: message.id, error: error instanceof Error ? error.message : String(error) }); }

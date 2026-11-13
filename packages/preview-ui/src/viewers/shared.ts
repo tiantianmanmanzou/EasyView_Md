@@ -513,7 +513,11 @@ function usePreviewSidebarResize(rootRef: React.RefObject<HTMLDivElement | null>
   }, [enabled, rootRef]);
 }
 
-export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('common.loadingFileViewer') }: ViewerProps & { loadingLabel?: string }): React.ReactElement {
+export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('common.loadingFileViewer'), toolbarExtra }: ViewerProps & {
+  loadingLabel?: string;
+  /** Route actions placed before the theme button in the viewer toolbar. */
+  toolbarExtra?: React.ReactNode;
+}): React.ReactElement {
   const assets = usePreviewAssets();
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const themeStorage = React.useMemo(
@@ -678,6 +682,7 @@ export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('comm
   const chromePortal = toolbarChrome
     ? createPortal(
         h(React.Fragment, null,
+          toolbarExtra,
           h('button', {
             type: 'button',
             className: 'preview-chrome-btn preview-chrome-btn--icon preview-toolbar-theme',

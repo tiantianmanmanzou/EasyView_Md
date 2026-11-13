@@ -374,6 +374,10 @@ const api: EasyViewDesktopApi = {
       if (password !== undefined) assertString(password, 'password');
       return ipcRenderer.invoke('archive.exportEntry', { sessionId, entryPath, password });
     },
+    extract: (sessionId: string) => {
+      assertString(sessionId, 'sessionId');
+      return ipcRenderer.invoke('archive.extract', { sessionId });
+    },
   },
   menu: {
     publishState: (state: DesktopMenuState) => ipcRenderer.send('desktop.menuState', state),

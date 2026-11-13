@@ -1617,6 +1617,19 @@ body.preview-word-outline-docking { cursor: grabbing !important; user-select: no
   padding-left: 0;
   border-left: 0;
 }
+.preview-archive-extract-status {
+  max-width: 280px;
+  margin-right: 6px;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.preview-archive-extract-status.is-error {
+  color: var(--vscode-errorForeground, #f14c4c);
+  opacity: 1;
+}
 .preview-archive-body {
   flex: 1;
   min-height: 0;

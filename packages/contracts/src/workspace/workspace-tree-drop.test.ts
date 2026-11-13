@@ -5,6 +5,7 @@ import {
   parseWorkspaceDropPlainPath,
   parseWorkspaceDropUriList,
   resolveWorkspaceTreeDropMode,
+  resolveWorkspaceTreeDragSources,
   resolveWorkspaceTreeDropTarget,
   resolveWorkspaceTreeGapPlacement,
   resolveWorkspaceTreeRowDropZone,
@@ -64,8 +65,15 @@ describe('workspace tree level-aware drop slots', () => {
       kind: 'gap', placement: { depth: 0, parentRelativePath: '', beforeName: 'notes.md' }, lineRowIndex: 2, lineEdge: 'top',
     });
     expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0 })).toEqual({ kind: 'into', relativePath: 'docs' });
-    expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0, draggedRelativePath: 'docs' })).toBeNull();
-    expect(resolveWorkspaceTreeDropTarget({ rows, index: 1, zone: 'below', pointerDepth: 3, draggedRelativePath: 'docs' })).toBeNull();
+    expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0, draggedRelativePaths: ['docs'] })).toBeNull();
+    expect(resolveWorkspaceTreeDropTarget({ rows, index: 1, zone: 'below', pointerDepth: 3, draggedRelativePaths: ['docs'] })).toBeNull();
+    expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0, draggedRelativePaths: ['notes.md', 'docs'] })).toBeNull();
+  });
+
+  it('drags the whole selection when the grabbed row is selected, folding items inside selected folders', () => {
+    const selection = ['docs', 'docs/a.md', 'notes.md', 'z/b.md'];
+    expect(resolveWorkspaceTreeDragSources(selection, 'notes.md')).toEqual(['docs', 'notes.md', 'z/b.md']);
+    expect(resolveWorkspaceTreeDragSources(selection, 'other.md')).toEqual(['other.md']);
   });
 
   it('turns an "after" slot into the reorder beforeName', () => {

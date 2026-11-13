@@ -86,6 +86,12 @@ export class PreviewController implements PreviewHost {
     if (!result.ok) throw new Error(result.message || tPreview('error.exportArchiveEntry'));
   }
 
+  async extractArchive(sessionId: string): Promise<string> {
+    const result = await this.api.archive.extract(sessionId);
+    if (!result.ok) throw new Error(result.message || tPreview('error.extractArchive'));
+    return result.value;
+  }
+
   async decompileJava(sessionId: string): Promise<string> {
     const result = await this.api.preview.decompileJava(sessionId);
     if (!result.ok) throw new Error(result.message || tPreview('error.decompileJava'));

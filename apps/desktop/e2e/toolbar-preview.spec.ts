@@ -5,7 +5,7 @@ import path from 'node:path';
 import { contentSize, launchPreviewWorkspace, paintedBackground, previewFixtures, printCount, type PreviewWorkspace } from './support/previewWorkspace';
 
 /** One test per file type: every button in its top toolbar is clicked and its effect asserted. */
-type ButtonName = 'sidebar' | 'search' | 'zoomOut' | 'zoomIn' | 'zoomReset' | 'download' | 'print' | 'html' | 'theme' | 'slideshow' | 'htmlPreview' | 'htmlSource' | 'rotate' | 'httpSend';
+type ButtonName = 'sidebar' | 'search' | 'zoomOut' | 'zoomIn' | 'zoomReset' | 'download' | 'print' | 'html' | 'theme' | 'slideshow' | 'htmlPreview' | 'htmlSource' | 'rotate' | 'httpSend' | 'extract';
 const toolbar: Record<string, ButtonName[]> = {
   'sample.epub': ['search', 'download', 'html', 'theme'],
   'sample.xmind': ['sidebar', 'search', 'zoomIn', 'zoomOut', 'zoomReset', 'download', 'print', 'html', 'theme'],
@@ -19,8 +19,8 @@ const toolbar: Record<string, ButtonName[]> = {
   'sample.ods': ['search', 'zoomIn', 'zoomOut', 'download', 'theme'],
   'sample.tsv': ['search', 'zoomIn', 'zoomOut', 'download', 'theme'],
   'sample.ppt': ['theme'],
-  'sample.tar': ['theme'],
-  'sample.tgz': ['theme'],
+  'sample.tar': ['extract', 'theme'],
+  'sample.tgz': ['extract', 'theme'],
   'sample.yaml': ['theme'],
   'PreviewSample.class': ['theme'],
   'request.http': ['httpSend', 'theme'],
@@ -32,13 +32,13 @@ const toolbar: Record<string, ButtonName[]> = {
   'sample.html': ['htmlSource', 'htmlPreview', 'theme'],
   'sample.json': ['theme'],
   'sample.svg': ['theme'],
-  'sample.zip': ['theme'],
+  'sample.zip': ['extract', 'theme'],
   'notes.txt': ['theme'],
 };
 const labels: Partial<Record<ButtonName, string>> = {
   sidebar: '显示/隐藏侧边栏', search: '搜索', zoomOut: '缩小预览', zoomIn: '放大预览', zoomReset: '还原比例',
   download: '下载', print: '打印完整渲染内容', html: 'HTML', htmlPreview: '预览', htmlSource: '源码',
-  rotate: '向右旋转图片', httpSend: '发送',
+  rotate: '向右旋转图片', httpSend: '发送', extract: '解压到同名文件夹',
 };
 // The HTTP preview refuses loopback/private targets before connecting, so this request never leaves the machine.
 const extraFiles = { 'notes.txt': 'plain text\n', 'sample.tsv': 'name\tvalue\nalpha\t1\nbeta\t2\n', 'request.http': 'GET http://127.0.0.1:9/ping\n' };
@@ -155,6 +155,16 @@ async function exercise(ws: PreviewWorkspace, file: string, name: ButtonName) {
     case 'httpSend': {
       await target.click();
       await expect(root(page).getByText('禁止请求本机、内网或保留地址')).toBeVisible();
+      return;
+    }
+    case 'extract': {
+      const folder = file.replace(/\.(zip|tar|tgz)$/, '');
+      await target.click();
+      await expect(root(page).getByRole('status')).toHaveText(`已解压到“${folder}”`, { timeout: 20_000 });
+      expect((await readdir(path.join(ws.workspace, folder))).length).toBeGreaterThan(0);
+      await expect(page.locator(`.workspace-entry[data-relative-path="${folder}"]`)).toBeVisible();
+      await target.click();
+      await expect(root(page).getByRole('status')).toHaveText(`已解压到“${folder} 2”`, { timeout: 20_000 });
       return;
     }
   }

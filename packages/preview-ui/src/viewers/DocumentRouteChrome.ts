@@ -125,6 +125,12 @@ export function DocumentExportIcon(): React.ReactElement {
   return h(ChromeIcon, { path: EXPORT_ICON_PATHS });
 }
 
+const EXTRACT_ICON_PATHS = ['M2.5 2.8h11v2.4h-11V2.8Z', 'M3.4 5.2v7.8h9.2V5.2', 'M8 6.8v4.4', 'M6.2 9.5 8 11.2l1.8-1.7'];
+
+export function ArchiveExtractIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: EXTRACT_ICON_PATHS });
+}
+
 export function DocumentPrintIcon(): React.ReactElement {
   return h(ChromeIcon, { path: PRINT_ICON_PATHS });
 }

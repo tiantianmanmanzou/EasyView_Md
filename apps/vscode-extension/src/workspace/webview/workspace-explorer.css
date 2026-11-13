@@ -530,11 +530,15 @@ body {
   height: 26px;
   display: flex;
   align-items: center;
+  gap: 4px;
 }
 
 .workspace-create-row input {
-  width: calc(100% - 12px);
+  flex: 1;
+  min-width: 0;
+  width: auto;
   box-sizing: border-box;
+  padding: 1px 3px;
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-focusBorder);
@@ -671,7 +675,14 @@ body {
 .workspace-icon-label { display: -webkit-box; width: 100%; overflow: hidden; text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.25; font-size: 11px; }
 .workspace-icon-tile .workspace-rename-input { height: 24px; font-size: 11px; text-align: center; }
 .workspace-icon-tile .workspace-entry-timestamps { max-width: 100%; overflow: hidden; font-size: 9px; }
-.workspace-icon-grid .workspace-create-row { min-width: 80px; padding: 4px; }
+.workspace-icon-grid .workspace-create-row {
+  min-width: 80px;
+  height: auto;
+  padding: 4px;
+  flex-direction: column;
+  gap: 4px;
+}
+.workspace-icon-grid .workspace-create-row input { width: 100%; flex: none; font-size: calc(11px + var(--workspace-font-offset, 0px)); text-align: center; }
 .workspace-icon-empty { grid-column: 1 / -1; margin: 12px 4px; color: var(--vscode-descriptionForeground, #999); font-size: 12px; }
 
 /* Font size setting: --workspace-font-offset is set on :root by the settings dialog's 字号 row. */

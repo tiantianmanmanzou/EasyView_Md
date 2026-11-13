@@ -1,5 +1,5 @@
 import { VscodeTimeline } from '../timeline/vscodeTimeline';
-import { copyFilesToSystemClipboard, type TimelineChannel } from '@easyview/node-runtime';
+import { copyFilesToSystemClipboard, extractArchive, type TimelineChannel } from '@easyview/node-runtime';
 import { isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type TimelineRequestMessage } from '@easyview/contracts';
 import * as vscode from 'vscode';
 import path from 'node:path';
@@ -674,6 +674,9 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       case 'convertToMarkdown':
         await this.handleConvertToMarkdown(message.relativePath);
         return;
+      case 'extractArchive':
+        await this.handleExtractArchive(message);
+        return;
       case 'revealInOS':
         await this.handleRevealInOS(message.relativePath);
         return;
@@ -891,6 +894,34 @@ class WorkspaceExplorerViewProvider implements vscode.WebviewViewProvider, vscod
       : extension === '.docx' || extension === '.doc' ? 'easyviewMd.convertWordToMarkdown' : null;
     if (!command) throw new Error(tWorkspace('convert.selectFile'));
     await vscode.commands.executeCommand(command, uri);
+  }
+
+  private async handleExtractArchive(
+    message: Extract<WorkspaceExplorerRequest, { type: 'extractArchive' }>,
+  ): Promise<void> {
+    try {
+      const root = this.requireRoot();
+      const uri = uriFromRelativePath(root, message.relativePath);
+      if (uri.scheme !== 'file' || workspaceRelativePath(root, uri) !== message.relativePath) {
+        throw new Error(tWorkspace('extract.workspaceOnly'));
+      }
+      const target = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: tWorkspace('extract.progress', { name: workspaceBasename(uri) }) },
+        () => extractArchive(uri.fsPath),
+      );
+      const name = path.basename(target);
+      const parentRelativePath = parentRelativePathOf(message.relativePath);
+      this.treeService.invalidate(root, [parentRelativePath]);
+      const entry = (await this.treeService.readChildren(root, parentRelativePath)).find((child) => child.name === name);
+      this.postEvent({
+        type: 'opResult',
+        requestId: message.requestId,
+        ok: true,
+        ...(entry ? { entry: toExplorerEntry(entry) } : {}),
+      });
+    } catch (error) {
+      this.postEvent({ type: 'opResult', requestId: message.requestId, ok: false, message: errorMessage(error) });
+    }
   }
 
   private async handleRevealInOS(relativePath: string): Promise<void> {

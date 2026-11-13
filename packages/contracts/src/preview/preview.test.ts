@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  archiveExtractFolderName,
+  extractableArchiveSuffix,
   isPreviewWritableFile,
   resolvePreviewChrome,
   resolvePreviewRoute,
   WRITABLE_PREVIEW_ROUTES,
 } from './preview';
+
+describe('archive extraction', () => {
+  it('extracts zip-family and tar/gzip archives into a folder named after the archive', () => {
+    expect(['资料.ZIP', 'a.jar', 'b.vsix', 'c.tar', 'd.tar.gz', 'e.tgz', 'f.txt.gz'].map(archiveExtractFolderName)).toEqual(['资料', 'a', 'b', 'c', 'd', 'e', 'f.txt']);
+    expect(extractableArchiveSuffix('d.TAR.GZ')).toBe('.tar.gz');
+    expect(['x.7z', 'x.rar', 'x.cbr', 'notes.md', '.zip'].map(extractableArchiveSuffix)).toEqual([null, null, null, null, null]);
+  });
+});
 
 describe('preview routes', () => {
   it('keeps Markdown in the editor and routes supported preview formats', () => {
@@ -20,6 +30,7 @@ describe('preview routes', () => {
     expect(resolvePreviewRoute('archive.tar.gz')?.route).toBe('archive');
     expect(resolvePreviewRoute('extension.vsix')?.route).toBe('archive');
     expect(resolvePreviewRoute('bundle.zip')?.route).toBe('archive');
+    expect(resolvePreviewRoute('bundle.zip')?.maxSourceBytes).toBe(1024 * 1024 * 1024);
     expect(resolvePreviewRoute('flow.drawio')?.route).toBe('design');
     expect(resolvePreviewRoute('diagram.dio')?.route).toBe('design');
     expect(resolvePreviewRoute('map.xmind')?.route).toBe('design');

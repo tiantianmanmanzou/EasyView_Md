@@ -7,6 +7,7 @@ import {
   type WorkspaceSettingsValues,
 } from '@easyview/editor-core/workspace';
 import type { TimelineClient, WorkspaceSearchResult } from '@easyview/contracts';
+import { extractableArchiveSuffix } from '@easyview/contracts/preview';
 import {
   describeWorkspaceEntryTimestamps,
   formatWorkspaceSize,
@@ -22,6 +23,7 @@ import {
   computeNextWorkspaceTreeSelection,
   resolveWorkspaceTreeKeyAction,
   resolveWorkspaceTreeDropTarget,
+  resolveWorkspaceTreeDragSources,
   resolveWorkspaceTreeRowDropZone,
   workspaceTreeDepthFromPointer,
   workspaceTreeDropLineOffset,
@@ -122,6 +124,7 @@ export class WorkspaceExplorerView {
   private searchPanel: WorkspaceSearchPanel | null = null;
   private readonly pendingSearches = new Map<string, (result: WorkspaceSearchResult | null) => void>();
   private dragRelativePath: string | null = null;
+  private dragRelativePaths: string[] = [];
   private dropIntent: { targetRelativePath: string; target: WorkspaceTreeDropTarget } | null = null;
   private dropIndicator: HTMLElement | null = null;
   private contextMenuEl: HTMLElement | null = null;
@@ -573,6 +576,12 @@ export class WorkspaceExplorerView {
         .map((entry) => entry.relativePath);
     }
     return collectVisibleWorkspaceTreeRelativePaths(this.entriesByDirectory, (path) => this.expanded.has(path));
+  }
+
+  /** Selection in on-screen order, so a multi-item drop keeps the order the user sees. */
+  private orderedSelection(): string[] {
+    const visible = this.visibleRelativePaths().filter((path) => this.selected.has(path));
+    return [...visible, ...[...this.selected].filter((path) => !visible.includes(path))];
   }
 
   private onKeyDown(event: KeyboardEvent): void {
@@ -1504,6 +1513,9 @@ export class WorkspaceExplorerView {
       if (/\.(pdf|docx|doc)$/i.test(entry.name)) {
         items.push({ label: tExplorer('context.exportToMarkdown'), action: () => this.post({ type: 'convertToMarkdown', relativePath: entry.relativePath }) });
       }
+      if (writable && extractableArchiveSuffix(entry.name)) {
+        items.push({ label: tExplorer('context.extractArchive'), action: () => void this.extractArchiveAt(entry.relativePath) });
+      }
     } else if (writable) {
       items.push(
         {
@@ -1800,13 +1812,38 @@ export class WorkspaceExplorerView {
   private renderCreateInput(depth: number): HTMLElement {
     const wrapper = document.createElement('form');
     wrapper.className = 'workspace-create-row';
-    wrapper.style.paddingInlineStart = `${28 + depth * 16}px`;
-    const input = document.createElement('input');
-    input.autofocus = true;
     const pending = this.pendingCreate;
-    input.value = pending
+    const kind = pending?.kind ?? 'file';
+    const draftName = pending
       ? pending.draftName ?? this.defaultCreateName(pending.kind, pending.extension)
       : unusedWorkspaceCreateFileName(tExplorer('create.defaultFileStem'), '.md', []);
+    const iconsMode = this.displayMode === 'icons';
+    if (!iconsMode) {
+      wrapper.style.paddingInlineStart = `${10 + depth * 16}px`;
+      const chevron = document.createElement('span');
+      chevron.className = 'workspace-chevron';
+      if (kind === 'directory') chevron.classList.add('is-directory');
+      wrapper.appendChild(chevron);
+    }
+    const icon = document.createElement('span');
+    const paintIcon = (name: string): void => {
+      if (iconsMode && kind === 'directory') {
+        icon.className = 'workspace-icon-large is-folder';
+        icon.removeAttribute('data-icon');
+        icon.replaceChildren();
+        return;
+      }
+      if (iconsMode) icon.className = 'workspace-icon-large';
+      else icon.className = 'workspace-entry-icon';
+      const iconDesc = resolveWorkspaceTreeIcon({ kind, name, expanded: false });
+      icon.dataset.icon = iconDesc.id;
+      icon.innerHTML = iconDesc.svg;
+    };
+    paintIcon(draftName);
+    wrapper.appendChild(icon);
+    const input = document.createElement('input');
+    input.autofocus = true;
+    input.value = draftName;
     wrapper.appendChild(input);
     let submitting = false;
     const commit = (): void => {
@@ -1820,6 +1857,7 @@ export class WorkspaceExplorerView {
     });
     input.addEventListener('input', () => {
       if (pending) pending.draftName = input.value;
+      if (kind === 'file') paintIcon(input.value || draftName);
     });
     input.addEventListener('keydown', (event) => {
       event.stopPropagation();
@@ -1923,6 +1961,21 @@ export class WorkspaceExplorerView {
       return;
     }
     await this.loadDirectory(targetParentRelativePath);
+  }
+
+  private async extractArchiveAt(relativePath: string): Promise<void> {
+    const result = await this.requestOp((requestId) => ({ type: 'extractArchive', requestId, relativePath }));
+    if (!result.ok) {
+      this.showError(result.message);
+      return;
+    }
+    if (result.entry) {
+      this.primarySelected = result.entry.relativePath;
+      this.selected.clear();
+      this.selected.add(result.entry.relativePath);
+      this.anchor = result.entry.relativePath;
+    }
+    await this.loadDirectory(parentRelativePath(relativePath));
   }
 
   private async changeSortMode(sortMode: WorkspaceTreeSortMode): Promise<void> {
@@ -2034,6 +2087,7 @@ export class WorkspaceExplorerView {
     row.draggable = true;
     row.addEventListener('dragstart', (event) => {
       this.dragRelativePath = entry.relativePath;
+      this.dragRelativePaths = resolveWorkspaceTreeDragSources(this.orderedSelection(), entry.relativePath);
       event.dataTransfer?.setData('text/plain', entry.relativePath);
       if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
       row.classList.add('is-dragging');
@@ -2041,6 +2095,7 @@ export class WorkspaceExplorerView {
     });
     row.addEventListener('dragend', () => {
       this.dragRelativePath = null;
+      this.dragRelativePaths = [];
       row.classList.remove('is-dragging');
       this.clearDropVisuals();
     });
@@ -2082,9 +2137,10 @@ export class WorkspaceExplorerView {
         );
         return;
       }
-      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
-      if (!source) return;
-      void this.handleDrop(source, target);
+      const fallback = event.dataTransfer?.getData('text/plain');
+      const sources = this.dragRelativePaths.length > 0 ? this.dragRelativePaths : fallback ? [fallback] : [];
+      if (sources.length === 0) return;
+      void this.handleDrop(sources, target);
     });
   }
 
@@ -2104,7 +2160,7 @@ export class WorkspaceExplorerView {
       index: rows.indexOf(row),
       zone: resolveWorkspaceTreeRowDropZone(kind, event.clientY, rect.top, rect.height),
       pointerDepth: workspaceTreeDepthFromPointer(event.clientX - rect.left),
-      draggedRelativePath: external ? null : this.dragRelativePath,
+      draggedRelativePaths: external ? [] : this.dragRelativePaths,
     });
   }
 
@@ -2234,101 +2290,86 @@ export class WorkspaceExplorerView {
   }
 
   private async handleDrop(
-    sourceRelativePath: string,
+    sourceRelativePaths: string[],
     dropTarget: WorkspaceTreeDropTarget,
   ): Promise<void> {
-    const sourceParent = parentRelativePath(sourceRelativePath);
-    const sourceName = sourceRelativePath.split('/').at(-1)!;
+    const targetParent = dropTarget.kind === 'into' ? dropTarget.relativePath : dropTarget.placement.parentRelativePath;
+    if (sourceRelativePaths.some((source) => targetParent === source || targetParent.startsWith(`${source}/`))) {
+      this.showError(tExplorer('move.intoSelf'));
+      return;
+    }
+    // Dropping onto the folder that already holds an item leaves that item where it is.
+    const sources = dropTarget.kind === 'into'
+      ? sourceRelativePaths.filter((source) => parentRelativePath(source) !== targetParent)
+      : sourceRelativePaths;
+    if (sources.length === 0) return;
+    const siblingNames = (this.entriesByDirectory.get(targetParent) ?? []).map((entry) => entry.name);
+    const gapBeforeName = dropTarget.kind === 'gap' ? workspaceTreeGapBeforeName(dropTarget.placement, siblingNames) : undefined;
+    if (sources.length === 1 && parentRelativePath(sources[0]) === targetParent) {
+      await this.reorderBefore(targetParent, sources[0].split('/').at(-1)!, gapBeforeName);
+      return;
+    }
 
-    if (dropTarget.kind === 'into') {
-      const target = { relativePath: dropTarget.relativePath };
-      if (
-        sourceRelativePath === target.relativePath
-        || target.relativePath.startsWith(`${sourceRelativePath}/`)
-      ) {
-        this.showError(tExplorer('move.intoSelf'));
-        return;
+    const movedNames: string[] = [];
+    const movedPaths: string[] = [];
+    const changedParents = new Set([targetParent]);
+    for (const source of sources) {
+      const sourceParent = parentRelativePath(source);
+      if (sourceParent === targetParent) {
+        movedNames.push(source.split('/').at(-1)!);
+        movedPaths.push(source);
+        continue;
       }
-      if (sourceParent === target.relativePath) return;
       const moveResult = await this.requestOp((requestId) => ({
         type: 'move',
         requestId,
-        relativePath: sourceRelativePath,
-        targetParentRelativePath: target.relativePath,
+        relativePath: source,
+        targetParentRelativePath: targetParent,
       }));
       if (!moveResult.ok) {
         this.showError(moveResult.message);
-        return;
+        break;
       }
-      if (!(await this.ensureCustomSort())) return;
-      const movedName = moveResult.entry?.name ?? sourceName;
-      const siblings = (this.entriesByDirectory.get(target.relativePath) ?? [])
-        .map((entry) => entry.name)
-        .filter((name) => name !== sourceName && name !== movedName);
-      siblings.push(movedName);
-      const reorderResult = await this.requestOp((requestId) => ({
-        type: 'reorder',
-        requestId,
-        parentRelativePath: target.relativePath,
-        movedName,
-        siblingNames: siblings,
-      }));
-      if (!reorderResult.ok) {
-        this.showError(reorderResult.message);
-        return;
-      }
-      this.expanded.add(target.relativePath);
-      this.post({ type: 'setExpanded', relativePath: target.relativePath, expanded: true });
-      await Promise.all([
-        this.loadDirectory(sourceParent),
-        this.loadDirectory(target.relativePath),
-      ]);
-      return;
+      changedParents.add(sourceParent);
+      const movedName = moveResult.entry?.name ?? source.split('/').at(-1)!;
+      movedNames.push(movedName);
+      movedPaths.push(moveResult.entry?.relativePath ?? (targetParent ? `${targetParent}/${movedName}` : movedName));
     }
 
-    const { placement } = dropTarget;
-    const targetParent = placement.parentRelativePath;
-    const siblingNames = (this.entriesByDirectory.get(targetParent) ?? []).map((entry) => entry.name);
-    const beforeName = workspaceTreeGapBeforeName(placement, siblingNames);
-    if (sourceParent === targetParent) {
-      await this.reorderBefore(sourceParent, sourceName, beforeName);
-      return;
+    if (movedNames.length > 0 && (await this.ensureCustomSort())) {
+      const moved = new Set(movedNames);
+      // The drop slot may sit next to a dragged item; anchor on the first sibling that stays put.
+      let anchorIndex = gapBeforeName === undefined ? -1 : siblingNames.indexOf(gapBeforeName);
+      while (anchorIndex >= 0 && anchorIndex < siblingNames.length && moved.has(siblingNames[anchorIndex])) anchorIndex += 1;
+      const beforeName = anchorIndex >= 0 ? siblingNames[anchorIndex] : undefined;
+      const allNames = [...siblingNames, ...movedNames.filter((name) => !siblingNames.includes(name))];
+      for (const movedName of movedNames) {
+        const reorderResult = await this.requestOp((requestId) => ({
+          type: 'reorder',
+          requestId,
+          parentRelativePath: targetParent,
+          movedName,
+          siblingNames: allNames,
+          beforeName,
+        }));
+        if (!reorderResult.ok) {
+          this.showError(reorderResult.message);
+          break;
+        }
+      }
     }
-
-    const moveResult = await this.requestOp((requestId) => ({
-      type: 'move',
-      requestId,
-      relativePath: sourceRelativePath,
-      targetParentRelativePath: targetParent,
-    }));
-    if (!moveResult.ok) {
-      this.showError(moveResult.message);
-      return;
-    }
-    if (!(await this.ensureCustomSort())) return;
-    const movedName = moveResult.entry?.name ?? sourceName;
-    const siblings = [...siblingNames];
-    if (!siblings.includes(movedName)) siblings.push(movedName);
-    const reorderResult = await this.requestOp((requestId) => ({
-      type: 'reorder',
-      requestId,
-      parentRelativePath: targetParent,
-      movedName,
-      siblingNames: siblings,
-      beforeName,
-    }));
-    if (!reorderResult.ok) {
-      this.showError(reorderResult.message);
-      return;
+    if (movedPaths.length > 0) {
+      this.selected.clear();
+      for (const path of movedPaths) this.selected.add(path);
+      this.primarySelected = movedPaths[0];
+      this.anchor = movedPaths[0];
+      this.post({ type: 'setSelection', relativePaths: movedPaths, anchorRelativePath: this.anchor });
     }
     if (targetParent && !this.expanded.has(targetParent)) {
       this.expanded.add(targetParent);
       this.post({ type: 'setExpanded', relativePath: targetParent, expanded: true });
     }
-    await Promise.all([
-      this.loadDirectory(sourceParent),
-      this.loadDirectory(targetParent),
-    ]);
+    await Promise.all([...changedParents].map((parent) => this.loadDirectory(parent)));
   }
 
   private async reorderBefore(

@@ -1,8 +1,9 @@
 import * as React from 'react';
 import JSZip from 'jszip';
-import type { ArchiveEntry, ArchiveEntryPreview, PreviewDescriptor } from '@easyview/contracts';
+import { extractableArchiveSuffix, type ArchiveEntry, type ArchiveEntryPreview, type PreviewDescriptor } from '@easyview/contracts';
 import type { PreviewHost } from '../types';
 import {
+  ArchiveExtractIcon,
   DocumentChromeActions,
   DocumentRouteShell,
   useDocumentRouteTheme,
@@ -54,6 +55,9 @@ type TreeNode = {
  */
 export function ArchiveViewer({ descriptor, host }: ArchiveViewerProps): React.ReactElement {
   const suffix = extension(descriptor.fileName);
+  const extractButton = host.extractArchive && extractableArchiveSuffix(descriptor.fileName)
+    ? h(ArchiveExtractButton, { key: descriptor.sessionId, extract: () => host.extractArchive!(descriptor.sessionId) })
+    : null;
   if (LIBARCHIVE_ONLY.has(suffix)) {
     return h(UniversalFilePreview, {
       descriptor,
@@ -65,6 +69,7 @@ export function ArchiveViewer({ descriptor, host }: ArchiveViewerProps): React.R
   if (canUseHost) {
     return h(ArchiveChromeShell, {
       descriptor,
+      actions: extractButton,
       body: h(FolderArchiveViewer, {
         descriptor,
         list: host.listArchive!.bind(host),
@@ -77,6 +82,7 @@ export function ArchiveViewer({ descriptor, host }: ArchiveViewerProps): React.R
   if (ZIP_FAMILY.has(suffix)) {
     return h(ArchiveChromeShell, {
       descriptor,
+      actions: extractButton,
       body: h(ClientZipArchiveViewer, { descriptor }),
     });
   }
@@ -84,11 +90,53 @@ export function ArchiveViewer({ descriptor, host }: ArchiveViewerProps): React.R
   return h(UniversalFilePreview, {
     descriptor,
     loadingLabel: tPreview('archive.loadingViewer'),
+    toolbarExtra: extractButton,
   });
+}
+
+/** Toolbar action: extract into a sibling folder, then briefly report where it went (or why it failed). */
+function ArchiveExtractButton(props: { extract: () => Promise<string> }): React.ReactElement {
+  const [busy, setBusy] = React.useState(false);
+  const [result, setResult] = React.useState<{ message: string; failed: boolean } | null>(null);
+  React.useEffect(() => {
+    if (!result) return;
+    const timer = setTimeout(() => setResult(null), 5000);
+    return () => clearTimeout(timer);
+  }, [result]);
+  const run = async (): Promise<void> => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult({ message: tPreview('archive.extracted', { name: await props.extract() }), failed: false });
+    } catch (error) {
+      setResult({ message: error instanceof Error ? error.message : String(error), failed: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const label = busy ? tPreview('archive.extracting') : tPreview('archive.extract');
+  return h(React.Fragment, null,
+    result
+      ? h('span', { className: `preview-archive-extract-status${result.failed ? ' is-error' : ''}`, role: result.failed ? 'alert' : 'status', title: result.message }, result.message)
+      : null,
+    h('button', {
+      type: 'button',
+      className: 'preview-chrome-btn preview-chrome-btn--icon preview-archive-extract',
+      title: label,
+      'aria-label': label,
+      'aria-busy': busy,
+      disabled: busy,
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        void run();
+      },
+    }, busy ? '…' : h(ArchiveExtractIcon)),
+  );
 }
 
 function ArchiveChromeShell(props: {
   descriptor: PreviewDescriptor;
+  actions?: React.ReactNode;
   body: React.ReactNode;
 }): React.ReactElement {
   const { themeMode, cycleTheme, viewerVars } = useDocumentRouteTheme(props.descriptor.relativePath);
@@ -114,6 +162,7 @@ function ArchiveChromeShell(props: {
         themeMode,
         onCycleTheme: cycleTheme,
         onTogglePinned: togglePinned,
+        documentActions: props.actions,
       }),
     ),
     h('div', { className: 'preview-archive-body' }, props.body),

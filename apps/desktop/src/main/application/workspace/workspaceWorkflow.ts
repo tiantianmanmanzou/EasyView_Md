@@ -1,7 +1,7 @@
-import { copyFilesToSystemClipboard, migrateRenamedHistory } from '@easyview/node-runtime';
+import { copyFilesToSystemClipboard, extractArchive, migrateRenamedHistory } from '@easyview/node-runtime';
 import { DESKTOP_TAB_CLOSE_SHORTCUT } from '../../../contracts';
 import { captureDesktopHistoryPath, desktopHistory } from '../document/desktopHistory';
-import { isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type WorkspaceCreatableFileTypeId } from '@easyview/contracts';
+import { extractableArchiveSuffix, isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type WorkspaceCreatableFileTypeId } from '@easyview/contracts';
 import { Menu, clipboard, dialog, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -145,6 +145,17 @@ export async function openWorkspaceFolder(folderPath?: string): Promise<Operatio
 
 export function workspaceEntryAbsolutePath(relativePath: string): string {
   return workspaceCore.resolveAbsolutePath(relativePath);
+}
+
+/** Extracts into a sibling folder and refreshes the explorer when it lands in the workspace; resolves to that folder's path. */
+export async function extractArchiveFile(archivePath: string): Promise<string> {
+  const target = await extractArchive(archivePath);
+  const rootPath = workspaceRoot();
+  const relative = rootPath ? path.relative(rootPath, target) : '';
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    sendToWindow('workspace.changed', workspaceCore.invalidateFromWatcher([relative.split(path.sep).join('/')]));
+  }
+  return target;
 }
 
 export async function openWorkspacePreview(relativePath: string): Promise<OperationResult<DesktopTabSnapshot>> {
@@ -511,6 +522,13 @@ export function showWorkspaceContextMenu(
     if (command === 'openPreview') { void openWorkspacePreview(relativePath); return; }
     if (command === 'openWith') { showOpenWithPicker(relativePath, owner); return; }
     if (command === 'openDefault') { void shell.openPath(workspaceEntryAbsolutePath(relativePath)); return; }
+    if (command === 'extractArchive') {
+      void extractArchiveFile(workspaceEntryAbsolutePath(relativePath)).then(
+        (target) => sender.send('workspace.contextCommand', 'extractArchive', path.posix.join(workspaceCore.parentRelativePath(relativePath), path.basename(target))),
+        (error: unknown) => { void showMessageBoxFor(owner, { type: 'error', message: error instanceof Error ? error.message : String(error) }); },
+      );
+      return;
+    }
     if (command === 'reveal') { shell.showItemInFolder(workspaceEntryAbsolutePath(relativePath)); return; }
     if (command === 'copy') {
       const result = copyWorkspaceEntryToClipboard(targets);
@@ -554,6 +572,7 @@ export function showWorkspaceContextMenu(
     { label: tWorkspace('menu.openPreview'), enabled: isFile, click: () => run('openPreview') },
     { label: tWorkspace('menu.openWith'), enabled: isFile, click: () => run('openWith') },
     { label: tWorkspace('menu.openDefault'), enabled: isFile, click: () => run('openDefault') },
+    ...(isFile && extractableArchiveSuffix(relativePath) ? [{ label: tWorkspace('menu.extractArchive'), click: () => run('extractArchive') }] : []),
     { label: tWorkspace(process.platform === 'darwin' ? 'menu.revealInFinder' : 'menu.revealInFileExplorer'), click: () => run('reveal') },
     { type: 'separator' },
     ...customizeIconItems,

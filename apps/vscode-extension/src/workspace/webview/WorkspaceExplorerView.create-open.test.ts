@@ -60,6 +60,7 @@ it.each(['extension', 'desktop'] as const)('%s confirms the create name once on 
   };
   const owner = {
     pendingCreate: pending,
+    displayMode: 'list' as const,
     setEditing: vi.fn(),
     render: vi.fn(),
     defaultCreateName: () => 'Untitled 4.docx',
@@ -84,6 +85,7 @@ it.each(['extension', 'desktop'] as const)('%s keeps editing the create name whe
   };
   const owner = {
     pendingCreate: pending,
+    displayMode: 'list' as const,
     setEditing: vi.fn(),
     render: vi.fn(),
     defaultCreateName: () => 'Untitled.md',
@@ -100,6 +102,64 @@ it.each(['extension', 'desktop'] as const)('%s keeps editing the create name whe
   expect(owner.createEntry).not.toHaveBeenCalled();
   const next = prototype.renderCreateInput.call(owner as never, 1);
   expect(next.querySelector('input')!.value).toBe('方案');
+});
+
+it.each(['extension', 'desktop'] as const)('%s shows a folder icon beside the create name input', (host) => {
+  vi.stubGlobal('requestAnimationFrame', vi.fn());
+  const pending = { parentRelativePath: 'docs', kind: 'directory' as const };
+  const prototype = (host === 'extension' ? WorkspaceExplorerView.prototype : WorkspaceExplorer.prototype) as unknown as {
+    renderCreateInput(depth: number): HTMLFormElement;
+  };
+  const owner = {
+    pendingCreate: pending,
+    displayMode: 'list' as const,
+    state: { explorerDisplayMode: 'list' as const },
+    setEditing: vi.fn(),
+    render: vi.fn(),
+    defaultCreateName: () => 'New Folder',
+    createEntry: vi.fn(async () => undefined),
+  };
+  const form = prototype.renderCreateInput.call(owner as never, 1);
+  expect(form.querySelector('.workspace-entry-icon svg')).toBeTruthy();
+  expect(form.querySelector('.workspace-chevron.is-directory')).toBeTruthy();
+  expect(form.querySelector('input')!.value).toBe('New Folder');
+});
+
+it('extension title-bar new folder uses the selected directory', async () => {
+  const beginCreate = vi.fn();
+  const prototype = WorkspaceExplorerView.prototype as unknown as {
+    onContextCommand(
+      command: 'beginCreateFolder',
+      relativePath?: string,
+      extension?: string,
+    ): Promise<void>;
+  };
+  const owner = {
+    selectionFollowsActive: true,
+    select: vi.fn(),
+    beginCreate,
+    primarySelectedDirectory: () => 'docs',
+    displayMode: 'list' as const,
+    iconDirectory: '',
+  };
+  await prototype.onContextCommand.call(owner as never, 'beginCreateFolder');
+  expect(beginCreate).toHaveBeenCalledWith('docs', 'directory');
+});
+
+it('desktop toolbar create target prefers the selected directory', () => {
+  const prototype = WorkspaceExplorer.prototype as unknown as {
+    createTargetDirectory(): string;
+  };
+  expect(prototype.createTargetDirectory.call({
+    selectedRelativePath: 'docs',
+    selectedDirectory: () => 'docs',
+    currentDirectory: '',
+  } as never)).toBe('docs');
+  expect(prototype.createTargetDirectory.call({
+    selectedRelativePath: null,
+    selectedDirectory: () => '',
+    currentDirectory: '',
+  } as never)).toBe('');
 });
 
 it.each(['extension', 'desktop'] as const)('%s does not open a created directory', async (host) => {

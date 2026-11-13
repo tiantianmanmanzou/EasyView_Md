@@ -96,7 +96,7 @@ export const PREVIEW_ROUTES: readonly PreviewRouteDefinition[] = [
   { route: 'powerpoint', chrome: 'document', suffixes: ['.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm', '.ppt'], maxSourceBytes: 128 * MEBIBYTE, mimeType: 'application/octet-stream' },
   { route: 'epub', chrome: 'document', suffixes: ['.epub'], maxSourceBytes: 128 * MEBIBYTE, mimeType: 'application/epub+zip' },
   { route: 'design', chrome: 'document', suffixes: ['.xmind', '.psd', '.drawio', '.dio'], maxSourceBytes: 256 * MEBIBYTE, mimeType: 'application/octet-stream' },
-  { route: 'archive', chrome: 'document', suffixes: ['.tar.gz', '.tgz', '.zip', '.jar', '.war', '.ear', '.vsix', '.apk', '.cbz', '.tar', '.gz', '.7z', '.rar', '.cbr'], maxSourceBytes: 128 * MEBIBYTE, mimeType: 'application/octet-stream' },
+  { route: 'archive', chrome: 'document', suffixes: ['.tar.gz', '.tgz', '.zip', '.jar', '.war', '.ear', '.vsix', '.apk', '.cbz', '.tar', '.gz', '.7z', '.rar', '.cbr'], maxSourceBytes: 1024 * MEBIBYTE, mimeType: 'application/octet-stream' },
   { route: 'font', chrome: 'document', suffixes: ['.ttf', '.otf', '.woff', '.woff2'], maxSourceBytes: 64 * MEBIBYTE, mimeType: 'application/octet-stream' },
   { route: 'http', chrome: 'basic', suffixes: ['.http', '.rest'], maxSourceBytes: 4 * MEBIBYTE, mimeType: 'text/plain; charset=utf-8' },
   { route: 'java-class', chrome: 'basic', suffixes: ['.class'], maxSourceBytes: 16 * MEBIBYTE, mimeType: 'application/java-vm' },
@@ -124,6 +124,21 @@ export function resolvePreviewRoute(fileName: string): PreviewRouteDefinition | 
     return PREVIEW_ROUTES.find((definition) => definition.route === 'text') ?? null;
   }
   return ROUTES_BY_LONGEST_SUFFIX.find(({ suffix }) => normalized.endsWith(suffix))?.definition ?? null;
+}
+
+/** Archives the hosts can extract (7z/rar have no Node reader), longest suffix first so `.tar.gz` wins over `.gz`. */
+const EXTRACTABLE_ARCHIVE_SUFFIXES = ['.tar.gz', '.tgz', '.tar', '.gz', '.zip', '.jar', '.war', '.ear', '.vsix', '.apk', '.cbz'] as const;
+export type ExtractableArchiveSuffix = typeof EXTRACTABLE_ARCHIVE_SUFFIXES[number];
+
+export function extractableArchiveSuffix(fileName: string): ExtractableArchiveSuffix | null {
+  const normalized = fileName.toLocaleLowerCase();
+  return EXTRACTABLE_ARCHIVE_SUFFIXES.find((suffix) => normalized.endsWith(suffix) && normalized.length > suffix.length) ?? null;
+}
+
+/** Folder an archive extracts into: its name without the archive suffix (`docs.tar.gz` → `docs`). */
+export function archiveExtractFolderName(fileName: string): string {
+  const suffix = extractableArchiveSuffix(fileName);
+  return suffix ? fileName.slice(0, -suffix.length) : fileName;
 }
 
 export interface PreviewOpenRequest {

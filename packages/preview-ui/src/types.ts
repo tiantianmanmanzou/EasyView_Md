@@ -28,6 +28,8 @@ export interface PreviewHost {
   listArchive?(sessionId: string): Promise<ArchiveEntry[]>;
   openArchiveEntry?(sessionId: string, path: string): Promise<ArchiveEntryPreview>;
   exportArchiveEntry?(sessionId: string, path: string): Promise<void>;
+  /** Extract the whole archive into a sibling folder named after it; resolves to that folder's name. */
+  extractArchive?(sessionId: string): Promise<string>;
   decompileJava?(sessionId: string): Promise<string>;
   sendHttp?(request: HttpPreviewRequest): Promise<HttpPreviewResponse>;
 }

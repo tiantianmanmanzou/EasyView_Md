@@ -55,11 +55,21 @@ test('new files and folders start in name editing, then end selected on Enter or
 
     await beginCreate('beginCreateFolder', 'docs');
     await expect(input).toBeFocused();
+    await expect(page.locator('.workspace-create-row .workspace-entry-icon')).toHaveCount(1);
     await input.fill('资料');
     await clickBlank();
     await expect(entry('docs/资料')).toHaveClass(/selected/);
     await expect(entry('docs/计划.md')).not.toHaveClass(/selected/);
 
+    // Toolbar create targets the selected folder.
+    await page.getByTitle('新建文件夹').click();
+    await expect(input).toBeFocused();
+    await expect(page.locator('.workspace-create-row .workspace-entry-icon')).toHaveCount(1);
+    await input.fill('子目录');
+    await page.keyboard.press('Enter');
+    await expect(entry('docs/资料/子目录')).toHaveClass(/selected/);
+
+    await clickBlank();
     await page.getByTitle('新建文件夹').click();
     await expect(input).toBeFocused();
     await input.fill('归档');
@@ -68,6 +78,7 @@ test('new files and folders start in name editing, then end selected on Enter or
     await expect(input).toHaveCount(0);
 
     expect((await readdir(join(workspace, 'docs'))).sort()).toEqual(['guide.md', '计划.md', '资料'].sort());
+    expect(await readdir(join(workspace, 'docs', '资料'))).toEqual(['子目录']);
   } finally {
     await terminateElectron(application);
     await rm(temporaryDirectory, { recursive: true, force: true });

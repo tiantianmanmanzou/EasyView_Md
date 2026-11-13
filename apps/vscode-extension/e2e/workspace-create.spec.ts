@@ -40,6 +40,7 @@ test('new files and folders in a collapsed folder start in name editing, then en
     await menuItem('New Folder').click();
     await expect(input).toBeFocused();
     await expect(input).toHaveValue('Untitled Folder');
+    await expect(tree.locator('.workspace-create-row .workspace-entry-icon')).toHaveCount(1);
     await input.fill('Assets');
     await input.press('Enter');
     await expect(entry('docs/Assets')).toHaveClass(/selected/);

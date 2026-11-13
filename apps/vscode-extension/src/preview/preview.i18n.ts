@@ -12,6 +12,8 @@ export const tPreview = defineMessages({
     'writeTooLarge': '写入内容超过 {size} MiB 上限',
     'saveTableFailed': '表格保存失败',
     'vscodeApiUnavailable': 'VS Code API 不可用',
+    'extractFailed': '压缩包解压失败',
+    'extractLocalOnly': '只能解压本地磁盘上的压缩包',
   },
   en: {
     'unsupportedType': 'This file type is not supported by EasyView preview yet.',
@@ -24,5 +26,7 @@ export const tPreview = defineMessages({
     'writeTooLarge': 'The content to write exceeds the {size} MiB limit',
     'saveTableFailed': 'Failed to save the spreadsheet',
     'vscodeApiUnavailable': 'VS Code API is unavailable',
+    'extractFailed': 'Failed to extract the archive',
+    'extractLocalOnly': 'Only archives on the local disk can be extracted',
   },
 });

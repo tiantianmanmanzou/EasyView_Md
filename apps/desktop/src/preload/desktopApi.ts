@@ -92,6 +92,8 @@ export interface EasyViewDesktopApi {
     list(sessionId: string, password?: string): Promise<OperationResult<ArchiveEntry[]>>;
     readEntry(sessionId: string, entryPath: string, password?: string): Promise<OperationResult<ArchiveEntryPreview>>;
     exportEntry(sessionId: string, entryPath: string, password?: string): Promise<OperationResult<boolean>>;
+    /** Resolves to the name of the sibling folder the archive was extracted into. */
+    extract(sessionId: string): Promise<OperationResult<string>>;
   };
   menu: {
     publishState(state: DesktopMenuState): void;

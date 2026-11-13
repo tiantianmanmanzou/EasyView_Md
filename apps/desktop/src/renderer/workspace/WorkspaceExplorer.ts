@@ -32,6 +32,7 @@ import {
   collectVisibleWorkspaceTreeRelativePaths,
   computeNextWorkspaceTreeSelection,
   resolveWorkspaceTreeKeyAction,
+  resolveWorkspaceTreeDragSources,
   resolveWorkspaceTreeDropTarget,
   resolveWorkspaceTreeRowDropZone,
   workspaceTreeDepthFromPointer,
@@ -113,6 +114,8 @@ export class WorkspaceExplorer {
   private searchPanel: WorkspaceSearchPanel | null = null;
   private timestampTooltipEl: HTMLElement | null = null;
   private dragRelativePath: string | null = null;
+  /** Everything a tree-row drag moves (the selection when the grabbed row is part of it). */
+  private dragRelativePaths: string[] = [];
   private dropIndicator: HTMLElement | null = null;
   private dropHoverExpandTimer: number | undefined;
   private dropIntent: { targetRelativePath: string; target: WorkspaceTreeDropTarget } | null = null;
@@ -156,6 +159,10 @@ export class WorkspaceExplorer {
       }
       if (command === 'paste') {
         void this.loadDirectory(parentRelativePath(relativePath));
+        return;
+      }
+      if (command === 'extractArchive') {
+        void this.loadDirectory(parentRelativePath(relativePath)).then(() => this.select(relativePath));
         return;
       }
       if (relativePath) this.select(relativePath);
@@ -526,11 +533,11 @@ export class WorkspaceExplorer {
     newFileButton.setAttribute('aria-haspopup', 'menu');
     newFileButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      this.popupNewFileTypes(this.currentDirectory, newFileButton);
+      this.popupNewFileTypes(this.createTargetDirectory(), newFileButton);
     });
     header.appendChild(newFileButton);
     for (const [iconSvg, titleText, action] of [
-      [WORKSPACE_NEW_FOLDER_ICON_SVG, tExplorer('newFolder'), () => this.beginCreate(this.currentDirectory, 'directory')],
+      [WORKSPACE_NEW_FOLDER_ICON_SVG, tExplorer('newFolder'), () => this.beginCreate(this.createTargetDirectory(), 'directory')],
       [WORKSPACE_REFRESH_ICON_SVG, tExplorer('refresh'), () => { this.entriesByDirectory.clear(); void this.refreshExpanded(); }],
     ] as const) {
       const button = document.createElement('button');
@@ -719,6 +726,12 @@ export class WorkspaceExplorer {
     const parent = parentRelativePath(selected);
     const entry = this.entriesByDirectory.get(parent)?.find((item) => item.relativePath === selected);
     return entry?.kind === 'directory' ? selected : parent;
+  }
+
+  /** Folder that toolbar create actions target: selected folder (or parent of selected file), else current view folder. */
+  private createTargetDirectory(): string {
+    if (this.selectedRelativePath) return this.selectedDirectory();
+    return this.currentDirectory;
   }
 
   private clearSelection(): void {
@@ -1265,13 +1278,39 @@ export class WorkspaceExplorer {
 
   private renderCreateInput(depth: number): HTMLElement {
     const wrapper = document.createElement('form');
-    wrapper.className = 'workspace-create-row'; wrapper.style.paddingInlineStart = `${28 + depth * 16}px`;
-    const input = document.createElement('input');
-    input.autofocus = true;
+    wrapper.className = 'workspace-create-row';
     const pending = this.pendingCreate;
-    input.value = pending
+    const kind = pending?.kind ?? 'file';
+    const draftName = pending
       ? pending.draftName ?? this.defaultCreateName(pending.kind, pending.extension)
       : unusedWorkspaceCreateFileName(tExplorer('create.defaultFileStem'), '.md', []);
+    const iconsMode = this.displayMode === 'icons';
+    if (!iconsMode) {
+      wrapper.style.paddingInlineStart = `${10 + depth * 16}px`;
+      const chevron = document.createElement('span');
+      chevron.className = 'workspace-chevron';
+      if (kind === 'directory') chevron.classList.add('is-directory');
+      wrapper.appendChild(chevron);
+    }
+    const icon = document.createElement('span');
+    const paintIcon = (name: string): void => {
+      if (iconsMode && kind === 'directory') {
+        icon.className = 'workspace-icon-large is-folder';
+        icon.removeAttribute('data-icon');
+        icon.replaceChildren();
+        return;
+      }
+      if (iconsMode) icon.className = 'workspace-icon-large';
+      else icon.className = 'workspace-entry-icon';
+      const iconDesc = resolveWorkspaceTreeIcon({ kind, name, expanded: false });
+      icon.dataset.icon = iconDesc.id;
+      icon.innerHTML = iconDesc.svg;
+    };
+    paintIcon(draftName);
+    wrapper.appendChild(icon);
+    const input = document.createElement('input');
+    input.autofocus = true;
+    input.value = draftName;
     wrapper.appendChild(input);
     let submitting = false;
     const commit = async (): Promise<void> => {
@@ -1281,7 +1320,10 @@ export class WorkspaceExplorer {
       submitting = false;
     };
     wrapper.addEventListener('submit', (event) => { event.preventDefault(); void commit(); });
-    input.addEventListener('input', () => { if (pending) pending.draftName = input.value; });
+    input.addEventListener('input', () => {
+      if (pending) pending.draftName = input.value;
+      if (kind === 'file') paintIcon(input.value || draftName);
+    });
     // Re-rendering (e.g. the parent folder finishing its load) replaces this input, and Chromium
     // blurs a focused node while removing it; only a blur that leaves the input mounted commits.
     input.addEventListener('blur', () => { queueMicrotask(() => { if (input.isConnected) void commit(); }); });
@@ -1430,6 +1472,7 @@ export class WorkspaceExplorer {
     row.draggable = true;
     row.addEventListener('dragstart', (event) => {
       this.dragRelativePath = entry.relativePath;
+      this.dragRelativePaths = resolveWorkspaceTreeDragSources(this.orderedSelection(), entry.relativePath);
       event.dataTransfer?.setData('text/plain', entry.relativePath);
       event.dataTransfer!.effectAllowed = 'move';
       row.classList.add('is-dragging');
@@ -1437,6 +1480,7 @@ export class WorkspaceExplorer {
     });
     row.addEventListener('dragend', () => {
       this.dragRelativePath = null;
+      this.dragRelativePaths = [];
       row.classList.remove('is-dragging');
       this.clearDropVisuals();
     });
@@ -1478,9 +1522,10 @@ export class WorkspaceExplorer {
         );
         return;
       }
-      const source = this.dragRelativePath ?? event.dataTransfer?.getData('text/plain');
-      if (!source) return;
-      void this.handleDrop(source, target);
+      const fallback = event.dataTransfer?.getData('text/plain');
+      const sources = this.dragRelativePaths.length > 0 ? this.dragRelativePaths : fallback ? [fallback] : [];
+      if (sources.length === 0) return;
+      void this.handleDrop(sources, target);
     });
   }
 
@@ -1500,7 +1545,7 @@ export class WorkspaceExplorer {
       index: rows.indexOf(row),
       zone: resolveWorkspaceTreeRowDropZone(kind, event.clientY, rect.top, rect.height),
       pointerDepth: workspaceTreeDepthFromPointer(event.clientX - rect.left),
-      draggedRelativePath: external ? null : this.dragRelativePath,
+      draggedRelativePaths: external ? [] : this.dragRelativePaths,
     });
   }
 
@@ -1593,87 +1638,76 @@ export class WorkspaceExplorer {
   }
 
   private async handleDrop(
-    sourceRelativePath: string,
+    sourceRelativePaths: string[],
     dropTarget: WorkspaceTreeDropTarget,
   ): Promise<void> {
-    const sourceParent = parentRelativePath(sourceRelativePath);
-    const sourceName = sourceRelativePath.split('/').at(-1)!;
+    const targetParent = dropTarget.kind === 'into' ? dropTarget.relativePath : dropTarget.placement.parentRelativePath;
+    if (sourceRelativePaths.some((source) => targetParent === source || targetParent.startsWith(`${source}/`))) {
+      window.alert(tExplorer('moveIntoSelf'));
+      return;
+    }
+    // Dropping onto the folder that already holds an item leaves that item where it is.
+    const sources = dropTarget.kind === 'into'
+      ? sourceRelativePaths.filter((source) => parentRelativePath(source) !== targetParent)
+      : sourceRelativePaths;
+    if (sources.length === 0) return;
+    const siblingNames = (this.entriesByDirectory.get(targetParent) ?? []).map((entry) => entry.name);
+    const gapBeforeName = dropTarget.kind === 'gap' ? workspaceTreeGapBeforeName(dropTarget.placement, siblingNames) : undefined;
+    if (sources.length === 1 && parentRelativePath(sources[0]) === targetParent) {
+      await this.reorderBefore(targetParent, sources[0].split('/').at(-1)!, gapBeforeName);
+      return;
+    }
 
-    if (dropTarget.kind === 'into') {
-      const target = { relativePath: dropTarget.relativePath };
-      if (
-        sourceRelativePath === target.relativePath
-        || target.relativePath.startsWith(`${sourceRelativePath}/`)
-      ) {
-        window.alert(tExplorer('moveIntoSelf'));
-        return;
+    const movedNames: string[] = [];
+    const movedPaths: string[] = [];
+    const changedParents = new Set([targetParent]);
+    for (const source of sources) {
+      const sourceParent = parentRelativePath(source);
+      if (sourceParent === targetParent) {
+        movedNames.push(source.split('/').at(-1)!);
+        movedPaths.push(source);
+        continue;
       }
-      if (sourceParent === target.relativePath) {
-        // Already inside: treat as reorder to end is not requested; no-op.
-        return;
-      }
-      const result = await this.options.api.workspace.move({
-        relativePath: sourceRelativePath,
-        targetParentRelativePath: target.relativePath,
-      });
+      const result = await this.options.api.workspace.move({ relativePath: source, targetParentRelativePath: targetParent });
       if (!result.ok) {
         window.alert(result.message);
-        return;
+        break;
       }
-      if (this.sortMode !== 'custom') {
-        // Moving into a folder should flip to custom so the new sibling order can be kept.
-        await this.options.api.workspace.setSortMode('custom');
-        this.sortMode = 'custom';
-      }
-      const siblings = (this.entriesByDirectory.get(target.relativePath) ?? [])
-        .map((entry) => entry.name)
-        .filter((name) => name !== sourceName);
-      siblings.push(result.value.name);
-      await this.options.api.workspace.reorder({
-        parentRelativePath: target.relativePath,
-        movedName: result.value.name,
-        siblingNames: siblings,
-      });
-      const expanded = new Set(this.state?.expandedRelativePaths ?? []);
-      expanded.add(target.relativePath);
-      this.updateState({ expandedRelativePaths: [...expanded] });
-      await this.refreshChanged([sourceParent, target.relativePath]);
-      return;
+      changedParents.add(sourceParent);
+      movedNames.push(result.value.name);
+      movedPaths.push(result.value.relativePath);
     }
 
-    const { placement } = dropTarget;
-    const targetParent = placement.parentRelativePath;
-    const siblingNames = (this.entriesByDirectory.get(targetParent) ?? []).map((entry) => entry.name);
-    const beforeName = workspaceTreeGapBeforeName(placement, siblingNames);
-    if (sourceParent === targetParent) {
-      await this.reorderBefore(sourceParent, sourceName, beforeName);
-      return;
-    }
-
-    const result = await this.options.api.workspace.move({
-      relativePath: sourceRelativePath,
-      targetParentRelativePath: targetParent,
-    });
-    if (!result.ok) {
-      window.alert(result.message);
-      return;
-    }
-    if (this.sortMode !== 'custom') {
-      await this.options.api.workspace.setSortMode('custom');
+    if (movedNames.length > 0 && (this.sortMode === 'custom' || (await this.options.api.workspace.setSortMode('custom')).ok)) {
       this.sortMode = 'custom';
+      const moved = new Set(movedNames);
+      // The drop slot may sit next to a dragged item; anchor on the first sibling that stays put.
+      let anchorIndex = gapBeforeName === undefined ? -1 : siblingNames.indexOf(gapBeforeName);
+      while (anchorIndex >= 0 && anchorIndex < siblingNames.length && moved.has(siblingNames[anchorIndex])) anchorIndex += 1;
+      const beforeName = anchorIndex >= 0 ? siblingNames[anchorIndex] : undefined;
+      const allNames = [...siblingNames, ...movedNames.filter((name) => !siblingNames.includes(name))];
+      for (const movedName of movedNames) {
+        const result = await this.options.api.workspace.reorder({
+          parentRelativePath: targetParent,
+          movedName,
+          siblingNames: allNames,
+          beforeName,
+        });
+        if (!result.ok) {
+          window.alert(result.message);
+          break;
+        }
+      }
     }
-    const siblings = [...siblingNames];
-    if (!siblings.includes(result.value.name)) siblings.push(result.value.name);
-    await this.options.api.workspace.reorder({
-      parentRelativePath: targetParent,
-      movedName: result.value.name,
-      siblingNames: siblings,
-      beforeName,
-    });
+    if (movedPaths.length > 0) {
+      this.selectedRelativePaths = new Set(movedPaths);
+      this.selectedRelativePath = movedPaths[0];
+      this.selectionAnchorRelativePath = movedPaths[0];
+    }
     if (targetParent && this.state && !this.state.expandedRelativePaths.includes(targetParent)) {
       this.updateState({ expandedRelativePaths: [...this.state.expandedRelativePaths, targetParent] });
     }
-    await this.refreshChanged([sourceParent, targetParent]);
+    await this.refreshChanged([...changedParents]);
   }
 
   /** `beforeName` undefined appends to the end of the folder. */

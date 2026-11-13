@@ -55,7 +55,13 @@ describe('workspace explorer contribution', () => {
     expect(commandIds.has('easyviewMd.workspace.openWith')).toBe(false);
 
     const allTitleMenus = manifest.contributes.menus?.['view/title'] ?? [];
-    expect(allTitleMenus.filter(({ when }) => when?.includes('view == easyviewMd.versionGuard')).map(({ command }) => command)).toEqual(['easyviewMd.versionGuard.refresh', 'easyviewMd.versionGuard.expandAll', 'easyviewMd.versionGuard.collapseAll']);
+    expect(allTitleMenus.filter(({ when }) => when?.includes('view == easyviewMd.versionGuard')).map(({ command }) => command)).toEqual([
+      'easyviewMd.versionGuard.refresh',
+      'easyviewMd.versionGuard.expandAll',
+      'easyviewMd.versionGuard.collapseAll',
+      'easyviewMd.versionGuard.soloOn',
+      'easyviewMd.versionGuard.soloOff',
+    ]);
     const titleMenus = allTitleMenus.filter(({ command }) => command.startsWith('easyviewMd.workspace.'));
     const order = (group?: string) => Number(group?.split('@')[1] ?? 0);
     expect([...titleMenus].sort((a, b) => order(a.group) - order(b.group)).map(({ command }) => command)).toEqual([

@@ -9,6 +9,7 @@ import {
   type PreviewDescriptor,
   type PreviewTextResult,
 } from '@easyview/contracts';
+import { extractArchive } from '@easyview/node-runtime';
 import { isDesktopOnlyPreviewRoute, isPhase1PreviewRoute, PHASE1_FILENAME_PATTERNS } from '@easyview/preview-ui/phase1';
 import {
   productThemeBootstrapScript,
@@ -263,6 +264,21 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
             id: message.id,
             ok: false,
             message: error instanceof Error ? error.message : tPreview('readTextFailed'),
+          });
+        }
+        return;
+      }
+      if (message.type === 'extractArchive' && typeof message.id === 'string') {
+        try {
+          if (document.uri.scheme !== 'file') throw new Error(tPreview('extractLocalOnly'));
+          const target = await extractArchive(document.uri.fsPath);
+          await webviewPanel.webview.postMessage({ type: 'extractArchiveResult', id: message.id, ok: true, value: path.basename(target) });
+        } catch (error) {
+          await webviewPanel.webview.postMessage({
+            type: 'extractArchiveResult',
+            id: message.id,
+            ok: false,
+            message: error instanceof Error ? error.message : tPreview('extractFailed'),
           });
         }
         return;

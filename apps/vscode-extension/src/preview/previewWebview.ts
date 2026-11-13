@@ -133,6 +133,22 @@ class ExtensionPreviewHost implements PreviewHost {
     });
   }
 
+  async extractArchive(): Promise<string> {
+    if (!vscode) throw new Error(tPreview('vscodeApiUnavailable'));
+    const id = crypto.randomUUID();
+    return new Promise<string>((resolve, reject) => {
+      const handle = (event: MessageEvent) => {
+        const data = event.data;
+        if (!data || data.type !== 'extractArchiveResult' || data.id !== id) return;
+        window.removeEventListener('message', handle);
+        if (data.ok) resolve(data.value as string);
+        else reject(new Error(data.message || tPreview('extractFailed')));
+      };
+      window.addEventListener('message', handle);
+      vscode.postMessage({ type: 'extractArchive', id });
+    });
+  }
+
   async writeBytes(sessionId: string, bytes: Uint8Array): Promise<PreviewWriteResult> {
     if (!vscode) throw new Error(tPreview('vscodeApiUnavailable'));
     const id = crypto.randomUUID();

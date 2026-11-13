@@ -239,6 +239,7 @@ export type WorkspaceContextCommand =
   | 'openPreview'
   | 'openWith'
   | 'openDefault'
+  | 'extractArchive'
   | 'reveal'
   | 'copy'
   | 'copyFile'

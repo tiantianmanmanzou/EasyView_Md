@@ -98,13 +98,13 @@ export function resolveWorkspaceTreeDropTarget(input: {
   index: number;
   zone: WorkspaceTreeRowDropZone;
   pointerDepth: number;
-  draggedRelativePath?: string | null;
+  draggedRelativePaths?: readonly string[];
 }): WorkspaceTreeDropTarget | null {
-  const { rows, index, zone, draggedRelativePath } = input;
+  const { rows, index, zone, draggedRelativePaths = [] } = input;
   const row = rows[index];
   if (!row) return null;
-  const insideDragged = (path: string) => Boolean(draggedRelativePath)
-    && (path === draggedRelativePath || path.startsWith(`${draggedRelativePath}/`));
+  const insideDragged = (path: string) => draggedRelativePaths
+    .some((dragged) => path === dragged || path.startsWith(`${dragged}/`));
   if (zone === 'into') {
     if (row.kind !== 'directory' || insideDragged(row.relativePath)) return null;
     return { kind: 'into', relativePath: row.relativePath };
@@ -114,6 +114,18 @@ export function resolveWorkspaceTreeDropTarget(input: {
   const placement = resolveWorkspaceTreeGapPlacement(previous, next, input.pointerDepth);
   if (placement.parentRelativePath && insideDragged(placement.parentRelativePath)) return null;
   return { kind: 'gap', placement, lineRowIndex: index, lineEdge: zone === 'above' ? 'top' : 'bottom' };
+}
+
+/**
+ * Paths an internal tree drag carries: the whole selection (on-screen order, items
+ * inside a selected folder folded into it) when the grabbed row is selected, else just that row.
+ */
+export function resolveWorkspaceTreeDragSources(
+  orderedSelection: readonly string[],
+  grabbedRelativePath: string,
+): string[] {
+  if (!orderedSelection.includes(grabbedRelativePath)) return [grabbedRelativePath];
+  return orderedSelection.filter((path) => !orderedSelection.some((other) => path.startsWith(`${other}/`)));
 }
 
 /** Name to pass as `beforeName` when reordering `siblingNames` into `placement`. */

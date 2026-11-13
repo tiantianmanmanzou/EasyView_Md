@@ -1,4 +1,4 @@
-import { build } from 'esbuild';
+import { build, transform } from 'esbuild';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cssInjectPlugin } from '../../packages/preview-ui/esbuild-css-inject.mjs';
 import { spreadsheetLifecyclePlugin } from '../../packages/preview-ui/esbuild-spreadsheet.mjs';
+import { copyDocxLicenses } from '../../tooling/build/copy-docx-licenses.mjs';
 
 const execFileAsync = promisify(execFile);
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,7 @@ const production = process.argv.includes('--production');
 
 await rm(distDir, { recursive: true, force: true });
 await mkdir(rendererDir, { recursive: true });
+await copyDocxLicenses(workspaceDir, distDir);
 
 const common = {
   bundle: true,
@@ -91,6 +93,14 @@ await build({ bundle: true, entryPoints: [path.join(workspaceDir, 'packages/edit
 await build({ bundle: true, entryPoints: [path.join(workspaceDir, 'packages/preview-ui/src/workers/spreadsheet-worker.ts')], outfile: path.join(rendererDir, 'workers/spreadsheet-worker.js'), platform: 'browser', format: 'iife', target: 'chrome128', minify: production });
 
 if (production && rendererBuild.metafile) {
+  // The npm Word editor shipped pre-minified. Minify chunks containing its vendored source.
+  for (const [output, metadata] of Object.entries(rendererBuild.metafile.outputs)) {
+    if (!output.endsWith('.js') || !Object.keys(metadata.inputs).some((input) => /packages\/docx-(?:core|react|i18n|agents)\//.test(input))) continue;
+    const file = path.resolve(appDir, output);
+    const result = await transform(await readFile(file, 'utf8'), { minify: true, keepNames: true, target: 'chrome128', format: 'esm' });
+    await writeFile(file, result.code);
+    metadata.bytes = Buffer.byteLength(result.code);
+  }
   await writeFile(path.join(rendererDir, 'build-meta.json'), JSON.stringify(rendererBuild.metafile, null, 2));
 }
 

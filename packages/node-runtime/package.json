@@ -31,16 +31,16 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.53",
     "@easyview/contracts": "*",
+    "@easyview/docx-agents": "*",
+    "@easyview/docx-core": "*",
     "@easyview/markdown-core": "*",
     "ai": "^7.0.107",
     "docx": "^9.5.1",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "markdown-it": "^14.1.0",
     "node-pty": "^1.1.0",
     "pngjs": "^7.0.0",
     "zod": "^4.6.5"
-  },
-  "devDependencies": {
-    "jszip": "^3.10.1"
   }
 }

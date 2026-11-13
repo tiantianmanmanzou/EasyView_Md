@@ -15,8 +15,8 @@ export interface BuildAiChatMessagesOptions {
   attachments: AiChatAttachment[];
   documentContent?: string;
   documentFileName?: string;
-  /** Kind of the active document; 'xlsx' switches Agent mode to workbook tools. */
-  documentKind?: 'text' | 'xlsx';
+  /** Kind of the active document; Office kinds switch Agent mode to file-bound tools. */
+  documentKind?: 'text' | 'xlsx' | 'docx';
 }
 
 const AGENT_SYSTEM_INSTRUCTION = `You are editing Markdown and text files inside an editor.
@@ -43,11 +43,15 @@ export function buildAiChatMessages(options: BuildAiChatMessagesOptions): OpenAi
   const { systemPrompt, mode, history, userMessage, attachments, documentContent, documentFileName, documentKind } =
     options;
   const xlsxAgent = mode === 'agent' && documentKind === 'xlsx';
+  const docxAgent = mode === 'agent' && documentKind === 'docx';
+  const officeAgent = xlsxAgent || docxAgent;
 
   const messages: OpenAiChatMessage[] = [];
   const systemParts: string[] = [];
   if (xlsxAgent) {
     systemParts.push(tAi('prompt.xlsxInstruction', { name: documentFileName ?? 'workbook.xlsx' }));
+  } else if (docxAgent) {
+    systemParts.push(tAi('prompt.docxInstruction', { name: documentFileName ?? 'document.docx' }));
   } else if (mode === 'agent') {
     systemParts.push(AGENT_SYSTEM_INSTRUCTION);
   } else {
@@ -56,7 +60,7 @@ export function buildAiChatMessages(options: BuildAiChatMessagesOptions): OpenAi
   if (systemPrompt.trim().length > 0) {
     systemParts.push(systemPrompt.trim());
   }
-  if (mode === 'agent' && !xlsxAgent && documentContent !== undefined) {
+  if (mode === 'agent' && !officeAgent && documentContent !== undefined) {
     const label = documentFileName ? tAi('prompt.activeDocumentNamed', { name: documentFileName }) : tAi('prompt.activeDocument');
     systemParts.push(tAi('prompt.activeDocumentInstruction', { label }));
   }

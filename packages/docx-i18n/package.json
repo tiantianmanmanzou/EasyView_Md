@@ -1,0 +1,27 @@
+{
+  "name": "@easyview/docx-i18n",
+  "version": "1.9.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./en": "./src/en.ts",
+    "./de": "./src/de.ts",
+    "./fr": "./src/fr.ts",
+    "./he": "./src/he.ts",
+    "./hi": "./src/hi.ts",
+    "./id": "./src/id.ts",
+    "./pl": "./src/pl.ts",
+    "./pt-BR": "./src/pt-BR.ts",
+    "./tr": "./src/tr.ts",
+    "./zh-CN": "./src/zh-CN.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {},
+  "peerDependencies": {},
+  "peerDependenciesMeta": {}
+}

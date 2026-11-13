@@ -4,7 +4,8 @@ import { isAgentEditablePreview, previewPathMatches } from './officePreview';
 describe('office preview helpers', () => {
   it('only xlsx previews are Agent-editable', () => {
     expect(isAgentEditablePreview('data/Sales.XLSX')).toBe(true);
-    expect(isAgentEditablePreview('a.docx')).toBe(false);
+    expect(isAgentEditablePreview('a.docx')).toBe(true);
+    expect(isAgentEditablePreview('a.DOTX')).toBe(true);
     expect(isAgentEditablePreview('a.xls')).toBe(false);
     expect(isAgentEditablePreview('a.pdf')).toBe(false);
   });

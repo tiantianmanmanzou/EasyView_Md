@@ -1,0 +1,186 @@
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DocxReviewer } from '@easyview/docx-agents';
+import { OfficeBackupStore } from './office-backups';
+import { createOfficeAgentTools } from './office-tools';
+import {
+  commitDocxProposal,
+  inspectDocxFile,
+  planDocxEdit,
+  undoDocxCommit,
+} from './docx-edit';
+
+const FIXTURE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../docx-core/test-fixtures/styled-content.docx',
+);
+
+async function loadReviewer(file: string): Promise<DocxReviewer> {
+  const bytes = await readFile(file);
+  return DocxReviewer.fromBuffer(
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+    'Test',
+  );
+}
+
+describe('docx-edit', () => {
+  let root = '';
+  let file = '';
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'easyview-docx-edit-'));
+    file = path.join(root, 'sample.docx');
+    await copyFile(FIXTURE, file);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('inspects fingerprint and numbered preview', async () => {
+    const inspection = await inspectDocxFile(file, 5);
+    expect(inspection.fileName).toBe('sample.docx');
+    expect(inspection.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+    expect(inspection.paragraphCount).toBeGreaterThan(0);
+    expect(inspection.preview).toMatch(/^\[\d+]/);
+  });
+
+  it('plans suggest_change + comment, writes tracked revisions only after commit, and undoes', async () => {
+    const before = await readFile(file);
+    const { fingerprint } = await inspectDocxFile(file);
+    const reviewer = await loadReviewer(file);
+    const first = reviewer.getContentAsText({ toIndex: 0, includeTrackedChanges: false, includeCommentAnchors: false });
+    const phrase = first.replace(/^\[\d+\]\s*/, '').slice(0, 8);
+    expect(phrase.length).toBeGreaterThan(0);
+
+    const proposal = await planDocxEdit(file, fingerprint, [
+      { op: 'suggest_change', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}【修订】` },
+      { op: 'add_comment', paragraphIndex: 0, text: '请核对措辞' },
+    ]);
+    expect(proposal.diff.changes).toHaveLength(1);
+    expect(proposal.diff.comments).toHaveLength(1);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+
+    const backups = new OfficeBackupStore(path.join(root, 'backups'));
+    const tracked = await commitDocxProposal(proposal, backups, { resolution: 'tracked' });
+    const withTracked = await loadReviewer(file);
+    expect(withTracked.getChanges().length).toBeGreaterThan(0);
+    expect(withTracked.getComments()).toHaveLength(1);
+
+    await undoDocxCommit(tracked);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+  });
+
+  it('accept-all folds revisions into body text', async () => {
+    const { fingerprint } = await inspectDocxFile(file);
+    const reviewer = await loadReviewer(file);
+    const first = reviewer.getContentAsText({ toIndex: 0, includeTrackedChanges: false, includeCommentAnchors: false });
+    const phrase = first.replace(/^\[\d+\]\s*/, '').slice(0, 6);
+    const proposal = await planDocxEdit(file, fingerprint, [
+      { op: 'suggest_change', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}OK` },
+    ]);
+    await commitDocxProposal(proposal, new OfficeBackupStore(path.join(root, 'backups')), {
+      resolution: 'accept-all',
+    });
+    const after = await loadReviewer(file);
+    expect(after.getChanges()).toHaveLength(0);
+    expect(after.getContentAsText({ toIndex: 0 })).toContain(`${phrase}OK`);
+  });
+
+  it('itemDecisions can drop individual revisions before write', async () => {
+    const { fingerprint } = await inspectDocxFile(file);
+    const text = (await loadReviewer(file)).getContentAsText({
+      toIndex: 1,
+      includeTrackedChanges: false,
+      includeCommentAnchors: false,
+    });
+    const lines = text.split('\n').filter(Boolean);
+    const p0 = lines[0]?.replace(/^\[\d+\]\s*/, '').slice(0, 5) ?? '';
+    const p1 = lines[1]?.replace(/^\[\d+\]\s*/, '').slice(0, 5) ?? '';
+    expect(p0 && p1).toBeTruthy();
+    const proposal = await planDocxEdit(file, fingerprint, [
+      { op: 'suggest_change', paragraphIndex: 0, search: p0, replaceWith: `${p0}A` },
+      { op: 'suggest_change', paragraphIndex: 1, search: p1, replaceWith: `${p1}B` },
+    ]);
+    expect(proposal.diff.changes).toHaveLength(2);
+    await commitDocxProposal(proposal, new OfficeBackupStore(path.join(root, 'backups')), {
+      resolution: 'tracked',
+      itemDecisions: [
+        { index: 0, accept: true },
+        { index: 1, accept: false },
+      ],
+    });
+    const after = await loadReviewer(file);
+    const changes = after.getChanges();
+    expect(changes.length).toBeGreaterThan(0);
+    const joined = changes.map((c) => c.text).join('|');
+    expect(joined).toContain('A');
+    expect(joined).not.toContain('B');
+  });
+
+  it('refuses a stale fingerprint', async () => {
+    await expect(
+      planDocxEdit(file, 'deadbeefdeadbeef', [
+        { op: 'add_comment', paragraphIndex: 0, text: 'x' },
+      ]),
+    ).rejects.toThrow(/inspect_document|fingerprint|修改/i);
+  });
+});
+
+describe('office agent tools (docx)', () => {
+  let root = '';
+  let file = '';
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'easyview-docx-tools-'));
+    file = path.join(root, 'doc.docx');
+    await copyFile(FIXTURE, file);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const run = (tools: ReturnType<typeof createOfficeAgentTools>, name: string, input: unknown) =>
+    (tools[name]!.execute as (value: unknown, options: unknown) => Promise<unknown>)(input, {
+      toolCallId: 't',
+      messages: [],
+    });
+
+  it('exposes inspect_document / apply_docx_ops and writes only after acceptance', async () => {
+    const original = await readFile(file);
+    let decisionAccepted = false;
+    let resolution: 'tracked' | 'accept-all' = 'tracked';
+    const tools = createOfficeAgentTools({
+      kind: 'docx',
+      filePath: file,
+      backups: new OfficeBackupStore(path.join(root, 'app-data')),
+      confirmEdit: async () => ({ accepted: decisionAccepted, resolution }),
+    });
+    const inspected = (await run(tools, 'inspect_document', {})) as {
+      fingerprint: string;
+      preview: string;
+    };
+    const phrase = inspected.preview.split('\n')[0]?.replace(/^\[\d+\]\s*/, '').slice(0, 6) ?? '';
+    const ops = [
+      { op: 'suggest_change' as const, paragraphIndex: 0, search: phrase, replaceWith: `${phrase}X` },
+      { op: 'add_comment' as const, paragraphIndex: 0, text: 'note' },
+    ];
+    expect(await run(tools, 'apply_docx_ops', { fingerprint: inspected.fingerprint, ops })).toMatchObject({
+      status: 'rejected',
+    });
+    expect(Buffer.compare(await readFile(file), original)).toBe(0);
+
+    decisionAccepted = true;
+    resolution = 'tracked';
+    expect(await run(tools, 'apply_docx_ops', { fingerprint: inspected.fingerprint, ops })).toMatchObject({
+      status: 'applied',
+      resolution: 'tracked',
+    });
+    expect((await loadReviewer(file)).getComments()).toHaveLength(1);
+    expect((await loadReviewer(file)).getChanges().length).toBeGreaterThan(0);
+  });
+});

@@ -2,7 +2,7 @@
 /// <reference path="../css-modules.d.ts" />
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import type { DocxEditorRef } from '@eigenpal/docx-editor-react';
+import type { DocxEditorRef } from '@easyview/docx-react';
 import type { PreviewWriteResult } from '@easyview/contracts';
 import type { PreviewHost } from '../types';
 import {
@@ -134,10 +134,10 @@ function WordEditor({ descriptor, host }: { descriptor: ViewerProps['descriptor'
       setBuffer(null);
       try {
         const [{ DocxEditor: Editor }, response] = await Promise.all([
-          import('@eigenpal/docx-editor-react'),
+          import('@easyview/docx-react'),
           fetch(descriptor.contentUrl),
         ]);
-        await import('@eigenpal/docx-editor-react/styles.css');
+        await import('@easyview/docx-react/styles.css');
         // DocxEditor CSS injects after linked preview.css; re-assert left-gutter kill last.
         if (!document.getElementById('easyview-docx-gutter-fix')) {
           const style = document.createElement('style');

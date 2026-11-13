@@ -11,6 +11,9 @@ export const EASYVIEW_THEME_LEGACY_STORAGE_KEY = 'mdpre-zalman-theme';
 
 export const EASYVIEW_PREVIEW_FILE_THEME_PREFIX = 'easyview.preview.fileTheme:';
 
+/** Markdown source font shared by the Extension native editor and the Desktop default. */
+export const EASYVIEW_MONOSPACE_FONT_FAMILY = '"Sarasa Mono SC", "Sarasa Fixed SC", "SF Mono", Menlo, Monaco, "Courier New", monospace';
+
 /** Mid-axis palette aligned with FileHeader theme depth defaults. */
 export const EASYVIEW_THEME_PALETTE: Record<EasyViewThemeMode, {
   background: string;

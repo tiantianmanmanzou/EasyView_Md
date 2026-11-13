@@ -1,3 +1,4 @@
+import { EASYVIEW_MONOSPACE_FONT_FAMILY } from '@easyview/contracts';
 import type { DocumentSnapshotPayload, XlsxTablePayload } from '@easyview/contracts';
 import type {
   DesktopTabContextCommand,
@@ -148,14 +149,26 @@ export const DESKTOP_ACCENTS: readonly DesktopAccent[] = ['default', 'blue', 'or
 /** Background depth presets offered by the menu, in percent. */
 export const DESKTOP_THEME_DEPTH_STEPS = [0, 25, 50, 75, 100] as const;
 export type DesktopThemeDepthStep = (typeof DESKTOP_THEME_DEPTH_STEPS)[number];
+export type DesktopDocumentFont = 'sarasa' | 'sfMono' | 'menlo' | 'pingFang' | 'system';
+export const DESKTOP_DOCUMENT_FONTS: readonly DesktopDocumentFont[] = ['sarasa', 'sfMono', 'menlo', 'pingFang', 'system'];
+export const DESKTOP_DEFAULT_DOCUMENT_FONT: DesktopDocumentFont = 'sarasa';
+/** CSS font-family chains for the source and rich-text editing areas. */
+export const DESKTOP_DOCUMENT_FONT_FAMILIES: Readonly<Record<DesktopDocumentFont, string>> = {
+  sarasa: EASYVIEW_MONOSPACE_FONT_FAMILY,
+  sfMono: '"SF Mono", Menlo, "PingFang SC", monospace',
+  menlo: 'Menlo, "PingFang SC", monospace',
+  pingFang: '"PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif',
+  system: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, sans-serif',
+};
 
 export type DesktopAppearanceCommand =
   | `setThemeMode:${DesktopAppearanceMode}`
   | `setThemeDepth:${DesktopThemeDepthStep}`
-  | `setAccent:${DesktopAccent}`;
+  | `setAccent:${DesktopAccent}`
+  | `setDocumentFont:${DesktopDocumentFont}`;
 
 export function isDesktopAppearanceCommand(command: string): command is DesktopAppearanceCommand {
-  return /^(setThemeMode|setThemeDepth|setAccent):/.test(command);
+  return /^(setThemeMode|setThemeDepth|setAccent|setDocumentFont):/.test(command);
 }
 
 export type DesktopMenuCommand =
@@ -201,6 +214,7 @@ export interface DesktopMenuState {
   /** 0–100; the menu checks the nearest depth preset. */
   themeDepth: number;
   accent: DesktopAccent;
+  documentFont: DesktopDocumentFont;
 }
 
 export interface WorkspaceApi {

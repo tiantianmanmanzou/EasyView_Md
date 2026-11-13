@@ -8,18 +8,23 @@ import { EditorState, StateField, StateEffect, Transaction, RangeSetBuilder, Com
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo } from '@codemirror/commands';
-import { syntaxHighlighting, HighlightStyle, bracketMatching } from '@codemirror/language';
+import { syntaxHighlighting, syntaxTree, HighlightStyle, bracketMatching } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { closeBrackets } from '@codemirror/autocomplete';
 import { clipboardImage, requestImagePaste } from './ImagePaste';
 import { findHorizontalRuleLines } from '@easyview/markdown-core/horizontal-rule';
+import { EASYVIEW_MONOSPACE_FONT_FAMILY } from '@easyview/contracts';
+
+const EDITOR_MONOSPACE_FONT = `var(--vscode-editor-font-family, ${EASYVIEW_MONOSPACE_FONT_FAMILY})`;
+/** Desktop sets the document font; IDE webviews leave it unset and follow the editor font. */
+const EDITOR_DOCUMENT_FONT = `var(--easyview-document-font-family, ${EDITOR_MONOSPACE_FONT})`;
 
 const vscodeTheme = EditorView.theme({
   '&': {
     backgroundColor: 'var(--vscode-editor-background)',
     color: 'var(--vscode-editor-foreground)',
     fontSize: 'inherit',
-    fontFamily: 'var(--vscode-editor-font-family, Consolas, monospace)',
+    fontFamily: EDITOR_DOCUMENT_FONT,
   },
   '.cm-content': {
     caretColor: 'var(--vscode-editorCursor-foreground, #fff)',
@@ -53,16 +58,8 @@ const vscodeTheme = EditorView.theme({
   },
 }, { dark: true });
 
-/** Syntax highlight style — render markdown formatting naturally */
-const vscodeHighlightStyle = HighlightStyle.define([
-  // Headings — bold, blue, scaled
-  { tag: tags.heading, fontWeight: 'bold', color: '#4fc1ff' },
-  { tag: tags.heading1, fontSize: '1.5em' },
-  { tag: tags.heading2, fontSize: '1.3em' },
-  { tag: tags.heading3, fontSize: '1.15em' },
-  { tag: tags.heading4, fontSize: '1.05em' },
-  { tag: tags.heading5, fontSize: '1em' },
-  { tag: tags.heading6, fontSize: '0.9em', fontStyle: 'italic' },
+/** Markdown syntax styles shared by the default and document source editors. */
+const markdownSyntaxStyles = [
   // **bold** — actually bold
   { tag: tags.strong, fontWeight: 'bold' },
   // *italic* — actually italic
@@ -73,7 +70,7 @@ const vscodeHighlightStyle = HighlightStyle.define([
   { tag: tags.link, color: '#61afef', textDecoration: 'underline' },
   { tag: tags.url, color: '#61afef' },
   // `inline code` — monospace with background
-  { tag: tags.monospace, color: '#d19a66', fontFamily: 'var(--vscode-editor-font-family, Consolas, monospace)' },
+  { tag: tags.monospace, color: '#d19a66', fontFamily: EDITOR_MONOSPACE_FONT },
   // > blockquote — italic, larger
   { tag: tags.quote, color: '#98c379', fontStyle: 'italic', fontSize: '1.05em' },
   // Markdown syntax chars (**, *, `, ~~, ## etc.) — dimmed
@@ -90,6 +87,32 @@ const vscodeHighlightStyle = HighlightStyle.define([
   { tag: tags.string, color: '#ce9178' },
   // Comment
   { tag: tags.comment, color: '#6a9955', fontStyle: 'italic' },
+];
+
+/** Syntax highlight style — render markdown formatting naturally */
+const vscodeHighlightStyle = HighlightStyle.define([
+  // Headings — bold, blue, scaled
+  { tag: tags.heading, fontWeight: 'bold', color: '#4fc1ff' },
+  { tag: tags.heading1, fontSize: '1.5em' },
+  { tag: tags.heading2, fontSize: '1.3em' },
+  { tag: tags.heading3, fontSize: '1.15em' },
+  { tag: tags.heading4, fontSize: '1.05em' },
+  { tag: tags.heading5, fontSize: '1em' },
+  { tag: tags.heading6, fontSize: '0.9em', fontStyle: 'italic' },
+  ...markdownSyntaxStyles,
+]);
+
+/** A tag matches only its most specific rule, so every heading level repeats the shared heading look. */
+const DOCUMENT_SOURCE_HEADING = { fontWeight: 'bold', color: 'var(--easyview-source-heading-color)' };
+
+/** Document source mode: mildly scaled headings whose line height stays close to body lines. */
+const documentSourceHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading1, ...DOCUMENT_SOURCE_HEADING, fontSize: '1.25em', lineHeight: '1.3' },
+  { tag: tags.heading2, ...DOCUMENT_SOURCE_HEADING, fontSize: '1.15em', lineHeight: '1.4' },
+  { tag: tags.heading3, ...DOCUMENT_SOURCE_HEADING, fontSize: '1.05em', lineHeight: '1.5' },
+  { tag: [tags.heading4, tags.heading5], ...DOCUMENT_SOURCE_HEADING },
+  { tag: tags.heading6, ...DOCUMENT_SOURCE_HEADING, fontStyle: 'italic' },
+  ...markdownSyntaxStyles,
 ]);
 
 const changeViewHighlightStyle = HighlightStyle.define([
@@ -102,7 +125,7 @@ const changeViewHighlightStyle = HighlightStyle.define([
   { tag: tags.strikethrough, textDecoration: 'line-through', opacity: '0.7' },
   { tag: tags.link, color: '#61afef', textDecoration: 'underline' },
   { tag: tags.url, color: '#61afef' },
-  { tag: tags.monospace, color: '#d19a66', fontFamily: 'var(--vscode-editor-font-family, Consolas, monospace)' },
+  { tag: tags.monospace, color: '#d19a66', fontFamily: EDITOR_MONOSPACE_FONT },
   { tag: tags.quote, color: '#98c379', fontStyle: 'italic', fontSize: '1.05em' },
   { tag: tags.processingInstruction, color: '#6b7280' },
   // List/number tokens must stay on the editor foreground. The source-editor
@@ -125,7 +148,7 @@ const stickyNoteCompactHighlightStyle = HighlightStyle.define([
   { tag: tags.strikethrough, textDecoration: 'line-through', opacity: '0.7' },
   { tag: tags.link, color: 'var(--easyview-source-list-marker-color, var(--mdpre-accent, var(--vscode-textLink-foreground)))', textDecoration: 'underline' },
   { tag: tags.url, color: 'var(--easyview-source-list-marker-color, var(--mdpre-accent, var(--vscode-textLink-foreground)))' },
-  { tag: tags.monospace, color: '#d19a66', fontFamily: 'var(--vscode-editor-font-family, Consolas, monospace)' },
+  { tag: tags.monospace, color: '#d19a66', fontFamily: EDITOR_MONOSPACE_FONT },
   { tag: tags.quote, color: 'var(--vscode-textBlockQuote-foreground, #98c379)', fontStyle: 'italic' },
   { tag: tags.processingInstruction, color: '#6b7280' },
   { tag: tags.meta, color: '#7f848e' },
@@ -169,6 +192,46 @@ const stickyNoteCompactTheme = EditorView.theme({
     fontWeight: '400 !important',
   },
 }, { dark: true });
+
+const headingMarkerDecoration = Decoration.mark({ class: 'cm-heading-marker' });
+
+/** Marks `#`s plus the following spaces of ATX headings; the syntax tree keeps `#` comments inside code blocks untouched. */
+function buildHeadingMarkerDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  let last = -1;
+  for (const { from, to } of view.visibleRanges) {
+    syntaxTree(view.state).iterate({
+      from, to,
+      enter: (node) => {
+        if (!/^ATXHeading[1-6]$/.test(node.name)) return;
+        const mark = node.node.getChild('HeaderMark');
+        if (mark && mark.from > last) {
+          const line = view.state.doc.lineAt(mark.from);
+          const rest = line.text.slice(mark.to - line.from);
+          last = mark.to + rest.length - rest.trimStart().length;
+          builder.add(mark.from, last, headingMarkerDecoration);
+        }
+        return false;
+      },
+    });
+  }
+  return builder.finish();
+}
+
+const headingMarkerPlugin = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+  constructor(view: EditorView) { this.decorations = buildHeadingMarkerDecorations(view); }
+  update(update: ViewUpdate) {
+    if (update.docChanged || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) this.decorations = buildHeadingMarkerDecorations(update.view);
+  }
+}, { decorations: (plugin) => plugin.decorations });
+
+/** Heading markers show only on the line being edited. */
+const documentSourceTheme = EditorView.theme({
+  '&': { '--easyview-source-heading-color': 'var(--mdpre-accent-text, #1f6f8b)' },
+  '.mdpre-dark &': { '--easyview-source-heading-color': 'var(--mdpre-accent-text, #88c0d0)' },
+  '.cm-line:not(.cm-activeLine) .cm-heading-marker': { display: 'none' },
+});
 
 // ─── Custom markdown decorations (elements without CM tags) ──────────────
 
@@ -578,7 +641,7 @@ function searchSourceText(
 export interface SourceEditorOptions {
   parent: HTMLElement;
   onChange: (content: string, edits?: import('@easyview/editor-sync').TextOffsetPatch[]) => void;
-  visualMode?: 'default' | 'stickyNoteCompactMarkdown' | 'changeViewMarkdown';
+  visualMode?: 'default' | 'documentSource' | 'stickyNoteCompactMarkdown' | 'changeViewMarkdown';
   extraExtensions?: Extension[];
   imagePaste?: boolean;
   enableWordWrapToggle?: boolean;
@@ -679,12 +742,16 @@ export function createSourceEditor(options: SourceEditorOptions) {
     ? stickyNoteCompactHighlightStyle
     : visualMode === 'changeViewMarkdown'
       ? changeViewHighlightStyle
-      : vscodeHighlightStyle;
+      : visualMode === 'documentSource'
+        ? documentSourceHighlightStyle
+        : vscodeHighlightStyle;
   const visualTheme = visualMode === 'stickyNoteCompactMarkdown'
     ? stickyNoteCompactTheme
     : visualMode === 'changeViewMarkdown'
       ? changeViewTheme
-      : [];
+      : visualMode === 'documentSource'
+        ? [documentSourceTheme, headingMarkerPlugin]
+        : [];
   const markdownDecoPlugin = createMarkdownDecoPlugin(visualMode);
   let suppressChange = false;
   let destroyed = false;

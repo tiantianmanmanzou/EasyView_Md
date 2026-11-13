@@ -6,10 +6,11 @@ import type { TimelineRequestMessage } from '@easyview/contracts';
 import { clipboard, dialog, ipcMain, Menu, nativeTheme, shell, systemPreferences } from 'electron';
 import path from 'node:path';
 import { isEditorToHostMessage } from '@easyview/contracts';
-import { DESKTOP_ACCENTS, DESKTOP_APPEARANCE_MODES, normalizeDesktopPanelLayout } from '../../../contracts';
+import { DESKTOP_ACCENTS, DESKTOP_APPEARANCE_MODES, DESKTOP_DOCUMENT_FONTS, normalizeDesktopPanelLayout } from '../../../contracts';
 import type {
   DesktopAccent,
   DesktopAppearanceMode,
+  DesktopDocumentFont,
   DesktopTabContextCommand,
   HttpPreviewRequest,
   WorkspaceCreateRequest,
@@ -69,6 +70,7 @@ import {
   deleteWorkspaceEntry,
   importExternalWorkspaceEntries,
   executeTabContextCommand,
+  extractArchiveFile,
   openWorkspaceFolder,
   openWorkspacePreview,
   pasteWorkspaceClipboard,
@@ -461,6 +463,17 @@ export function registerDesktopIpc(): void {
     }
   });
 
+  registerHandle('archive.extract', async (event, request: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!isRecord(request) || typeof request.sessionId !== 'string') return failure('INVALID_ARGUMENT', tIpc('archive.invalidRequest'));
+    try {
+      return success(path.basename(await extractArchiveFile(await previewSessions.filePath(request.sessionId))));
+    } catch (error) {
+      return previewFailure(error);
+    }
+  });
+
   registerHandle('workspace.openFolder', async (event) => {
     const denied = assertTrustedRenderer(event);
     if (denied) return denied;
@@ -762,6 +775,7 @@ export function registerDesktopIpc(): void {
       || !DESKTOP_APPEARANCE_MODES.includes(value.themeMode as DesktopAppearanceMode)
       || typeof value.themeDepth !== 'number' || !Number.isFinite(value.themeDepth)
       || !DESKTOP_ACCENTS.includes(value.accent as DesktopAccent)
+      || !DESKTOP_DOCUMENT_FONTS.includes(value.documentFont as DesktopDocumentFont)
     ) return;
     setDesktopMenuState({
       sourceMode: value.sourceMode,
@@ -774,6 +788,7 @@ export function registerDesktopIpc(): void {
       themeMode: value.themeMode as DesktopAppearanceMode,
       themeDepth: Math.max(0, Math.min(100, value.themeDepth)),
       accent: value.accent as DesktopAccent,
+      documentFont: value.documentFont as DesktopDocumentFont,
     });
     createMenu();
   });

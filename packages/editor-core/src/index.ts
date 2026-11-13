@@ -46,6 +46,7 @@ import { SlashMenuExtension } from './extensions/behavior/slash-menu/SlashMenuEx
 import { FindReplaceExtension } from './extensions/behavior/find-replace/FindReplaceExtension';
 import { BlockEdgeCursorExtension } from './extensions/behavior/block-edge-cursor/BlockEdgeCursorExtension';
 import { InlineCursorExtension } from './extensions/behavior/inline-cursor/InlineCursorExtension';
+import { EditorCaretExtension } from './extensions/behavior/editor-caret/EditorCaretExtension';
 import { MarkBoundaryExtension } from './extensions/behavior/mark-boundary/MarkBoundaryExtension';
 import { TrailingNodeExtension } from './extensions/behavior/trailing-node/TrailingNodeExtension';
 import { PlaceholderExtension } from './extensions/behavior/placeholder/PlaceholderExtension';
@@ -1413,6 +1414,7 @@ function initEditor() {
     new FindReplaceExtension(),
     new BlockEdgeCursorExtension(),
     new InlineCursorExtension(),
+    new EditorCaretExtension(),
     new MarkBoundaryExtension(),
     new TrailingNodeExtension(),
     new PlaceholderExtension(),

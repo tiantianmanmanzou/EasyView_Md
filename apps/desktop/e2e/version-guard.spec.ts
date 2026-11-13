@@ -34,16 +34,34 @@ test('Version Guard discovers nested repositories, commits index only, pushes, d
     await expect.poll(() => fontSize('.version-guard .guard-file-name')).toBe(treeFont);
     await expect.poll(() => fontSize('.version-guard .guard-group')).toBe(treeFont);
     const change = main.locator('.guard-file').filter({ has: page.locator('.guard-file-name', { hasText: /^notes\.md$/ }) });
-    await change.getByRole('button', { name: 'notes.md', exact: true }).click();
+    await change.locator('.guard-file-name').click();
     await expect(page.locator('.easyview-history-view .cm-content')).toContainText('Changed');
     await expect(page.locator('.easyview-history-view .cm-content')).toHaveAttribute('contenteditable', 'false');
     await change.getByRole('button', { name: '暂存', exact: true }).click();
     await expect(main.locator('.guard-group', { hasText: '已暂存' })).toBeVisible();
     await main.locator('textarea').fill('Guard runtime commit'); await main.getByRole('button', { name: '提交', exact: true }).click();
     await expect.poll(() => git(repo, 'log', '-1', '--format=%s')).toBe('Guard runtime commit'); expect(git(repo, 'ls-tree', '--name-only', 'HEAD')).not.toContain('other.txt');
-    await main.getByRole('button', { name: '把本地提交推送到远程', exact: true }).click(); await expect.poll(() => git(remote, 'log', '-1', '--format=%s')).toBe('Guard runtime commit');
-    await main.getByRole('button', { name: /^检查更新/ }).click(); await expect(main.getByRole('button', { name: /^检查更新 · 上次检查远程/ })).toBeVisible(); await expect(main.locator('.guard-checked')).toHaveCount(0);
-    await expect(panel.locator('.guard-commit', { hasText: 'Guard runtime commit' })).toBeVisible();
+    await main.locator('.guard-sync-count[data-method="push"]').click(); await expect.poll(() => git(remote, 'log', '-1', '--format=%s')).toBe('Guard runtime commit');
+    await main.locator('.guard-repo-refresh').click(); await expect(main.getByRole('button', { name: /刷新此仓库并检查远程 · 上次检查远程/ })).toBeVisible(); await expect(main.locator('.guard-checked')).toHaveCount(0);
+    const headCommit = panel.locator('.guard-commit', { hasText: 'Guard runtime commit' });
+    await expect(headCommit).toBeVisible();
+    // After pushing, the head row shows the current branch badge plus a compact remote badge.
+    const branch = git(repo, 'branch', '--show-current');
+    await expect(headCommit.locator('.guard-ref.is-current')).toHaveText(branch);
+    await expect(headCommit.locator('.guard-ref.is-remote.is-compact')).toHaveCount(1);
+    await headCommit.locator('.guard-commit-refs').hover();
+    const card = panel.locator('.guard-ref-card'); await expect(card).toBeVisible();
+    await expect(card.locator('.guard-ref-label')).toHaveText([branch, `origin/${branch}`]);
+    await expect(card.locator('.guard-ref-card-stats')).toHaveText('1 个文件已更改，1 处插入(+)，1 处删除(-)');
+    await expect(card.locator('.guard-ref-card-hash')).toHaveText(git(repo, 'rev-parse', '--short=7', 'HEAD'));
+    await page.screenshot({ path: '/tmp/easyview-version-guard-refs.png' });
+    await page.mouse.move(0, 0); await expect(card).toHaveCount(0);
+    // Any history row opens its commit card, not only rows that carry ref badges.
+    await panel.locator('.guard-commit', { hasText: 'Initial' }).locator('.guard-commit-subject').hover();
+    await expect(card.locator('.guard-ref-card-message')).toHaveText('Initial');
+    await expect(card.locator('.guard-ref-card-refs')).toHaveCount(0);
+    await page.screenshot({ path: '/tmp/easyview-version-guard-row-card.png' });
+    await page.mouse.move(0, 0); await expect(card).toHaveCount(0);
     // Open working file, edit without manually saving, and stage through the panel.
     const api = (request: object) => page.evaluate(async request => { const result = await (window as any).easyViewDesktop.versionGuard.request(request); if (!result.ok) throw new Error(result.message); return result.value; }, request);
     await api({ method: 'openFile', repository: repo, paths: ['notes.md'] });

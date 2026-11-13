@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { fingerprintFiles } from '../filesystem/file-fingerprint';
 import { retryIndexLock, serialRepo } from './repo-lock';
 import { isSpreadsheetSnapshotPath, readSpreadsheetSnapshot, SPREADSHEET_SNAPSHOT_MAX_BYTES } from './spreadsheet-snapshot';
-import type { GuardRepository, GuardFile, GuardStatus, GuardHistory, GuardComparison, GuardRequest, GuardBranch, SpreadsheetComparison } from '@easyview/contracts';
+import type { GuardRepository, GuardFile, GuardStatus, GuardHistory, GuardCommitRef, GuardCommitStats, GuardRemoteVisibility, GuardComparison, GuardRequest, GuardBranch, SpreadsheetComparison } from '@easyview/contracts';
 
 // One limiter per host process, shared across windows and repositories.
 const waiting: Array<() => void> = [];
@@ -41,6 +41,41 @@ export function guardGitBytes(root: string, args: string[]): Promise<Buffer> {
     }, (error, stdout, stderr) => error ? reject(new Error(stderr.toString('utf8').trim() || error.message)) : resolve(stdout));
   }));
 }
+/** Parses `%D` from `git log --decorate=full`; symbolic `origin/HEAD` and non-branch refs (stash, notes) are dropped. */
+export function parseCommitRefs(decoration: string): GuardCommitRef[] {
+  const refs: GuardCommitRef[] = [];
+  for (const part of decoration.split(', ').map(item => item.trim()).filter(Boolean)) {
+    if (part === 'HEAD') refs.push({ name: 'HEAD', type: 'head', current: true });
+    else if (part.startsWith('HEAD -> refs/heads/')) refs.push({ name: part.slice('HEAD -> refs/heads/'.length), type: 'branch', current: true });
+    else if (part.startsWith('tag: refs/tags/')) refs.push({ name: part.slice('tag: refs/tags/'.length), type: 'tag' });
+    else if (part.startsWith('refs/heads/')) refs.push({ name: part.slice('refs/heads/'.length), type: 'branch' });
+    else if (part.startsWith('refs/remotes/') && !part.endsWith('/HEAD')) refs.push({ name: part.slice('refs/remotes/'.length), type: 'remote' });
+  }
+  return refs;
+}
+/** Parses ` 3 files changed, 155 insertions(+), 14 deletions(-)`; git omits zero parts. */
+export function parseShortStat(output: string): GuardCommitStats {
+  const count = (pattern: RegExp): number => Number(pattern.exec(output)?.[1] ?? 0);
+  return { files: count(/(\d+) files? changed/), insertions: count(/(\d+) insertions?\(\+\)/), deletions: count(/(\d+) deletions?\(-\)/) };
+}
+/** Drops `user:token@` from http(s) remotes so copying an address never leaks credentials; SSH users such as `git@` are kept. */
+export function stripUrlCredentials(url: string): string {
+  return url.replace(/^(https?:\/\/)[^/@]*@/i, '$1');
+}
+/** `owner/repo` of a github.com remote in https, ssh:// or scp-style form. */
+export function githubRepositoryPath(url: string): string | undefined {
+  const match = /^(?:https?:\/\/(?:[^/@]*@)?(?:www\.)?github\.com\/|ssh:\/\/(?:[^/@]*@)?(?:ssh\.)?github\.com(?::\d+)?\/|[^/@\s:]+@(?:ssh\.)?github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return match ? `${match[1]}/${match[2]}` : undefined;
+}
+/** Anonymous GitHub API lookup: a repository it cannot see (404) is private to us; other failures stay unknown. */
+async function githubVisibility(repository: string): Promise<'public' | 'private' | undefined> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${repository}`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'EasyView_Md' }, signal: AbortSignal.timeout(8000) });
+    if (response.status === 404) return 'private';
+    if (!response.ok) return undefined;
+    return (await response.json() as { private?: boolean }).private ? 'private' : 'public';
+  } catch { return undefined; }
+}
 const inside = (root: string, file: string): boolean => { const relative = path.relative(root, file); return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)); };
 const digest = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
 export interface GuardHost {
@@ -53,6 +88,8 @@ export interface GuardHost {
 export class VersionGuardService {
   private repositories = new Map<string, GuardRepository>();
   private controller = new AbortController();
+  /** Rediscovery has its own signal so known repositories keep serving status reads meanwhile. */
+  private discovery = new AbortController();
   private queries = new Map<string, Promise<unknown>>();
   private watchers: FSWatcher[] = [];
   private checked = new Map<string, number>();
@@ -61,16 +98,19 @@ export class VersionGuardService {
   private changed?: (paths: string[] | null) => void;
   constructor(private readonly host: GuardHost) {}
   setActive(active: boolean, changed?: (paths: string[] | null) => void): void {
+    const resumed = active && !this.active;
     this.watchGeneration++; this.active = active; this.changed = changed;
     this.watchers.splice(0).forEach(watcher => watcher.close());
     if (active) void this.watchMetadata();
+    // Nothing was watched while inactive, so changes made meanwhile (e.g. commits from another app) are unknown.
+    if (resumed) changed?.(null);
   }
   private async watchMetadata(): Promise<void> {
-    const generation = this.controller; const watchGeneration = this.watchGeneration; const watched = new Set<string>();
+    const generation = this.discovery; const watchGeneration = this.watchGeneration; const watched = new Set<string>();
     for (const repository of this.repositories.values()) {
       try {
         const output = await guardGit(repository.rootPath, ['rev-parse', '--absolute-git-dir', '--git-common-dir'], generation.signal);
-        if (!this.active || generation !== this.controller || watchGeneration !== this.watchGeneration) return;
+        if (!this.active || generation !== this.discovery || watchGeneration !== this.watchGeneration) return;
         for (const directory of new Set(output.trim().split('\n').map(value => path.resolve(repository.rootPath, value)))) {
           if (watched.has(directory)) continue; watched.add(directory);
           const watcher = watch(directory, (_event, name) => {
@@ -85,13 +125,12 @@ export class VersionGuardService {
       } catch { if (!generation.signal.aborted) this.changed?.(null); }
     }
   }
-  dispose(): void { this.active = false; this.controller.abort(); this.watchers.splice(0).forEach(w => w.close()); this.queries.clear(); }
+  dispose(): void { this.active = false; this.controller.abort(); this.discovery.abort(); this.watchers.splice(0).forEach(w => w.close()); this.queries.clear(); }
   async discover(): Promise<GuardRepository[]> {
-    this.controller.abort(); this.controller = new AbortController();
-    const signal = this.controller.signal;
+    this.discovery.abort(); this.discovery = new AbortController();
+    const signal = this.discovery.signal;
     this.watchers.splice(0).forEach(w => w.close()); guardDiagnostics.scans++;
     const found = new Map<string, GuardRepository>(); const visited = new Set<string>(); const warnings: string[] = [];
-    this.repositories = found;
     const roots = await Promise.all(this.host.roots().map(root => fs.realpath(root)));
     const queue = [...roots];
     while (queue.length) {
@@ -106,7 +145,8 @@ export class VersionGuardService {
           if (roots.some(root => inside(root, rootPath))) { found.set(rootPath, { id: rootPath, rootPath, name: path.basename(rootPath) }); this.host.discovered?.([...found.values()], [...warnings]); }
         } catch (error) { signal.throwIfAborted(); warnings.push(`${directory}: ${String(error)}`); this.host.discovered?.([...found.values()], [...warnings]); }
       }
-      for (const entry of entries) if (entry.isDirectory() && entry.name !== '.git') queue.push(path.join(directory, entry.name));
+      // Installed dependencies are huge and never hold repositories the user manages.
+      for (const entry of entries) if (entry.isDirectory() && entry.name !== '.git' && entry.name !== 'node_modules') queue.push(path.join(directory, entry.name));
       // Yield to IPC/file events even for very large directory trees.
       if (visited.size % 100 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     }
@@ -144,6 +184,11 @@ export class VersionGuardService {
     }
     return paths as string[];
   }
+  /** Validated absolute paths for a repository-relative selection (directories may end with "/"). */
+  async absolutePaths(request: GuardRequest): Promise<string[]> {
+    const repository = await this.repository(request.repository);
+    return (await this.files(repository, request.paths)).map(file => path.resolve(repository.rootPath, file));
+  }
   async status(repository: GuardRepository): Promise<GuardStatus> {
     const output = await guardGit(repository.rootPath, ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all', '--ignore-submodules=none'], this.controller.signal);
     const status: GuardStatus = { files: [], branch: '', head: '', ahead: 0, behind: 0, checkedAt: this.checked.get(repository.id) };
@@ -167,7 +212,7 @@ export class VersionGuardService {
   }
   async handle(request: GuardRequest): Promise<unknown> {
     if (!request || typeof request !== 'object') throw new Error('Invalid Version Guard request.');
-    if (request.method === 'cancel') { this.controller.abort(); this.controller = new AbortController(); return true; }
+    if (request.method === 'cancel') { this.controller.abort(); this.controller = new AbortController(); this.discovery.abort(); this.discovery = new AbortController(); return true; }
     if (request.method === 'diagnostics') return { ...guardDiagnostics, watchers: this.watchers.length };
     if (request.method === 'discover') return this.discover();
     if (request.method === 'init') return this.init();
@@ -180,9 +225,14 @@ export class VersionGuardService {
         const status = await this.status(repository);
         if (status.head === '(initial)') return { entries: [] };
         const offset = Number(request.cursor ?? 0);
-        const output = await guardGit(root, ['log', 'HEAD', '--date-order', '--max-count=51', `--skip=${offset}`, '--format=%H%x00%P%x00%an%x00%ct%x00%B%x00']);
+        // Like the VS Code graph, include incoming upstream commits; when not behind they are already in HEAD's history.
+        const heads = status.upstream && status.behind > 0 ? ['HEAD', '@{upstream}'] : ['HEAD'];
+        const output = await guardGit(root, ['log', ...heads, '--date-order', '--decorate=full', '--max-count=51', `--skip=${offset}`, '--format=%H%x00%P%x00%an%x00%ct%x00%D%x00%B%x00']);
         const fields = output.split('\0'); const entries: GuardHistory['entries'] = [];
-        for (let i = 0; i + 4 < fields.length; i += 5) entries.push({ hash: fields[i].trim(), parents: fields[i + 1].split(' ').filter(Boolean), author: fields[i + 2], timestamp: Number(fields[i + 3]) * 1000, message: fields[i + 4].trim() });
+        for (let i = 0; i + 5 < fields.length; i += 6) {
+          const refs = parseCommitRefs(fields[i + 4]);
+          entries.push({ hash: fields[i].trim(), parents: fields[i + 1].split(' ').filter(Boolean), author: fields[i + 2], timestamp: Number(fields[i + 3]) * 1000, message: fields[i + 5].trim(), ...(refs.length ? { refs } : {}) });
+        }
         return { entries: entries.slice(0, 50), cursor: entries.length > 50 ? String(offset + 50) : undefined } satisfies GuardHistory;
       }
       if (request.method === 'commitFiles') {
@@ -192,11 +242,17 @@ export class VersionGuardService {
         for (let i = 0; i + 1 < tokens.length;) { const status = tokens[i++]; const old = tokens[i++]; const renamed = /^[RC]/.test(status); files.push({ path: renamed ? tokens[i++] : old, oldPath: renamed ? old : undefined, index: status[0], worktree: '.', submodule: false }); }
         return files;
       }
+      if (request.method === 'commitStats') {
+        const revision = this.revision(request.revision);
+        return parseShortStat(await guardGit(root, await this.parent(root, revision) ? ['diff', '--shortstat', `${revision}^1`, revision] : ['diff-tree', '--root', '--no-commit-id', '--shortstat', revision]));
+      }
+      if (request.method === 'remoteUrl') return this.remoteUrl(root, request.branch);
+      if (request.method === 'remoteVisibility') return this.remoteVisibility(root);
       if (request.method === 'comparison') return this.comparison(repository, request);
       if (request.method === 'branches') return this.branches(root);
       throw new Error('Unsupported Version Guard request.');
     };
-    if (['status', 'history', 'commitFiles', 'comparison', 'branches'].includes(request.method)) {
+    if (['status', 'history', 'commitFiles', 'commitStats', 'remoteUrl', 'remoteVisibility', 'comparison', 'branches'].includes(request.method)) {
       const key = JSON.stringify(request); const existing = this.queries.get(key); if (existing) return existing;
       const promise = read(); this.queries.set(key, promise); try { return await promise; } finally { if (this.queries.get(key) === promise) this.queries.delete(key); }
     }
@@ -206,8 +262,10 @@ export class VersionGuardService {
         if (!name) throw new Error('Branch name is required.');
         if ((await this.status(repository)).files.some(file => file.index === 'U')) throw new Error('Resolve conflicts before switching branches.');
         if (request.create) { await guardGit(root, ['check-ref-format', '--branch', name]).catch(() => { throw new Error(`Invalid branch name: ${name}`); }); return guardGit(root, ['switch', '-c', name]); }
-        const refs = new Set((await guardGit(root, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'])).split('\n').filter(Boolean));
+        const refs = new Set((await guardGit(root, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes', 'refs/tags'])).split('\n').filter(Boolean));
         if (refs.has(`refs/heads/${name}`)) return guardGit(root, ['switch', name]);
+        // Like VS Code, checking out a tag leaves HEAD detached at the tagged commit.
+        if (!refs.has(`refs/remotes/${name}`) && refs.has(`refs/tags/${name}`)) return guardGit(root, ['switch', '--detach', `refs/tags/${name}`]);
         if (!refs.has(`refs/remotes/${name}`)) throw new Error(`Unknown branch: ${name}`);
         const remotes = (await guardGit(root, ['remote'])).split('\n').filter(Boolean).sort((a, b) => b.length - a.length);
         const remote = remotes.find(each => name.startsWith(`${each}/`));
@@ -215,18 +273,38 @@ export class VersionGuardService {
         return guardGit(root, refs.has(`refs/heads/${local}`) ? ['switch', local] : ['switch', '--track', name]);
       }
       if (request.method === 'commit') {
-        if (typeof request.message !== 'string' || !request.message.trim()) throw new Error('Commit message is required.');
+        const message = typeof request.message === 'string' ? request.message.trim() : '';
+        if (!message && !request.amend) throw new Error('Commit message is required.');
         const status = await this.status(repository);
         if (status.files.some(file => file.index === 'U')) throw new Error('Resolve conflicts before committing.');
+        if (request.amend) {
+          await this.assertUnpushed(root, status);
+          return guardGit(root, ['commit', '--amend', ...(message ? ['-m', request.message!] : ['--no-edit'])]);
+        }
         if (!status.files.some(file => file.index !== '.' && file.index !== '?')) {
           const paths = request.stageAll ? status.files.filter(file => file.worktree !== '.').flatMap(file => file.oldPath ? [file.oldPath, file.path] : [file.path]) : [];
           if (!paths.length) throw new Error('No staged changes.');
           await this.host.beforeStage(paths.map(file => path.join(root, file)));
           await guardGit(root, ['add', '--', ...paths]);
         }
-        return guardGit(root, ['commit', '-m', request.message]);
+        return guardGit(root, ['commit', '-m', request.message!]);
       }
-      if (request.method === 'fetch' || request.method === 'pull' || request.method === 'push' || request.method === 'sync') {
+      if (request.method === 'undoCommit') {
+        const status = await this.status(repository);
+        await this.assertUnpushed(root, status);
+        const message = (await guardGit(root, ['log', '-1', '--format=%B'])).trim();
+        await guardGit(root, await this.parent(root, 'HEAD') ? ['reset', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD']);
+        return message;
+      }
+      if (request.method === 'stash') {
+        const paths = (await this.status(repository)).files.flatMap(file => file.oldPath ? [file.oldPath, file.path] : [file.path]);
+        if (!paths.length) throw new Error('No local changes to stash.');
+        await this.host.beforeStage(paths.map(file => path.join(root, file)));
+        // With literal pathspecs, `stash -u` saves new files but leaves them in place, so popping later conflicts.
+        return guardGit(root, ['--no-literal-pathspecs', 'stash', 'push', '--include-untracked']);
+      }
+      if (request.method === 'stashPop') return guardGit(root, ['--no-literal-pathspecs', 'stash', 'pop']);
+      if (request.method === 'fetch' || request.method === 'pull' || request.method === 'push') {
         const status = await this.status(repository);
         if (!status.upstream) throw new Error('No upstream configured for the current branch.');
         const remote = (await guardGit(root, ['config', '--get', `branch.${status.branch}.remote`])).trim();
@@ -238,7 +316,6 @@ export class VersionGuardService {
         if (status.files.some(file => file.index === 'U')) throw new Error('Resolve conflicts before pulling.');
         const result = await this.pull(root);
         this.checked.set(repository.id, Date.now());
-        if (request.method === 'sync' && (await this.status(repository)).ahead > 0) return push();
         return result;
       }
       const paths = await this.files(repository, request.paths);
@@ -263,14 +340,27 @@ export class VersionGuardService {
       throw new Error('Unsupported Version Guard operation.');
     });
   }
+  private async remoteVisibility(root: string): Promise<GuardRemoteVisibility> {
+    const remotes = (await guardGit(root, ['remote'])).split('\n').map(name => name.trim()).filter(Boolean);
+    const lookups = new Map<string, Promise<'public' | 'private' | undefined>>(); const result: GuardRemoteVisibility = {};
+    await Promise.all(remotes.map(async name => {
+      const repository = githubRepositoryPath(await guardGit(root, ['remote', 'get-url', name]).catch(() => ''));
+      if (!repository) return;
+      const key = repository.toLowerCase(); if (!lookups.has(key)) lookups.set(key, githubVisibility(repository));
+      const visibility = await lookups.get(key); if (visibility) result[name] = visibility;
+    }));
+    return result;
+  }
   private async branches(root: string): Promise<GuardBranch[]> {
-    const output = await guardGit(root, ['for-each-ref', '--sort=-committerdate', '--format=%(refname)%00%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)', 'refs/heads', 'refs/remotes'], this.controller.signal);
+    // Annotated tags point at a tag object; `*` fields read the commit behind it, like for lightweight tags and branches.
+    const output = await guardGit(root, ['for-each-ref', '--sort=-creatordate', '--format=%(refname)%00%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(authorname)%00%(*authorname)%00%(creatordate:unix)%00%(contents:subject)%00%(*contents:subject)', 'refs/heads', 'refs/remotes', 'refs/tags'], this.controller.signal);
     const branches: GuardBranch[] = [];
     for (const line of output.split('\n')) {
-      const [ref, name, head, upstream, track, author, time, subject] = line.split('\0');
+      const [ref, name, head, upstream, track, author, taggedAuthor, time, subject, taggedSubject] = line.split('\0');
       if (!ref || ref.endsWith('/HEAD')) continue;
       const ahead = /ahead (\d+)/.exec(track ?? '')?.[1]; const behind = /behind (\d+)/.exec(track ?? '')?.[1];
-      branches.push({ name, remote: ref.startsWith('refs/remotes/'), current: head === '*', upstream: upstream || undefined, ahead: upstream ? Number(ahead ?? 0) : undefined, behind: upstream ? Number(behind ?? 0) : undefined, subject: subject ?? '', author: author ?? '', timestamp: Number(time) * 1000 });
+      const type = ref.startsWith('refs/remotes/') ? 'remote' : ref.startsWith('refs/tags/') ? 'tag' : 'branch';
+      branches.push({ name, type, current: head === '*', upstream: upstream || undefined, ahead: upstream ? Number(ahead ?? 0) : undefined, behind: upstream ? Number(behind ?? 0) : undefined, subject: taggedSubject || subject || '', author: taggedAuthor || author || '', timestamp: Number(time) * 1000 });
     }
     return branches;
   }
@@ -289,6 +379,22 @@ export class VersionGuardService {
       throw error;
     }
   }
+  /** Undo and amend rewrite the last commit, which must not already be shared through a remote. */
+  private async assertUnpushed(root: string, status: GuardStatus): Promise<void> {
+    if (status.head === '(initial)') throw new Error('There is no commit yet.');
+    if ((await guardGit(root, ['branch', '-r', '--contains', 'HEAD'])).trim()) throw new Error('The last commit is already on a remote; changing it would rewrite shared history.');
+  }
+  /** A remote ref names its remote; a local branch uses its tracking remote; otherwise the only remote or `origin`. */
+  private async remoteUrl(root: string, ref: unknown): Promise<string> {
+    if (typeof ref !== 'string' || !/^(HEAD|refs\/(heads|remotes|tags)\/[^\0\s]+)$/.test(ref)) throw new Error('Invalid ref.');
+    const remotes = (await guardGit(root, ['remote'])).split('\n').map(name => name.trim()).filter(Boolean);
+    let remote: string | undefined;
+    if (ref.startsWith('refs/remotes/')) remote = remotes.filter(name => ref.startsWith(`refs/remotes/${name}/`)).sort((a, b) => b.length - a.length)[0];
+    else if (ref.startsWith('refs/heads/')) remote = (await guardGit(root, ['config', '--get', `branch.${ref.slice('refs/heads/'.length)}.remote`]).catch(() => '')).trim() || undefined;
+    if (!remote || !remotes.includes(remote)) remote = remotes.length === 1 ? remotes[0] : remotes.includes('origin') ? 'origin' : undefined;
+    if (!remote) throw new Error('No remote repository is configured for this branch.');
+    return stripUrlCredentials((await guardGit(root, ['remote', 'get-url', remote])).trim());
+  }
   private revision(value: unknown): string { if (typeof value !== 'string' || !/^[a-f0-9]{40,64}$/.test(value)) throw new Error('Invalid commit.'); return value; }
   private async parent(root: string, revision: string): Promise<string | undefined> { return (await guardGit(root, ['rev-list', '--parents', '-n', '1', revision])).trim().split(' ')[1]; }
   private async blob(root: string, spec: string): Promise<string> {
@@ -303,7 +409,7 @@ export class VersionGuardService {
       const revision = this.revision(request.revision); const parent = await this.parent(root, revision);
       const files = await this.handle({ method: 'commitFiles', repository: root, revision }) as GuardFile[];
       const entry = files.find(entry => entry.path === file); if (!entry) throw new Error('File is not part of this commit.');
-      baseLabel = parent ? `${parent.slice(0, 8)} (first parent)` : 'Empty'; contentLabel = revision.slice(0, 8);
+      baseLabel = parent ? `${parent.slice(0, 7)} (first parent)` : 'Empty'; contentLabel = revision.slice(0, 7);
       if (parent && entry.index !== 'A') baseSpec = `${parent}:${entry.oldPath ?? file}`;
       if (entry.index !== 'D') contentSpec = `${revision}:${file}`;
     } else {

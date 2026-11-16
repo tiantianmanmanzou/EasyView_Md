@@ -62,8 +62,10 @@ test('leaving the window to copy a name keeps the tree rename and new-file field
     element.dispatchEvent(new FocusEvent('blur'));
     Reflect.deleteProperty(document, 'hasFocus');
   });
+  // Dismiss unexpected alerts (e.g. rename failure) so a dialog cannot tear down the CDP session.
+  page.on('dialog', (dialog) => { void dialog.dismiss(); });
   try {
-    await page.locator('.workspace-entry[data-relative-path="sample.xlsx"] .workspace-entry-name').click();
+    // Do not open the xlsx first: Windows can lock an open preview and rename then alerts + crashes the session.
     await application.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].webContents.send('workspace.contextCommand', 'rename', 'sample.xlsx');
     });

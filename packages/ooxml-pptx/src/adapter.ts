@@ -14,7 +14,10 @@ async function presentationFor(pkg: OpcPackage): Promise<PptxPresentation> {
 
 export type PptxSlideOp =
   | { op: 'setShapeText'; slideIndex: number; shapeId: number; text: string }
-  | { op: 'replaceText'; slideIndex: number; search: string; replaceWith: string };
+  | { op: 'clearShapeText'; slideIndex: number; shapeId: number }
+  | { op: 'replaceText'; slideIndex: number; search: string; replaceWith: string }
+  | { op: 'replaceTextAll'; slideIndex: number; search: string; replaceWith: string }
+  | { op: 'replaceTextInPresentation'; search: string; replaceWith: string };
 
 function opsFromDocument(ops: DocumentOp[]): PptxSlideOp[] {
   return ops.map((op) => {
@@ -28,6 +31,20 @@ export async function applySlideOp(presentation: PptxPresentation, op: PptxSlide
   if (op.op === 'setShapeText') {
     await presentation.setShapeText(op.slideIndex, op.shapeId, op.text);
     return `setShapeText slide ${op.slideIndex} shape ${op.shapeId}`;
+  }
+  if (op.op === 'clearShapeText') {
+    await presentation.clearShapeText(op.slideIndex, op.shapeId);
+    return `clearShapeText slide ${op.slideIndex} shape ${op.shapeId}`;
+  }
+  if (op.op === 'replaceTextAll') {
+    const count = await presentation.replaceTextAll(op.slideIndex, op.search, op.replaceWith);
+    if (!count) throw new Error(`Text not found on slide ${op.slideIndex}: ${op.search}`);
+    return `replaceTextAll slide ${op.slideIndex} x${count}`;
+  }
+  if (op.op === 'replaceTextInPresentation') {
+    const count = await presentation.replaceTextInPresentation(op.search, op.replaceWith);
+    if (!count) throw new Error(`Text not found in presentation: ${op.search}`);
+    return `replaceTextInPresentation x${count}`;
   }
   const ok = await presentation.replaceText(op.slideIndex, op.search, op.replaceWith);
   if (!ok) throw new Error(`Text not found on slide ${op.slideIndex}: ${op.search}`);

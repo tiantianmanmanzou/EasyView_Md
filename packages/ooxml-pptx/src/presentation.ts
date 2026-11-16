@@ -158,6 +158,34 @@ export class PptxPresentation {
     return true;
   }
 
+  /** Replace every occurrence of search across all shapes on one slide. */
+  async replaceTextAll(slideIndex: number, search: string, replaceWith: string): Promise<number> {
+    if (!search) throw new Error('replaceTextAll search must be non-empty');
+    const shapes = await this.listShapes(slideIndex);
+    let count = 0;
+    for (const shape of shapes) {
+      if (!shape.text.includes(search)) continue;
+      const next = shape.text.split(search).join(replaceWith);
+      if (next === shape.text) continue;
+      await this.setShapeText(slideIndex, shape.shapeId, next);
+      count += 1;
+    }
+    return count;
+  }
+
+  /** Replace search across every slide; returns shapes changed. */
+  async replaceTextInPresentation(search: string, replaceWith: string): Promise<number> {
+    let total = 0;
+    for (let i = 0; i < this.slides.length; i += 1) {
+      total += await this.replaceTextAll(i, search, replaceWith);
+    }
+    return total;
+  }
+
+  async clearShapeText(slideIndex: number, shapeId: number): Promise<void> {
+    await this.setShapeText(slideIndex, shapeId, '');
+  }
+
   async flush(): Promise<string[]> {
     const dirty: string[] = [];
     for (const [index, slide] of this.loaded) {

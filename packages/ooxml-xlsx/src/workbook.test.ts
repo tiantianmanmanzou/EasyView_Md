@@ -64,6 +64,39 @@ describe('XlsxWorkbook', () => {
     expect(await workbook.getCell('Preview', 'C3')).toBe('=B3*2');
   });
 
+  it('cascades defined names and drawing anchors on row insert', async () => {
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(await readFile(sample));
+    zip.file(
+      'xl/drawings/drawing1.xml',
+      `<?xml version="1.0"?><wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">
+  <xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>1</xdr:row></xdr:from>
+  <xdr:to><xdr:col>1</xdr:col><xdr:row>2</xdr:row></xdr:to></xdr:twoCellAnchor></wsDr>`,
+    );
+    zip.file(
+      'xl/worksheets/_rels/sheet1.xml.rels',
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdDraw" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`,
+    );
+    let workbookXml = await zip.file('xl/workbook.xml')!.async('string');
+    workbookXml = workbookXml.replace(
+      /<definedNames\/>/,
+      '<definedNames><definedName name="Range">Preview!$A$2:$A$5</definedName></definedNames>',
+    );
+    zip.file('xl/workbook.xml', workbookXml);
+    const bytes = await zip.generateAsync({ type: 'uint8array' });
+    const pkg = await OpcPackage.open(bytes);
+    const workbook = await XlsxWorkbook.open(pkg);
+    await workbook.spliceRows('Preview', 2, 0, [['inserted']]);
+    const dirty = await workbook.flush();
+    expect(dirty).toEqual(expect.arrayContaining(['xl/drawings/drawing1.xml', 'xl/workbook.xml']));
+    const drawing = await pkg.readPartText('xl/drawings/drawing1.xml');
+    expect(drawing).toContain('<xdr:row>2</xdr:row>');
+    expect(drawing).toContain('<xdr:row>3</xdr:row>');
+    expect(await pkg.readPartText('xl/workbook.xml')).toContain('Preview!$A$3:$A$6');
+  });
+
   it('adds, renames, and deletes worksheets while keeping styles intact', async () => {
     const bytes = await readFile(sample);
     const pkg = await OpcPackage.open(bytes);

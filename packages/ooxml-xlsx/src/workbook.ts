@@ -4,6 +4,11 @@
  */
 
 import type { OpcPackage } from '@easyview/ooxml-core/opc';
+import {
+  dropAnchorsInDeletedRows,
+  shiftDefinedNamesXml,
+  shiftDrawingXmlRows,
+} from './anchorCascade';
 import { EMPTY_SHEET_XML, sanitizeSheetName } from './emptyWorkbook';
 import { shiftFormulaRows } from './formulaShift';
 import { cellRef, columnLetter, parseCellRef } from './refs';
@@ -51,6 +56,7 @@ export class XlsxWorkbook {
   private readonly loaded = new Map<number, LoadedSheet>();
   private formulasTouched = false;
   private structureDirty = false;
+  private readonly dirtyExtraParts = new Set<string>();
   private constructor(
     readonly pkg: OpcPackage,
     readonly sheets: SheetInfo[],
@@ -218,6 +224,44 @@ export class XlsxWorkbook {
     }
     sheet.cells = next;
     sheet.dirty = true;
+    await this.cascadeAnchorsAndNames(sheetName, at, deleteCount, inserted.length);
+  }
+
+  /** Shift drawing/chart anchors for this sheet + workbook defined names. */
+  private async cascadeAnchorsAndNames(
+    sheetName: string,
+    at: number,
+    deleteCount: number,
+    insertCount: number,
+  ): Promise<void> {
+    const index = this.sheetIndex(sheetName);
+    const info = this.sheets[index];
+    const relsPath = info.path.replace(/^(xl\/worksheets\/)([^/]+)$/, 'xl/worksheets/_rels/$2.rels');
+    if (this.pkg.hasPart(relsPath)) {
+      const relsXml = await this.pkg.readPartText(relsPath);
+      for (const rel of tags(relsXml, 'Relationship')) {
+        const type = attr(rel, 'Type');
+        if (!/\/drawing$/.test(type) && !/\/chart$/.test(type)) continue;
+        const target = attr(rel, 'Target');
+        if (!target) continue;
+        const path = decodeURIComponent(new URL(target, `https://xlsx.invalid/${info.path}`).pathname.slice(1));
+        if (!this.pkg.hasPart(path)) continue;
+        let xml = await this.pkg.readPartText(path);
+        xml = dropAnchorsInDeletedRows(xml, at, deleteCount);
+        xml = shiftDrawingXmlRows(xml, at, deleteCount, insertCount);
+        this.pkg.writePartText(path, xml);
+        this.dirtyExtraParts.add(path);
+      }
+    }
+
+    if (this.pkg.hasPart('xl/workbook.xml')) {
+      const workbookXml = await this.pkg.readPartText('xl/workbook.xml');
+      const next = shiftDefinedNamesXml(workbookXml, at, deleteCount, insertCount);
+      if (next !== workbookXml) {
+        this.pkg.writePartText('xl/workbook.xml', next);
+        this.dirtyExtraParts.add('xl/workbook.xml');
+      }
+    }
   }
 
   async maxRow(sheetName: string): Promise<number> {
@@ -305,6 +349,8 @@ export class XlsxWorkbook {
       sheet.dirty = false;
       dirty.push(info.path);
     }
+    for (const part of this.dirtyExtraParts) dirty.push(part);
+    this.dirtyExtraParts.clear();
     if (this.structureDirty) {
       dirty.push(...(await this.flushWorkbookStructure()));
       this.structureDirty = false;
@@ -312,7 +358,7 @@ export class XlsxWorkbook {
       const touched = await this.ensureFullCalcOnLoad();
       if (touched) dirty.push('xl/workbook.xml');
     }
-    return dirty;
+    return [...new Set(dirty)];
   }
 
   private async flushWorkbookStructure(): Promise<string[]> {

@@ -1,5 +1,12 @@
 export { createXlsxAdapter, getXlsxWorkbook } from './adapter';
+export {
+  dropAnchorsInDeletedRows,
+  shiftAnchorRow,
+  shiftDefinedNamesXml,
+  shiftDrawingXmlRows,
+} from './anchorCascade';
 export { buildEmptyXlsxBytes, EMPTY_SHEET_XML, sanitizeSheetName } from './emptyWorkbook';
+export { shiftFormulaRows } from './formulaShift';
 export { buildXlsxFromTable, type TableExportPayload, type TableExportCell } from './tableExport';
 export { applySheetOp, rangeOpCells, type XlsxSheetOp } from './ops';
 export {

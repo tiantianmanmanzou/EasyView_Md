@@ -30,8 +30,24 @@ export const pptxSlideOpSchema = z.discriminatedUnion('op', [
     text: z.string().max(8_000),
   }),
   z.object({
+    op: z.literal('clearShapeText'),
+    slideIndex: z.number().int().min(0).max(10_000),
+    shapeId: z.number().int().min(1).max(1_000_000),
+  }),
+  z.object({
     op: z.literal('replaceText'),
     slideIndex: z.number().int().min(0).max(10_000),
+    search: z.string().min(1).max(2_000),
+    replaceWith: z.string().max(2_000),
+  }),
+  z.object({
+    op: z.literal('replaceTextAll'),
+    slideIndex: z.number().int().min(0).max(10_000),
+    search: z.string().min(1).max(2_000),
+    replaceWith: z.string().max(2_000),
+  }),
+  z.object({
+    op: z.literal('replaceTextInPresentation'),
     search: z.string().min(1).max(2_000),
     replaceWith: z.string().max(2_000),
   }),

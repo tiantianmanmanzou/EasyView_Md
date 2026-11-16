@@ -1,6 +1,6 @@
 # EasyView OOXML 读写改造方案 v2（xlsx / docx / pptx 通用）
 
-> 状态：**执行中**。工作分支：`feat/ooxml-read-write`。
+> 状态：**验收中（功能已齐）**。工作分支：`feat/ooxml-read-write`。
 
 ## 1. 目标
 
@@ -18,10 +18,10 @@
 |---|---|---|
 | 12.0 | 包骨架、接口草案、sample/、本文件入库 | **完成** |
 | P0 | OPC + engine.apply + ops/rev/IO | **完成** |
-| P1 | ooxml-xlsx 去 ExcelJS | **基本完成** — 生产 load/save/export/AI 已去 ExcelJS；`exceljsBridge` 仅测试/parity；exceljs 已降为 preview-ui devDependency |
-| P2 | ooxml-docx 并轨 + AI 改正文 | **基本完成** — AI 确认后写正文；正文 replace 走精准 run 级 XML；批注仍经 DocxReviewer |
-| P3 | ooxml-pptx | **进行中** — 适配器 + AI inspect/apply_slide_ops + host/prompt 已接；预览桥接与更多 slide ops 待续 |
-| P4–P6 | 宿主同步、测试加固、验收 | **进行中** — sample 夹具 + DocumentService 保真 harness 已落地；宿主 EXTERNAL_MODIFIED UI 已有基础；全面验收待 CI |
+| P1 | ooxml-xlsx 去 ExcelJS | **完成** — 生产 load/save/export/AI 已去 ExcelJS；公式/定义名称/drawing 锚点级联已接；`exceljsBridge` 仅测试 |
+| P2 | ooxml-docx 并轨 + AI 改正文 | **完成** — AI 确认后写正文；正文 replace 走精准 run 级 XML；批注经 DocxReviewer |
+| P3 | ooxml-pptx | **完成** — 适配器 + AI inspect/apply（含全页/全稿替换）+ Agent 入口；预览写回经磁盘提交后刷新 |
+| P4–P6 | 宿主同步、测试加固、验收 | **完成** — sample 夹具 + DocumentService 保真 harness；EXTERNAL_MODIFIED / 预览刷新路径已具备 |
 
 ### P1 细项
 
@@ -30,7 +30,7 @@
 | 2.1 | 读 sheet / sharedStrings；视图可读 | **完成**（`XlsxWorkbook`） |
 | 2.2 | 单元格/区域/公式精准写回；未改部件字节不变 | **完成**（sheetData 重写 + fidelity 单测） |
 | 2.3 | `fullCalcOnLoad` | **完成**（flush 时写入） |
-| 2.4 | 插删行列级联（公式/图表锚点等全量） | 部分：网格平移 + 公式 A1 行号级联已支持；图表锚点/定义名称待补 |
+| 2.4 | 插删行列级联（公式/图表锚点等全量） | **完成** — 网格平移 + 公式 A1 + definedNames + drawing/chart 锚点行号级联 |
 | 2.5 | 工作表增删改名 | **完成**（`addSheet` / `renameSheet` / `deleteSheet` + AI schema） |
 | 2.6 | 替换 AI `xlsx-edit.ts`；去掉整簿 `writeBuffer` | **完成** |
 | 2.7 | 替换 `LazyWorkbook` / SpreadsheetViewer 保存路径 | **完成**（load + value/style/merge/freeze/filter/size 均走 ooxml/XML） |

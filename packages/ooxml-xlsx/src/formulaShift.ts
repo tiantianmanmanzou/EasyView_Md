@@ -12,13 +12,14 @@ export function shiftFormulaRows(
   at: number,
   deleteCount: number,
   insertCount: number,
+  options: { shiftAbsolute?: boolean } = {},
 ): string {
   const delta = insertCount - deleteCount;
   if (!delta && deleteCount === 0) return formula;
   return formula.replace(
     A1_IN_FORMULA,
     (full, prefix: string, sheet: string | undefined, absCol: string, col: string, absRow: string, rowText: string) => {
-      if (absRow === '$') return full;
+      if (absRow === '$' && !options.shiftAbsolute) return full;
       const row = Number(rowText);
       if (!Number.isFinite(row)) return full;
       const head = `${prefix}${sheet ?? ''}`;

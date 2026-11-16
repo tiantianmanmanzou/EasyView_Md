@@ -61,4 +61,17 @@ describe('PptxPresentation', () => {
     };
     expect(summary.shapes.some((shape) => shape.text.includes('OOXML fixture'))).toBe(true);
   });
+
+  it('replaceTextAll and clearShapeText update multiple shapes precisely', async () => {
+    const pkg = await OpcPackage.open(await readFile(FIXTURE));
+    const deck = await PptxPresentation.open(pkg);
+    expect(await deck.replaceTextAll(0, 'e', 'E')).toBeGreaterThan(0);
+    const title = (await deck.listShapes(0)).find((shape) => shape.name.includes('Title'));
+    expect(title).toBeTruthy();
+    await deck.clearShapeText(0, title!.shapeId);
+    await deck.flush();
+    const shapes = await (await PptxPresentation.open(await OpcPackage.open(await pkg.save()))).listShapes(0);
+    expect(shapes.find((shape) => shape.shapeId === title!.shapeId)?.text).toBe('');
+    expect(shapes.some((shape) => shape.text.includes('E'))).toBe(true);
+  });
 });

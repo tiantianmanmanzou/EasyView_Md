@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchPreviewWorkspace } from './support/previewWorkspace';
 
@@ -21,7 +21,11 @@ test('re-clicking an open preview keeps its rendering; external edits reload it'
     expect(await marked(page)).toBe(true);
 
     const xlsx = path.join(ws.workspace, 'sample.xlsx');
-    await writeFile(xlsx, await readFile(xlsx));
+    // Windows can keep the previous mtime for an identical rewrite; bump mtime so the session sees staleness.
+    const bytes = await readFile(xlsx);
+    await writeFile(xlsx, bytes);
+    const next = Date.now() / 1000 + 2;
+    await utimes(xlsx, next, next);
     await expect.poll(() => marked(page), { timeout: 15_000 }).toBe(false);
     await expect(page.locator(SPREADSHEET).first()).toBeVisible({ timeout: 30_000 });
 

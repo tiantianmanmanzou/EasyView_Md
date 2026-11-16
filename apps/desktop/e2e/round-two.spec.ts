@@ -39,7 +39,10 @@ test('lazily switches worksheets, retains edits, saves and preserves unopened sh
     await expect.poll(async () => { const box = JSON.stringify(await overlay.boundingBox()); const stable = box === previous; previous = box; return stable; }, { intervals: [100] }).toBe(true);
     await overlay.dblclick({ position: { x: 85, y: 40 } });
     const input = page.locator('.x-spreadsheet-editor textarea'); await expect(input).toBeVisible();
-    await input.fill('Changed second'); await input.press('Enter');
+    // fill() alone can miss x-spreadsheet's editor commit path on Windows; type through the keyboard.
+    await input.click({ clickCount: 3 });
+    await page.keyboard.type('Changed second');
+    await page.keyboard.press('Enter');
     await first.click(); await expect(first).toHaveAttribute('aria-selected', 'true');
     await second.click(); await expect(second).toHaveAttribute('aria-selected', 'true'); await expect(first).toBeEnabled();
     const expand = page.getByRole('button', { name: '展开预览工具栏' }); if (await expand.isVisible()) await expand.click();

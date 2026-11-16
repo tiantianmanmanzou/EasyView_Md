@@ -25,9 +25,23 @@ test('Chinese form docx: checkboxes, hidden highlights and GB-font blanks render
     await expect.poll(() => background('Marked text')).toBe('rgb(255, 255, 0)');
     await toggle.click();
 
-    // GB fonts draw a space half an em wide; the fallback fonts draw it narrower.
+    // GB faces use half-em ASCII spaces; when the substitute already draws a wide space
+    // (common on Windows CI without 仿宋), word-spacing compensation can be 0 — still assert
+    // the run resolved onto the FangSong stack and that blanks stay wide enough to fill.
     const blank = page.locator('span', { hasText: 'Signature:' }).last();
-    expect(await blank.evaluate((el) => parseFloat(getComputedStyle(el).wordSpacing))).toBeGreaterThan(0);
+    const blankMetrics = await blank.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const spaces = /\[([ ]+)\]/.exec(el.textContent ?? '')?.[1] ?? '';
+      return {
+        fontFamily: style.fontFamily,
+        wordSpacing: parseFloat(style.wordSpacing) || 0,
+        spaceCount: spaces.length,
+        width: el.getBoundingClientRect().width,
+      };
+    });
+    expect(blankMetrics.fontFamily).toMatch(/FangSong|仿宋|Noto Serif SC/i);
+    expect(blankMetrics.spaceCount).toBeGreaterThan(8);
+    expect(blankMetrics.width + blankMetrics.wordSpacing * blankMetrics.spaceCount).toBeGreaterThan(40);
 
     await page.locator('.layout-paragraph', { hasText: 'Option two' }).click();
     await ws.page.keyboard.press('End'); await ws.page.keyboard.type(' UPDATED');

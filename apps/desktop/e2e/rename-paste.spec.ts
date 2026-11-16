@@ -24,7 +24,7 @@ for (const [name, content] of Object.entries(loaded)) {
       await page.keyboard.press('F2');
       const input = page.locator('.workspace-rename-input');
       await expect(input).toBeFocused();
-      await page.keyboard.press('Meta+V');
+      await page.keyboard.press('ControlOrMeta+V');
       const extension = path.extname(name);
       await expect(input).toHaveValue(`粘贴${extension}`);
 
@@ -68,7 +68,7 @@ test('leaving the window to copy a name keeps the tree rename and new-file field
     await leaveWindow(input);
     await application.evaluate(({ clipboard }) => clipboard.writeText('粘贴'));
     await expect(input).toBeFocused();
-    await page.keyboard.press('Meta+V');
+    await page.keyboard.press('ControlOrMeta+V');
     await expect(input).toHaveValue('粘贴.xlsx');
     await input.press('Enter');
     await expect.poll(async () => (await readdir(ws.workspace)).includes('粘贴.xlsx')).toBe(true);

@@ -92,6 +92,7 @@ export function fontSizeForCanvas(pt: number): number {
   return LIBRARY_FONT_PT.has(pt) ? pt : pt * 96 / 72;
 }
 
+// i18n-ignore-file: CJK font face names from workbook styles, not UI copy.
 const CJK_FONT_STACKS: Record<string, string> = {
   '宋体': '"Songti SC", SimSun, STSong, serif',
   '宋体-简': '"Songti SC", SimSun, STSong, serif',

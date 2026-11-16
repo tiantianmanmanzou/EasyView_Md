@@ -54,6 +54,16 @@ describe('XlsxWorkbook', () => {
     expect(cell.value).toBe('Gamma');
   });
 
+  it('cascades formula row references when inserting rows', async () => {
+    const bytes = await readFile(sample);
+    const pkg = await OpcPackage.open(bytes);
+    const workbook = await XlsxWorkbook.open(pkg);
+    await workbook.setCell('Preview', 'C2', null, 'B2*2');
+    await workbook.spliceRows('Preview', 2, 0, [['x']]);
+    expect(await workbook.getCell('Preview', 'A2')).toBe('x');
+    expect(await workbook.getCell('Preview', 'C3')).toBe('=B3*2');
+  });
+
   it('adds, renames, and deletes worksheets while keeping styles intact', async () => {
     const bytes = await readFile(sample);
     const pkg = await OpcPackage.open(bytes);

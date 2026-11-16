@@ -5,6 +5,7 @@
 
 import type { OpcPackage } from '@easyview/ooxml-core/opc';
 import { EMPTY_SHEET_XML, sanitizeSheetName } from './emptyWorkbook';
+import { shiftFormulaRows } from './formulaShift';
 import { cellRef, columnLetter, parseCellRef } from './refs';
 import { parseSharedStrings } from './sharedStrings';
 import {
@@ -181,19 +182,31 @@ export class XlsxWorkbook {
     };
   }
 
-  /** Shift cells for insert/delete rows. */
+  /** Shift cells for insert/delete rows, and cascade A1 formula row refs. */
   async spliceRows(sheetName: string, at: number, deleteCount: number, inserted: XlsxCellValue[][]): Promise<void> {
     const sheet = await this.loadSheet(this.sheetIndex(sheetName));
     const next = new Map<string, XlsxCell>();
+    const rewrite = (cell: XlsxCell): XlsxCell => {
+      if (!cell.formula) return cell;
+      const formula = shiftFormulaRows(cell.formula, at, deleteCount, inserted.length);
+      if (formula === cell.formula) return cell;
+      this.formulasTouched = true;
+      return {
+        ...cell,
+        formula,
+        value: formula.startsWith('=') ? formula : `=${formula}`,
+        cached: undefined,
+      };
+    };
     for (const [ref, cell] of sheet.cells) {
       const { col, row } = parseCellRef(ref);
       if (row < at) {
-        next.set(ref, cell);
+        next.set(ref, rewrite(cell));
         continue;
       }
       if (row < at + deleteCount) continue;
       const shifted = row - deleteCount + inserted.length;
-      next.set(cellRef(col, shifted), cell);
+      next.set(cellRef(col, shifted), rewrite(cell));
     }
     for (let i = 0; i < inserted.length; i += 1) {
       const rowValues = inserted[i];

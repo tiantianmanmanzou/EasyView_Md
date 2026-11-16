@@ -30,7 +30,7 @@
 | 2.1 | 读 sheet / sharedStrings；视图可读 | **完成**（`XlsxWorkbook`） |
 | 2.2 | 单元格/区域/公式精准写回；未改部件字节不变 | **完成**（sheetData 重写 + fidelity 单测） |
 | 2.3 | `fullCalcOnLoad` | **完成**（flush 时写入） |
-| 2.4 | 插删行列级联（公式/图表锚点等全量） | 部分：单元格网格平移已支持；锚点/名称级联待补 |
+| 2.4 | 插删行列级联（公式/图表锚点等全量） | 部分：网格平移 + 公式 A1 行号级联已支持；图表锚点/定义名称待补 |
 | 2.5 | 工作表增删改名 | **完成**（`addSheet` / `renameSheet` / `deleteSheet` + AI schema） |
 | 2.6 | 替换 AI `xlsx-edit.ts`；去掉整簿 `writeBuffer` | **完成** |
 | 2.7 | 替换 `LazyWorkbook` / SpreadsheetViewer 保存路径 | **完成**（load + value/style/merge/freeze/filter/size 均走 ooxml/XML） |

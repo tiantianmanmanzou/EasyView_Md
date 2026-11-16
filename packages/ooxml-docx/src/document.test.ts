@@ -28,6 +28,7 @@ describe('DocxDocument body apply', () => {
   it('replaces paragraph text into the body without tracked changes', async () => {
     const bytes = await readFile(file);
     const pkg = await OpcPackage.open(bytes);
+    const stylesBefore = await pkg.readPart('word/styles.xml');
     const document = await DocxDocument.open(pkg, 'Test');
     const preview = await document.previewText(1);
     const phrase = preview.preview.replace(/^\[\d+\]\s*/, '').slice(0, 6);
@@ -37,10 +38,14 @@ describe('DocxDocument body apply', () => {
       { op: 'replace_text', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}!!` },
     ]);
     expect(result.changes).toBe(1);
-    await document.flush();
+    const dirty = await document.flush();
+    expect(dirty).toEqual(['word/document.xml']);
     const saved = await pkg.save();
 
-    const again = await DocxDocument.open(await OpcPackage.open(saved), 'Test');
+    const againPkg = await OpcPackage.open(saved);
+    const stylesAfter = await againPkg.readPart('word/styles.xml');
+    expect(Buffer.compare(Buffer.from(stylesBefore), Buffer.from(stylesAfter))).toBe(0);
+    const again = await DocxDocument.open(againPkg, 'Test');
     const after = await again.previewText(1);
     expect(after.preview).toContain(`${phrase}!!`);
   });

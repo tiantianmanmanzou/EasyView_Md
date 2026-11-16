@@ -1,6 +1,5 @@
 /**
- * docx adapter — AI body apply via DocxDocument (acceptAll into body).
- * Precise run-level XML writeback replaces the Reviewer rewrite in a later pass.
+ * docx adapter — AI body text via precise run-level XML; comments via DocxReviewer.
  */
 export const OOXML_DOCX_KIND = 'docx' as const;
 

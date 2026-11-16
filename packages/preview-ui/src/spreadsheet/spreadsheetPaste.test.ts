@@ -75,13 +75,14 @@ it('leaves the sheet\'s own copy to the library but prefers newer external text'
 it('lets the cell editor receive the paste and ignores an unfocused sheet', () => {
   const sheet = fakeSheet();
   const mount = document.createElement('div');
-  const editor = document.createElement('textarea');
-  mount.append(editor);
+  mount.innerHTML = '<div class="x-spreadsheet-editor" style="display:block"><textarea>14</textarea></div>';
   document.body.append(mount);
+  const field = mount.querySelector('textarea')!;
   const dispose = attachSpreadsheetPaste(sheet.spreadsheet, mount);
   let reachedLibrary = false;
   window.addEventListener('paste', () => { reachedLibrary = true; }, { once: true });
-  expect(paste(editor, 'typed').defaultPrevented).toBe(false);
+  expect(paste(field, '+x').defaultPrevented).toBe(true);
+  expect(field.value).toBe('14+x');
   expect(reachedLibrary).toBe(false);
   sheet.spreadsheet.sheet!.focusing = false;
   expect(paste(document.body, 'x').defaultPrevented).toBe(false);
@@ -118,8 +119,9 @@ it('runs clipboard shortcuts in the cell editor, whose keydown never reaches the
   };
   const dispose = attachSpreadsheetPaste(sheet.spreadsheet, mount);
   try {
-    expect([press('v'), press('c'), press('x'), press('a'), press('z'), press('Z', true), press('b')]).toEqual([true, true, true, true, true, true, false]);
-    expect(commands).toEqual(['paste', 'copy', 'cut', 'selectAll', 'undo', 'redo']);
+    // Paste is intentionally not handled on keydown (see spreadsheetPaste.ts); Ctrl/Cmd+V must reach the paste event.
+    expect([press('v'), press('c'), press('x'), press('a'), press('z'), press('Z', true), press('b')]).toEqual([false, true, true, true, true, true, false]);
+    expect(commands).toEqual(['copy', 'cut', 'selectAll', 'undo', 'redo']);
   } finally {
     document.execCommand = execCommand;
     dispose();

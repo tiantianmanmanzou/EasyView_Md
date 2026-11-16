@@ -112,7 +112,13 @@ test('xlsx cells and the cell editor accept text pasted from the system clipboar
     await overlay.click({ position: cell(2, 2) }); await paste('a\the said "hi"\nc\td\n'); // C3:D4
     await overlay.click({ position: cell(0, 0) }); await page.keyboard.press('ControlOrMeta+C');
     await overlay.click({ position: cell(0, 6) }); await paste('fresh'); // A7: newer external text beats the internal copy
-    await overlay.dblclick({ position: cell(3, 0) }); await paste('+x'); await page.keyboard.press('Enter'); // D1 while editing
+    await overlay.dblclick({ position: cell(3, 0) }); // D1 while editing
+    const editor = frame.locator('.x-spreadsheet-editor textarea');
+    await expect(editor).toBeVisible();
+    await expect(editor).toHaveValue('14');
+    await paste('+x');
+    await expect(editor).toHaveValue('14+x');
+    await page.keyboard.press('Enter');
     await frame.locator('[data-easyview-spreadsheet-chrome] button').filter({ hasText: /保存|Save/ }).first()
       .or(frame.locator('[data-easyview-spreadsheet-chrome] button[aria-label="保存"], [data-easyview-spreadsheet-chrome] button[aria-label="Save"]').first()).first().click();
     const xlsx = join(workspace, 'book.xlsx');

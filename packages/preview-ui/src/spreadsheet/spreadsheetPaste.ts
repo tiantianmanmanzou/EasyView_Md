@@ -93,11 +93,13 @@ export const isTextField = (target: EventTarget | null): boolean => (
   || (target instanceof HTMLElement && target.isContentEditable)
 );
 
-const EDITOR_COMMANDS: Record<string, string> = { a: 'selectAll', c: 'copy', v: 'paste', x: 'cut', z: 'undo' };
+/** Copy/cut/select/undo — not paste: execCommand('paste') often claims success without inserting in Electron. */
+const EDITOR_COMMANDS: Record<string, string> = { a: 'selectAll', c: 'copy', x: 'cut', z: 'undo' };
 
 /**
  * The cell editor stops every keydown from bubbling, so a webview host (VS Code / Cursor on macOS) never
- * sees Cmd+V/C/X/A/Z and nothing happens. The field runs those edit commands itself.
+ * sees Cmd+C/X/A/Z and nothing happens. The field runs those edit commands itself. Paste is left for the
+ * capture-phase paste listener, which reads clipboardData reliably.
  */
 function editorShortcut(event: KeyboardEvent, mount: HTMLElement): void {
   const field = event.target;
@@ -109,6 +111,14 @@ function editorShortcut(event: KeyboardEvent, mount: HTMLElement): void {
   if (command && field.ownerDocument.execCommand(command)) event.preventDefault();
 }
 
+function insertIntoEditorField(field: HTMLTextAreaElement, text: string, atCaret: boolean): void {
+  field.focus();
+  const start = atCaret ? field.selectionStart : field.value.length;
+  const end = atCaret ? field.selectionEnd : field.value.length;
+  field.setRangeText(text, start, end, 'end');
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 /** Capture-phase paste handling for one spreadsheet instance. Returns a disposer. */
 export function attachSpreadsheetPaste(spreadsheet: XsSpreadsheetLike, mount: HTMLElement): () => void {
   const view = mount.ownerDocument.defaultView ?? window;
@@ -118,8 +128,23 @@ export function attachSpreadsheetPaste(spreadsheet: XsSpreadsheetLike, mount: HT
     const data = sheet?.data;
     if (!sheet || !data || data.settings.mode === 'read') return;
     if (isTextField(event.target)) {
-      // Cell editor or toolbar field: keep the browser's own paste away from the grid handler.
-      if (event.target instanceof Node && mount.contains(event.target)) event.stopPropagation();
+      const target = event.target;
+      // Cell editor: apply clipboardData ourselves (native/execCommand paste is flaky in VS Code webviews).
+      if (
+        target instanceof HTMLTextAreaElement
+        && target.closest('.x-spreadsheet-editor')
+        && mount.contains(target)
+      ) {
+        const text = event.clipboardData?.getData('text/plain') ?? '';
+        if (text) {
+          event.preventDefault();
+          event.stopPropagation();
+          insertIntoEditorField(target, text, true);
+          return;
+        }
+      }
+      // Other toolbar fields: keep the browser's own paste away from the grid handler.
+      if (target instanceof Node && mount.contains(target)) event.stopPropagation();
       return;
     }
     if (!sheet.focusing) return;
@@ -130,10 +155,7 @@ export function attachSpreadsheetPaste(spreadsheet: XsSpreadsheetLike, mount: HT
       // The editor is open but focuses its textarea a tick later; paste goes into it, not the cells.
       event.preventDefault();
       event.stopPropagation();
-      const focused = field.ownerDocument.activeElement === field;
-      field.focus();
-      field.setRangeText(text, focused ? field.selectionStart : field.value.length, focused ? field.selectionEnd : field.value.length, 'end');
-      field.dispatchEvent(new Event('input', { bubbles: true }));
+      insertIntoEditorField(field, text, field.ownerDocument.activeElement === field);
       return;
     }
     if (matchesInternalClipboard(data, text)) return;

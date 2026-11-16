@@ -81,13 +81,13 @@ describe('buildAiChatMessages', () => {
     expect(system).toContain('sales.xlsx');
     expect(system).not.toContain('apply_patch');
   });
-  it('docx agent mode uses document revision instructions instead of text patch rules', () => {
+  it('docx agent mode uses body-edit instructions instead of text patch rules', () => {
     const messages = buildAiChatMessages({ systemPrompt: '', mode: 'agent', history: [], userMessage: '改合同', attachments: [], documentFileName: 'contract.docx', documentKind: 'docx' });
     const system = messages[0].content as string;
     expect(system).toContain('inspect_document');
     expect(system).toContain('apply_docx_ops');
     expect(system).toContain('contract.docx');
-    expect(system).toContain('accept/reject');
+    expect(system).toContain('replace_text');
     expect(system).not.toContain('apply_patch');
   });
 });

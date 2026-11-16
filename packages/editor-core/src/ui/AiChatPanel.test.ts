@@ -383,7 +383,7 @@ describe('AI conversation lifetime', () => {
     panel.destroy();
   });
 
-  it('docx proposal: per-item reject + write as revisions, or accept-all into body', () => {
+  it('docx proposal: per-item exclude then apply writes body with accept-all resolution', () => {
     const { panel, sent, send } = setup();
     const requestId = send('改合同措辞');
     panel.handleMessage({
@@ -407,17 +407,17 @@ describe('AI conversation lifetime', () => {
     });
     const box = document.querySelector('.ai-chat-office-edit')!;
     expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('contract.docx');
-    expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('2 处修订');
+    expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('2 处正文');
     expect(box.querySelector('.ai-chat-office-title')!.textContent).toContain('1 条批注');
-    expect(box.querySelector('.ai-chat-office-status')!.textContent).toContain('写入修订');
+    expect(box.querySelector('.ai-chat-office-status')!.textContent).toContain('应用');
     expect(box.querySelectorAll('tbody tr')).toHaveLength(2);
-    expect(box.querySelector('.ai-chat-office-btn.accept-all')).not.toBeNull();
+    expect(box.querySelector('.ai-chat-office-btn.accept-all')).toBeNull();
     expect(box.querySelector('.ai-chat-office-btn.apply')).not.toBeNull();
 
     const rejectButtons = box.querySelectorAll<HTMLButtonElement>('.ai-chat-office-item-actions button');
-    // each row: Accept + Reject
+    // each row: Keep + Exclude
     expect(rejectButtons.length).toBe(4);
-    rejectButtons[3]!.click(); // reject second revision
+    rejectButtons[3]!.click(); // exclude second change
     expect(document.querySelectorAll('tr.ai-chat-office-row-rejected')).toHaveLength(1);
 
     document.querySelector<HTMLButtonElement>('.ai-chat-office-btn.apply')!.click();
@@ -426,43 +426,11 @@ describe('AI conversation lifetime', () => {
       requestId,
       proposalId: 'd1',
       accepted: true,
-      resolution: 'tracked',
+      resolution: 'accept-all',
       itemDecisions: [
         { index: 0, accept: true },
         { index: 1, accept: false },
       ],
-    });
-    panel.destroy();
-  });
-
-  it('docx accept-all forces every revision on and writes resolution accept-all', () => {
-    const { panel, sent, send } = setup();
-    const requestId = send('全部接受');
-    panel.handleMessage({
-      type: 'aiChat.officeProposal',
-      requestId,
-      proposalId: 'd2',
-      fileName: 'a.docx',
-      kind: 'docx',
-      changes: [{ sheet: '¶0', ref: 'x', before: 'x', after: 'y' }],
-      total: 1,
-      structural: [],
-      truncated: false,
-      docxChanges: [
-        { index: 0, paragraphIndex: 0, search: 'x', replaceWith: 'y', before: 'x', after: 'y' },
-      ],
-      docxComments: [],
-    });
-    // Mark rejected first, then accept-all should still send accept:true for all.
-    document.querySelectorAll<HTMLButtonElement>('.ai-chat-office-item-actions button')[1]!.click();
-    document.querySelector<HTMLButtonElement>('.ai-chat-office-btn.accept-all')!.click();
-    expect(sent).toContainEqual({
-      type: 'aiChat.officeDecision',
-      requestId,
-      proposalId: 'd2',
-      accepted: true,
-      resolution: 'accept-all',
-      itemDecisions: [{ index: 0, accept: true }],
     });
     panel.destroy();
   });

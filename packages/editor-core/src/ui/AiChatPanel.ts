@@ -8,7 +8,6 @@ import type {
   AiOfficeDocxChange,
   AiOfficeDocxComment,
   AiOfficeDocxItemDecision,
-  AiOfficeDocxResolution,
   AiChatAttachment,
   AiChatSettings,
   EditorToHostMessage,
@@ -1336,7 +1335,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
         index: change.index,
         accept: itemAccepted[change.index] !== false,
       }));
-    const decide = (accepted: boolean, resolution?: AiOfficeDocxResolution) => {
+    const decide = (accepted: boolean) => {
       if (!activeRequestId) return;
       const payload: Extract<EditorToHostMessage, { type: 'aiChat.officeDecision' }> = {
         type: 'aiChat.officeDecision',
@@ -1345,38 +1344,16 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
         accepted,
       };
       if (accepted && isDocx) {
-        payload.resolution = resolution ?? 'tracked';
+        // Body-only write path; resolution kept for older hosts.
+        payload.resolution = 'accept-all';
         payload.itemDecisions = collectItemDecisions();
       }
       deps.postMessage(payload);
       updateOfficeEdit(messageId, edit.proposalId, { status: accepted ? 'applying' : 'rejected' });
     };
     if (edit.status === 'pending') {
-      if (isDocx) {
-        button(tAiChat('office.applyTracked'), 'apply', () => decide(true, 'tracked'));
-        button(tAiChat('office.acceptAll'), 'accept-all', () => {
-          const allAccepted = Object.fromEntries(docxChanges.map((change) => [change.index, true]));
-          updateOfficeEdit(messageId, edit.proposalId, { itemAccepted: allAccepted });
-          // decide after state patch uses collect from current edit; force accept-all with all true
-          if (!activeRequestId) return;
-          deps.postMessage({
-            type: 'aiChat.officeDecision',
-            requestId: activeRequestId,
-            proposalId: edit.proposalId,
-            accepted: true,
-            resolution: 'accept-all',
-            itemDecisions: docxChanges.map((change) => ({ index: change.index, accept: true })),
-          });
-          updateOfficeEdit(messageId, edit.proposalId, {
-            itemAccepted: allAccepted,
-            status: 'applying',
-          });
-        });
-        button(tAiChat('office.reject'), 'reject', () => decide(false));
-      } else {
-        button(tAiChat('office.apply'), 'apply', () => decide(true));
-        button(tAiChat('office.reject'), 'reject', () => decide(false));
-      }
+      button(tAiChat('office.apply'), 'apply', () => decide(true));
+      button(tAiChat('office.reject'), 'reject', () => decide(false));
     } else if (edit.status === 'applied' && edit.commitId) {
       const commitId = edit.commitId;
       button(tAiChat('office.undo'), 'undo', () => {
@@ -1389,9 +1366,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
     status.textContent =
       edit.status === 'error' && edit.error
         ? edit.error
-        : edit.status === 'pending' && isDocx
-          ? tAiChat('office.status.pendingDocx')
-          : tAiChat(`office.status.${edit.status}`);
+        : tAiChat(`office.status.${edit.status}`);
     actions.appendChild(status);
     box.appendChild(actions);
     return box;

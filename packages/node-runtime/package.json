@@ -35,6 +35,7 @@
     "@easyview/docx-core": "*",
     "@easyview/markdown-core": "*",
     "@easyview/ooxml-core": "*",
+    "@easyview/ooxml-docx": "*",
     "@easyview/ooxml-xlsx": "*",
     "ai": "^7.0.107",
     "docx": "^9.5.1",

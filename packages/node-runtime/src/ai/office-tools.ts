@@ -4,8 +4,8 @@
  * The tools take no path argument: they are hard-bound to the file the user has
  * open, so the model cannot read or write any other Office file. Writes require
  * an explicit user decision through `confirmEdit`; a rejected or unanswered
- * proposal never touches disk. For DOCX, the model may only propose comments /
- * tracked changes — accept/reject of revisions is a user-only action.
+ * proposal never touches disk. For DOCX, confirmed edits write body text
+ * (not tracked revisions); the user may exclude individual items first.
  */
 
 import { tool, type ToolSet } from 'ai';
@@ -46,7 +46,7 @@ export type OfficeDocumentKind = 'xlsx' | 'docx';
 export interface OfficeEditDecision {
   accepted: boolean;
   reason?: string;
-  /** DOCX only: write as tracked changes, or fold accepted changes into body. */
+  /** DOCX: ignored for writes (always body); kept for older UI payloads. */
   resolution?: DocxResolution;
   /** DOCX only: per-change accept/reject; missing entries default to accept. */
   itemDecisions?: DocxItemDecision[];
@@ -161,15 +161,15 @@ export function createOfficeAgentTools(document: ActiveOfficeDocument): ToolSet 
         if (!decision.accepted) {
           return { status: 'rejected' as const, reason: decision.reason ?? tAi('docx.rejected') };
         }
-        const resolution: DocxResolution = decision.resolution === 'accept-all' ? 'accept-all' : 'tracked';
         const record = await commitDocxProposal(proposal, document.backups, {
-          resolution,
+          // Body-only: resolution is ignored; kept on the wire for older UIs.
+          resolution: 'accept-all',
           itemDecisions: decision.itemDecisions,
         });
         await document.onCommitted?.(record, proposal.id);
         return {
           status: 'applied' as const,
-          resolution,
+          resolution: 'accept-all' as const,
           changes: proposal.diff.total,
           comments: proposal.diff.comments.length,
           newFingerprint: record.writtenFingerprint,

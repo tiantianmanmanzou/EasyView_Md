@@ -48,7 +48,7 @@ describe('docx-edit', () => {
     expect(inspection.preview).toMatch(/^\[\d+]/);
   });
 
-  it('plans suggest_change + comment, writes tracked revisions only after commit, and undoes', async () => {
+  it('plans replace_text + comment, writes body only after commit, and undoes', async () => {
     const before = await readFile(file);
     const { fingerprint } = await inspectDocxFile(file);
     const reviewer = await loadReviewer(file);
@@ -57,7 +57,7 @@ describe('docx-edit', () => {
     expect(phrase.length).toBeGreaterThan(0);
 
     const proposal = await planDocxEdit(file, fingerprint, [
-      { op: 'suggest_change', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}【修订】` },
+      { op: 'replace_text', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}【正文】` },
       { op: 'add_comment', paragraphIndex: 0, text: '请核对措辞' },
     ]);
     expect(proposal.diff.changes).toHaveLength(1);
@@ -65,16 +65,17 @@ describe('docx-edit', () => {
     expect(Buffer.compare(await readFile(file), before)).toBe(0);
 
     const backups = new OfficeBackupStore(path.join(root, 'backups'));
-    const tracked = await commitDocxProposal(proposal, backups, { resolution: 'tracked' });
-    const withTracked = await loadReviewer(file);
-    expect(withTracked.getChanges().length).toBeGreaterThan(0);
-    expect(withTracked.getComments()).toHaveLength(1);
+    const committed = await commitDocxProposal(proposal, backups, {});
+    const after = await loadReviewer(file);
+    expect(after.getChanges()).toHaveLength(0);
+    expect(after.getContentAsText({ toIndex: 0 })).toContain(`${phrase}【正文】`);
+    expect(after.getComments()).toHaveLength(1);
 
-    await undoDocxCommit(tracked);
+    await undoDocxCommit(committed);
     expect(Buffer.compare(await readFile(file), before)).toBe(0);
   });
 
-  it('accept-all folds revisions into body text', async () => {
+  it('legacy suggest_change alias also writes body text', async () => {
     const { fingerprint } = await inspectDocxFile(file);
     const reviewer = await loadReviewer(file);
     const first = reviewer.getContentAsText({ toIndex: 0, includeTrackedChanges: false, includeCommentAnchors: false });
@@ -82,15 +83,13 @@ describe('docx-edit', () => {
     const proposal = await planDocxEdit(file, fingerprint, [
       { op: 'suggest_change', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}OK` },
     ]);
-    await commitDocxProposal(proposal, new OfficeBackupStore(path.join(root, 'backups')), {
-      resolution: 'accept-all',
-    });
+    await commitDocxProposal(proposal, new OfficeBackupStore(path.join(root, 'backups')), {});
     const after = await loadReviewer(file);
     expect(after.getChanges()).toHaveLength(0);
     expect(after.getContentAsText({ toIndex: 0 })).toContain(`${phrase}OK`);
   });
 
-  it('itemDecisions can drop individual revisions before write', async () => {
+  it('itemDecisions can drop individual body edits before write', async () => {
     const { fingerprint } = await inspectDocxFile(file);
     const text = (await loadReviewer(file)).getContentAsText({
       toIndex: 1,
@@ -102,23 +101,21 @@ describe('docx-edit', () => {
     const p1 = lines[1]?.replace(/^\[\d+\]\s*/, '').slice(0, 5) ?? '';
     expect(p0 && p1).toBeTruthy();
     const proposal = await planDocxEdit(file, fingerprint, [
-      { op: 'suggest_change', paragraphIndex: 0, search: p0, replaceWith: `${p0}A` },
-      { op: 'suggest_change', paragraphIndex: 1, search: p1, replaceWith: `${p1}B` },
+      { op: 'replace_text', paragraphIndex: 0, search: p0, replaceWith: `${p0}A` },
+      { op: 'replace_text', paragraphIndex: 1, search: p1, replaceWith: `${p1}B` },
     ]);
     expect(proposal.diff.changes).toHaveLength(2);
     await commitDocxProposal(proposal, new OfficeBackupStore(path.join(root, 'backups')), {
-      resolution: 'tracked',
       itemDecisions: [
         { index: 0, accept: true },
         { index: 1, accept: false },
       ],
     });
     const after = await loadReviewer(file);
-    const changes = after.getChanges();
-    expect(changes.length).toBeGreaterThan(0);
-    const joined = changes.map((c) => c.text).join('|');
-    expect(joined).toContain('A');
-    expect(joined).not.toContain('B');
+    expect(after.getChanges()).toHaveLength(0);
+    const body = after.getContentAsText({ toIndex: 1, includeTrackedChanges: false, includeCommentAnchors: false });
+    expect(body).toContain(`${p0}A`);
+    expect(body).not.toContain(`${p1}B`);
   });
 
   it('refuses a stale fingerprint', async () => {
@@ -150,15 +147,14 @@ describe('office agent tools (docx)', () => {
       messages: [],
     });
 
-  it('exposes inspect_document / apply_docx_ops and writes only after acceptance', async () => {
+  it('exposes inspect_document / apply_docx_ops and writes body only after acceptance', async () => {
     const original = await readFile(file);
     let decisionAccepted = false;
-    let resolution: 'tracked' | 'accept-all' = 'tracked';
     const tools = createOfficeAgentTools({
       kind: 'docx',
       filePath: file,
       backups: new OfficeBackupStore(path.join(root, 'app-data')),
-      confirmEdit: async () => ({ accepted: decisionAccepted, resolution }),
+      confirmEdit: async () => ({ accepted: decisionAccepted }),
     });
     const inspected = (await run(tools, 'inspect_document', {})) as {
       fingerprint: string;
@@ -166,7 +162,7 @@ describe('office agent tools (docx)', () => {
     };
     const phrase = inspected.preview.split('\n')[0]?.replace(/^\[\d+\]\s*/, '').slice(0, 6) ?? '';
     const ops = [
-      { op: 'suggest_change' as const, paragraphIndex: 0, search: phrase, replaceWith: `${phrase}X` },
+      { op: 'replace_text' as const, paragraphIndex: 0, search: phrase, replaceWith: `${phrase}X` },
       { op: 'add_comment' as const, paragraphIndex: 0, text: 'note' },
     ];
     expect(await run(tools, 'apply_docx_ops', { fingerprint: inspected.fingerprint, ops })).toMatchObject({
@@ -175,12 +171,12 @@ describe('office agent tools (docx)', () => {
     expect(Buffer.compare(await readFile(file), original)).toBe(0);
 
     decisionAccepted = true;
-    resolution = 'tracked';
     expect(await run(tools, 'apply_docx_ops', { fingerprint: inspected.fingerprint, ops })).toMatchObject({
       status: 'applied',
-      resolution: 'tracked',
+      resolution: 'accept-all',
     });
     expect((await loadReviewer(file)).getComments()).toHaveLength(1);
-    expect((await loadReviewer(file)).getChanges().length).toBeGreaterThan(0);
+    expect((await loadReviewer(file)).getChanges()).toHaveLength(0);
+    expect((await loadReviewer(file)).getContentAsText({ toIndex: 0 })).toContain(`${phrase}X`);
   });
 });

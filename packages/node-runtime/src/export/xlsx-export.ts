@@ -16,8 +16,8 @@ export async function buildXlsxBuffer(payload: XlsxTablePayload): Promise<Buffer
       isHeader: cell.isHeader,
     })),
     merges: payload.merges,
-    columnWidths: payload.columnWidths,
-    rowHeights: payload.rowHeights,
+    columnWidths: (payload.columnWidths ?? []).map((width) => width ?? 0),
+    rowHeights: (payload.rowHeights ?? []).map((height) => height ?? 0),
     totalCols: payload.totalCols,
     totalRows: payload.totalRows,
   });

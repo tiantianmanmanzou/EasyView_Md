@@ -1,14 +1,14 @@
-/**
- * xlsx adapter — scaffold. P1 will replace ExcelJS read/write paths.
- */
-export const OOXML_XLSX_KIND = 'xlsx' as const;
+export { createXlsxAdapter, getXlsxWorkbook } from './adapter';
+export { applySheetOp, rangeOpCells, type XlsxSheetOp } from './ops';
+export {
+  cellRef,
+  columnLetter,
+  columnNumber,
+  parseCellRef,
+  parseRange,
+  refSortKey,
+} from './refs';
+export type { XlsxCell, XlsxCellValue } from './sheetXml';
+export { XlsxWorkbook, type SheetInfo } from './workbook';
 
-export function createXlsxAdapterStub(): {
-  kind: 'xlsx';
-  note: string;
-} {
-  return {
-    kind: OOXML_XLSX_KIND,
-    note: 'Scaffold only. Implement query/apply against @easyview/ooxml-core in P1.',
-  };
-}
+export const OOXML_XLSX_KIND = 'xlsx' as const;

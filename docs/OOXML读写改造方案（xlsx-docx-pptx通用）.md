@@ -34,7 +34,7 @@
 | 2.5 | 工作表增删改名 | 待开始 |
 | 2.6 | 替换 AI `xlsx-edit.ts`；去掉整簿 `writeBuffer` | **完成** |
 | 2.7 | 替换 `LazyWorkbook` / SpreadsheetViewer 保存路径 | 部分：value-only 保存已走 ooxml-xlsx；样式/合并等仍 ExcelJS |
-| 2.8 | new-file / export / git snapshot；移除生产 `exceljs` | 待开始 |
+| 2.8 | new-file / export / git snapshot；移除生产 `exceljs` | 部分：new-file + snapshot 已切；export / 预览样式保存仍 ExcelJS |
 | 2.9 | `PreviewController.open` 同路径强制刷新 | **完成**（此前 CI 修复） |
 
 ## 3. 公开接口草案（冻结）

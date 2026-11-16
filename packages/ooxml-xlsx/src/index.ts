@@ -1,4 +1,5 @@
 export { createXlsxAdapter, getXlsxWorkbook } from './adapter';
+export { buildEmptyXlsxBytes } from './emptyWorkbook';
 export { applySheetOp, rangeOpCells, type XlsxSheetOp } from './ops';
 export {
   cellRef,

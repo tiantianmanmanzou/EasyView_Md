@@ -212,10 +212,12 @@ describe('LocalWorkspaceGateway and WorkspaceFileOperationService', () => {
     const dotxZip = await JSZip.loadAsync(dotxBytes);
     expect(dotxZip.file('word/document.xml')).toBeTruthy();
 
+    const xlsxZip = await JSZip.loadAsync(xlsxBytes);
+    expect(xlsxZip.file('xl/worksheets/sheet1.xml')).toBeTruthy();
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(xlsxBytes as unknown as ArrayBuffer);
     expect(workbook.worksheets.length).toBeGreaterThan(0);
-    // Empty ExcelJS sheets historically had columns === null (desktop forEach crash).
+    // Seed includes cols + A1 so ExcelJS materializes columns (desktop forEach crash guard).
     expect(workbook.worksheets[0]?.columns).not.toBeNull();
 
     // Helper stays aligned with gateway create.

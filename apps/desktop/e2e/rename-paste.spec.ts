@@ -79,7 +79,7 @@ test('leaving the window to copy a name keeps the tree rename and new-file field
     await name.fill('');
     await leaveWindow(name);
     await expect(name).toBeFocused();
-    await page.keyboard.press('Meta+V');
+    await page.keyboard.press('ControlOrMeta+V');
     await expect(name).toHaveValue('粘贴');
     await name.press('Enter');
     await expect.poll(async () => (await readdir(ws.workspace)).some((file) => file.startsWith('粘贴') && file !== '粘贴.xlsx')).toBe(true);

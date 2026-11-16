@@ -39,9 +39,13 @@ test('lazily switches worksheets, retains edits, saves and preserves unopened sh
     await expect.poll(async () => { const box = JSON.stringify(await overlay.boundingBox()); const stable = box === previous; previous = box; return stable; }, { intervals: [100] }).toBe(true);
     await overlay.dblclick({ position: { x: 85, y: 40 } });
     const input = page.locator('.x-spreadsheet-editor textarea'); await expect(input).toBeVisible();
-    // fill() alone can miss x-spreadsheet's editor commit path on Windows; type through the keyboard.
-    await input.click({ clickCount: 3 });
-    await page.keyboard.type('Changed second');
+    // Select existing cell text, then paste — Windows-proven clipboard path from xlsx-toolbar.spec.ts.
+    await input.press('ControlOrMeta+A');
+    await application!.evaluate(({ BrowserWindow, clipboard }) => {
+      clipboard.writeText('Changed second');
+      BrowserWindow.getAllWindows()[0].webContents.paste();
+    });
+    await expect(input).toHaveValue('Changed second');
     await page.keyboard.press('Enter');
     await first.click(); await expect(first).toHaveAttribute('aria-selected', 'true');
     await second.click(); await expect(second).toHaveAttribute('aria-selected', 'true'); await expect(first).toBeEnabled();

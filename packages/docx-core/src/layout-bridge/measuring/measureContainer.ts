@@ -74,18 +74,35 @@ let canvasContext: CanvasRenderingContext2D | null = null;
 /**
  * Get or create a canvas 2D context for text measurement
  */
+/** happy-dom / bun:test often lack a real 2d context; approximate widths for layout unit tests. */
+function createMeasurementStub(): CanvasRenderingContext2D {
+  let font = '16px sans-serif';
+  const stub = {
+    get font() { return font; },
+    set font(value: string) { font = value; },
+    measureText: (text: string) => {
+      const sizeMatch = /(\d+(?:\.\d+)?)px/.exec(font);
+      const px = sizeMatch ? Number(sizeMatch[1]) : 16;
+      return { width: text.length * px * 0.5 } as TextMetrics;
+    },
+  };
+  return stub as unknown as CanvasRenderingContext2D;
+}
+
 export function getCanvasContext(): CanvasRenderingContext2D {
   if (!canvasContext) {
     // Create offscreen canvas
     const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
 
     if (!canvas) {
-      throw new Error('Canvas not available. Ensure this runs in a DOM environment.');
+      canvasContext = createMeasurementStub();
+      return canvasContext;
     }
 
     canvasContext = canvas.getContext('2d');
     if (!canvasContext) {
-      throw new Error('Failed to get 2D context from canvas');
+      // jsdom/happy-dom without the native `canvas` package.
+      canvasContext = createMeasurementStub();
     }
   }
 

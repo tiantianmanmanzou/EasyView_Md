@@ -1,5 +1,7 @@
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
+import { OpcPackage } from '@easyview/ooxml-core/opc';
+import { cellRef, XlsxWorkbook } from '@easyview/ooxml-xlsx';
 import { worksheetToXsSheet, applyXsStyleToCell, validateSheetXml, pxToExcelColumnWidth, pxToExcelRowPoints } from './xSpreadsheetBridge';
 import type { XsCell, XsSheetData } from './xSpreadsheetTypes';
 import { tPreview } from '../preview.i18n';
@@ -74,13 +76,62 @@ export class LazyWorkbook {
     return workbook;
   }
   async save(changes: Array<{ index: number; data: XsSheetData }>): Promise<Uint8Array> {
+    const pending = changes.filter(({ index, data }) => {
+      const loaded = this.loaded.get(index);
+      if (!loaded) throw new Error('Cannot save an unloaded worksheet');
+      return editablePayload(data) !== editablePayload(loaded.baseline);
+    });
+    if (!pending.length) {
+      return this.zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+    }
+    // Text/formula-only edits go through ooxml-xlsx (no ExcelJS writeBuffer). Style /
+    // merge / freeze / filter / size changes still use the ExcelJS section-merge path.
+    if (pending.every(({ index, data }) => valueOnlyChange(this.loaded.get(index)!.baseline, data))) {
+      return this.saveValuesWithOoxml(pending);
+    }
+    return this.saveWithExcelJs(pending);
+  }
+
+  /** Precise sheetData rewrite for cell text/formula diffs; untouched zip parts stay intact. */
+  private async saveValuesWithOoxml(changes: Array<{ index: number; data: XsSheetData }>): Promise<Uint8Array> {
+    const pkg = await OpcPackage.open(await this.zip.generateAsync({ type: 'uint8array' }));
+    const book = await XlsxWorkbook.open(pkg);
+    for (const { index, data } of changes) {
+      const baseline = this.loaded.get(index)!.baseline;
+      const sheetName = this.sheets[index].name;
+      const keys = new Set<string>();
+      const collect = (sheet: XsSheetData) => {
+        const rows = sheet.rows ?? { len: 0 };
+        for (const key of Object.keys(rows)) {
+          if (key === 'len') continue;
+          const cells = (rows as unknown as Record<string, { cells?: Record<string, XsCell> }>)[key]?.cells ?? {};
+          for (const ci of Object.keys(cells)) keys.add(`${key}:${ci}`);
+        }
+      };
+      collect(baseline);
+      collect(data);
+      for (const key of keys) {
+        const [riText, ciText] = key.split(':');
+        const ri = Number(riText);
+        const ci = Number(ciText);
+        const before = cellText(baseline, ri, ci);
+        const after = cellText(data, ri, ci);
+        if (before === after) continue;
+        const ref = cellRef(ci + 1, ri + 1);
+        if (after.startsWith('=')) await book.setCell(sheetName, ref, null, after);
+        else await book.setCell(sheetName, ref, after === '' ? null : coerceScalar(after));
+      }
+    }
+    await book.flush();
+    return pkg.save();
+  }
+
+  private async saveWithExcelJs(changes: Array<{ index: number; data: XsSheetData }>): Promise<Uint8Array> {
     // Clone the archive so a failed/overlapping save never changes our baseline.
     const output = new JSZip();
     Object.assign(output.files, this.zip.files);
     for (const { index, data } of changes) {
-      const loaded = this.loaded.get(index);
-      if (!loaded) throw new Error('Cannot save an unloaded worksheet');
-      if (editablePayload(data) === editablePayload(loaded.baseline)) continue;
+      const loaded = this.loaded.get(index)!;
       const workbook = await this.decode(index);
       const worksheet = workbook.worksheets[0];
       applyChanges(worksheet, loaded.baseline, data);
@@ -198,6 +249,36 @@ function editablePayload(data: XsSheetData): string {
   const { len: _rows, ...rows } = data.rows ?? { len: 0 };
   const { len: _cols, ...cols } = data.cols ?? { len: 0 };
   return JSON.stringify([data.name, data.styles ?? [], data.merges ?? [], rows, cols, freezeRef(data), filterRef(data)]);
+}
+
+/** Structural fields only — cell text wiped — so we can detect value-only edits. */
+function structuralPayload(data: XsSheetData): string {
+  const clone = structuredClone(data);
+  const rows = clone.rows ?? { len: 0 };
+  for (const key of Object.keys(rows)) {
+    if (key === 'len') continue;
+    const row = (rows as unknown as Record<string, { cells?: Record<string, XsCell>; height?: number }>)[key];
+    if (!row?.cells) continue;
+    for (const cell of Object.values(row.cells)) cell.text = '';
+  }
+  return editablePayload(clone);
+}
+
+function valueOnlyChange(before: XsSheetData, after: XsSheetData): boolean {
+  return structuralPayload(before) === structuralPayload(after);
+}
+
+function cellText(data: XsSheetData, ri: number, ci: number): string {
+  return data.rows?.[ri]?.cells?.[ci]?.text ?? '';
+}
+
+function coerceScalar(text: string): string | number | boolean {
+  if (text === 'true') return true;
+  if (text === 'false') return false;
+  if (text.trim() !== '' && Number.isFinite(Number(text)) && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text.trim())) {
+    return Number(text);
+  }
+  return text;
 }
 /** Normalised freeze / filter so engine defaults ('A1', empty filter) compare equal to "none". */
 function freezeRef(data: XsSheetData): string {

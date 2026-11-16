@@ -2,7 +2,7 @@
  * Parse and rewrite worksheet sheetData while leaving drawings / merges / etc. intact.
  */
 
-import { replaceFirstElementByName } from '@easyview/ooxml-core';
+import { replaceFirstElementByName } from '@easyview/ooxml-core/xml';
 import { cellRef, columnLetter, parseCellRef } from './refs';
 
 export type XlsxCellValue = string | number | boolean | null;

@@ -1,4 +1,5 @@
-import type { DocumentOp, FormatAdapter, Locator, OpcPackage } from '@easyview/ooxml-core';
+import type { OpcPackage } from '@easyview/ooxml-core/opc';
+import type { DocumentOp, FormatAdapter, Locator } from '@easyview/ooxml-core/ops';
 import { applySheetOp, type XlsxSheetOp } from './ops';
 import { XlsxWorkbook } from './workbook';
 

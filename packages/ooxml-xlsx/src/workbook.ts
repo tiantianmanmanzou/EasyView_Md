@@ -3,7 +3,7 @@
  * flush dirty worksheets as precise sheetData rewrites.
  */
 
-import type { OpcPackage } from '@easyview/ooxml-core';
+import type { OpcPackage } from '@easyview/ooxml-core/opc';
 import { cellRef, columnLetter, parseCellRef } from './refs';
 import { parseSharedStrings } from './sharedStrings';
 import {
@@ -41,6 +41,7 @@ interface LoadedSheet {
 export class XlsxWorkbook {
   private sharedStrings: string[] | null = null;
   private readonly loaded = new Map<number, LoadedSheet>();
+  private formulasTouched = false;
   private constructor(
     readonly pkg: OpcPackage,
     readonly sheets: SheetInfo[],
@@ -112,6 +113,10 @@ export class XlsxWorkbook {
     if (formula !== undefined) {
       const normalized = formula.replace(/^=/, '');
       sheet.cells.set(ref, { value: `=${normalized}`, formula: normalized, style: previous?.style });
+      this.formulasTouched = true;
+    } else if (typeof value === 'string' && value.startsWith('=')) {
+      sheet.cells.set(ref, { value, formula: value.slice(1), style: previous?.style });
+      this.formulasTouched = true;
     } else if (value === null || value === '') {
       if (previous?.style !== undefined) sheet.cells.set(ref, { value: null, style: previous.style });
       else sheet.cells.delete(ref);
@@ -213,7 +218,7 @@ export class XlsxWorkbook {
       sheet.dirty = false;
       dirty.push(info.path);
     }
-    if (dirty.length && this.pkg.hasPart('xl/workbook.xml')) {
+    if (dirty.length && this.formulasTouched && this.pkg.hasPart('xl/workbook.xml')) {
       const touched = await this.ensureFullCalcOnLoad();
       if (touched) dirty.push('xl/workbook.xml');
     }

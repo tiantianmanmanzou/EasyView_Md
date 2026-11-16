@@ -268,10 +268,51 @@ export function sheetXmlToXsSheet(
 
   const filter = attr(tags(section(sheetXml, 'autoFilter'), 'autoFilter')[0] ?? section(sheetXml, 'autoFilter'), 'ref');
 
+  const formatPr = tags(sheetXml, 'sheetFormatPr')[0] ?? '';
+  const defaultRowHeight = Number(attr(formatPr, 'defaultRowHeight'));
+  const defaultColWidth = Number(attr(formatPr, 'defaultColWidth'));
+  // Excel's default row is 15pt (20px). Always surface a row height so the grid
+  // hit-testing matches ExcelJS decode (toolbar/e2e clicks assume ~20px rows).
+  const defaultRowPx = excelRowPointsToPx(
+    Number.isFinite(defaultRowHeight) && defaultRowHeight > 0 ? defaultRowHeight : 15,
+  );
+  const defaultColPx =
+    Number.isFinite(defaultColWidth) && defaultColWidth > 0
+      ? excelColumnWidthToPx(defaultColWidth)
+      : undefined;
+
+  // Expand a header-only autoFilter down to the last data row (ExcelJS parity).
+  let filterRef = filter || undefined;
+  if (filterRef) {
+    const parsed = parseA1Range(filterRef);
+    if (parsed) {
+      let last = parsed.eri;
+      for (const [key, row] of Object.entries(rows)) {
+        if (key === 'len') continue;
+        const ri = Number(key);
+        if (!Number.isFinite(ri) || ri <= parsed.sri) continue;
+        const rowCells = (row as { cells?: Record<number, XsCell> } | undefined)?.cells;
+        if (!rowCells) continue;
+        for (let ci = parsed.sci; ci <= parsed.eci; ci += 1) {
+          const text = rowCells[ci]?.text;
+          if (typeof text === 'string' && text.trim() !== '') {
+            last = Math.max(last, ri);
+            break;
+          }
+        }
+      }
+      if (last !== parsed.eri) {
+        filterRef = `${columnLetters(parsed.sci)}${parsed.sri + 1}:${columnLetters(parsed.eci)}${last + 1}`;
+      }
+    }
+  }
+
   return {
     name: sheetName,
     ...(freeze ? { freeze } : {}),
-    ...(filter ? { autofilter: { ref: filter, filters: [] } } : {}),
+    ...(filterRef ? { autofilter: { ref: filterRef, filters: [] } } : {}),
+    defaultRowPx,
+    ...(defaultColPx ? { defaultColPx } : {}),
     styles,
     merges,
     cols,

@@ -35,6 +35,7 @@ describe('AiChatPanel host and document context', () => {
     expect(agent?.title).toContain('仅 Markdown');
     expect(agent?.title).toContain('.xlsx');
     expect(agent?.title).toContain('.docx');
+    expect(agent?.title).toContain('.pptx');
     expect(root?.querySelector('[data-mode="chat"]')?.classList.contains('active')).toBe(true);
 
     panel.setDocumentContextAvailable(true);

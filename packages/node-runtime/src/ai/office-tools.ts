@@ -1,5 +1,5 @@
 /**
- * Agent-mode tools for the currently opened Office file (.xlsx / .docx).
+ * Agent-mode tools for the currently opened Office file (.xlsx / .docx / .pptx).
  *
  * The tools take no path argument: they are hard-bound to the file the user has
  * open, so the model cannot read or write any other Office file. Writes require
@@ -38,10 +38,23 @@ import {
   type DocxProposal,
   type DocxResolution,
 } from './docx-edit';
+import {
+  PPTX_DEFAULT_PREVIEW_SLIDES,
+  PPTX_MAX_OPS,
+  PPTX_MAX_PREVIEW_SLIDES,
+  commitPptxProposal,
+  inspectPptxFile,
+  isPptxPath,
+  planPptxEdit,
+  pptxSlideOpSchema,
+  type PptxCommitRecord,
+  type PptxDiff,
+  type PptxProposal,
+} from './pptx-edit';
 import { tAi } from './ai.i18n';
 import type { OfficeBackupStore } from './office-backups';
 
-export type OfficeDocumentKind = 'xlsx' | 'docx';
+export type OfficeDocumentKind = 'xlsx' | 'docx' | 'pptx';
 
 export interface OfficeEditDecision {
   accepted: boolean;
@@ -52,11 +65,12 @@ export interface OfficeEditDecision {
   itemDecisions?: DocxItemDecision[];
 }
 
-export type OfficeCommitRecord = XlsxCommitRecord | DocxCommitRecord;
+export type OfficeCommitRecord = XlsxCommitRecord | DocxCommitRecord | PptxCommitRecord;
 
 export type OfficeProposalView =
   | { kind: 'xlsx'; id: string; fileName: string; diff: XlsxDiff }
-  | { kind: 'docx'; id: string; fileName: string; diff: DocxDiff };
+  | { kind: 'docx'; id: string; fileName: string; diff: DocxDiff }
+  | { kind: 'pptx'; id: string; fileName: string; diff: PptxDiff };
 
 export interface ActiveOfficeDocument {
   kind: OfficeDocumentKind;
@@ -74,6 +88,7 @@ export interface ActiveOfficeDocument {
 export function officeDocumentKind(filePath: string): OfficeDocumentKind | null {
   if (isXlsxPath(filePath)) return 'xlsx';
   if (isDocxPath(filePath)) return 'docx';
+  if (isPptxPath(filePath)) return 'pptx';
   return null;
 }
 
@@ -115,6 +130,55 @@ export function createOfficeAgentTools(document: ActiveOfficeDocument): ToolSet 
           return {
             status: 'applied' as const,
             changedCells: proposal.diff.changes.length,
+            newFingerprint: record.writtenFingerprint,
+          };
+        },
+      }),
+    };
+  }
+
+  if (document.kind === 'pptx') {
+    if (!isPptxPath(document.filePath)) throw new Error(tAi('pptx.notPptx'));
+    return {
+      inspect_presentation: tool({
+        description: tAi('pptx.inspect.description'),
+        inputSchema: z.object({
+          maxSlides: z
+            .number()
+            .int()
+            .min(0)
+            .max(PPTX_MAX_PREVIEW_SLIDES)
+            .optional()
+            .describe(tAi('pptx.inspect.maxSlides')),
+        }),
+        execute: async ({ maxSlides }) =>
+          inspectPptxFile(document.filePath, maxSlides ?? PPTX_DEFAULT_PREVIEW_SLIDES),
+      }),
+      apply_slide_ops: tool({
+        description: tAi('pptx.apply.description', { max: PPTX_MAX_OPS }),
+        inputSchema: z.object({
+          fingerprint: z.string().min(1).describe(tAi('pptx.apply.fingerprint')),
+          ops: z.array(pptxSlideOpSchema).min(1).max(PPTX_MAX_OPS),
+        }),
+        execute: async ({ fingerprint, ops }) => {
+          const proposal: PptxProposal = await planPptxEdit(document.filePath, fingerprint, ops);
+          if (proposal.diff.changes.length === 0) {
+            return { status: 'no-change' as const };
+          }
+          const decision = await document.confirmEdit({
+            kind: 'pptx',
+            id: proposal.id,
+            fileName,
+            diff: proposal.diff,
+          });
+          if (!decision.accepted) {
+            return { status: 'rejected' as const, reason: decision.reason ?? tAi('pptx.rejected') };
+          }
+          const record = await commitPptxProposal(proposal, document.backups);
+          await document.onCommitted?.(record, proposal.id);
+          return {
+            status: 'applied' as const,
+            changes: proposal.diff.total,
             newFingerprint: record.writtenFingerprint,
           };
         },

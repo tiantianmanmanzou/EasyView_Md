@@ -314,7 +314,7 @@ export async function undoDocxCommit(record: DocxCommitRecord): Promise<void> {
   await writeFileAtomically(record.filePath, await readOfficeBackup(record.backup));
 }
 
-/** Shared undo entry used by AiChatHost for both xlsx and docx commits. */
+/** Shared undo entry used by AiChatHost for xlsx / docx / pptx commits. */
 export async function undoOfficeCommit(record: {
   filePath: string;
   backup: OfficeBackupRef;
@@ -322,6 +322,12 @@ export async function undoOfficeCommit(record: {
 }): Promise<void> {
   if (isDocxPath(record.filePath)) {
     await undoDocxCommit(record);
+    return;
+  }
+  const ext = path.extname(record.filePath).toLowerCase();
+  if (ext === '.pptx' || ext === '.potx') {
+    const { undoPptxCommit } = await import('./pptx-edit');
+    await undoPptxCommit(record);
     return;
   }
   await undoXlsxCommit(record);

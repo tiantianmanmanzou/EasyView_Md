@@ -194,7 +194,7 @@ function getStandaloneAiChat(): AiChatPanel {
   return panel;
 }
 
-/** The focused preview tab when Agent mode can edit it (.xlsx / .docx). */
+/** The focused preview tab when Agent mode can edit it (.xlsx / .docx / .pptx). */
 function activeOfficePreview(): { relativePath: string; fileName: string } | null {
   const view = activeView.getState();
   if (view.kind !== 'preview' || !isAgentEditablePreview(view.relativePath)) return null;

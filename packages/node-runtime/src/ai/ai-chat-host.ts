@@ -188,6 +188,23 @@ export class AiChatHost {
             docxChanges: proposal.diff.changes,
             docxComments: proposal.diff.comments,
           });
+        } else if (proposal.kind === 'pptx') {
+          this.options.postMessage({
+            type: 'aiChat.officeProposal',
+            requestId,
+            proposalId: proposal.id,
+            fileName: proposal.fileName,
+            kind: 'xlsx',
+            changes: proposal.diff.changes.map((change) => ({
+              sheet: `slide ${change.slideIndex}`,
+              ref: change.shapeName,
+              before: change.before,
+              after: change.after,
+            })),
+            total: proposal.diff.total,
+            structural: proposal.diff.structural,
+            truncated: proposal.diff.truncated,
+          });
         } else {
           this.options.postMessage({
             type: 'aiChat.officeProposal',

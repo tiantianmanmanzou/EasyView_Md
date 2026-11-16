@@ -18,9 +18,9 @@
 |---|---|---|
 | 12.0 | 包骨架、接口草案、sample/、本文件入库 | **完成** |
 | P0 | OPC + engine.apply + ops/rev/IO | **完成** |
-| P1 | ooxml-xlsx 去 ExcelJS | **进行中** — 适配器 + AI + export + 预览 load/save 已切 ooxml；`xSpreadsheetBridge` 全簿路径仍可触 ExcelJS |
+| P1 | ooxml-xlsx 去 ExcelJS | **进行中** — 适配器 + AI + export + 预览 load/save 已切 ooxml；`xSpreadsheetBridge` 全簿辅助仍可触 ExcelJS（测试/benchmark） |
 | P2 | ooxml-docx 并轨 + AI 改正文 | **进行中** — AI 确认后写正文；`ooxml-docx` 适配器已接入；精准 run 级 XML 写回待续 |
-| P3 | ooxml-pptx | **进行中** — 幻灯片/形状文本 query + 精准 XML replace 已通；AI/预览桥接待接 |
+| P3 | ooxml-pptx | **进行中** — 适配器 + AI inspect/apply_slide_ops + host/prompt 已接；预览桥接与更多 slide ops 待续 |
 | P4–P6 | 宿主同步、测试加固、验收 | 待开始 |
 
 ### P1 细项

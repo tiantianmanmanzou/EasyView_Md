@@ -1,7 +1,7 @@
-/** Helpers for AI Agent editing of preview (non-Markdown) tabs. Supports .xlsx and .docx. */
+/** Helpers for AI Agent editing of preview (non-Markdown) tabs. Supports .xlsx / .docx / .pptx. */
 
 export function isAgentEditablePreview(relativePath: string): boolean {
-  return /\.(xlsx|docx|dotx)$/i.test(relativePath);
+  return /\.(xlsx|docx|dotx|pptx|potx)$/i.test(relativePath);
 }
 
 /** True when an absolute host path points at the given workspace-relative preview path. */

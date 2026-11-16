@@ -7,12 +7,20 @@ export interface EasyViewTableCellMeta {
   colwidth: number[];
 }
 
+/** Column filter: only rows whose cell text is in `selected` stay visible. `""` means blank. */
+export interface EasyViewTableColumnFilter {
+  col: number;
+  selected: string[];
+}
+
 export interface EasyViewTableMetaEntry {
   shape: number[];
   cells: EasyViewTableCellMeta[];
   /** Logical per-column widths (width[column]). Decoupled from row structure. */
   colWidths?: number[];
   rowHeights?: number[];
+  /** View filters persisted across reload / AI edits that keep this meta block. */
+  filters?: EasyViewTableColumnFilter[];
 }
 
 export interface EasyViewTableMeta {
@@ -34,6 +42,24 @@ function normalizeRowHeight(value: unknown): number | null {
 function normalizeColWidth(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
   return Math.max(1, Math.round(value));
+}
+
+export function normalizeTableFilters(value: unknown, columnCount?: number): EasyViewTableColumnFilter[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const filters: EasyViewTableColumnFilter[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const col = (entry as EasyViewTableColumnFilter).col;
+    const selected = (entry as EasyViewTableColumnFilter).selected;
+    if (!Number.isInteger(col) || col < 0) continue;
+    if (typeof columnCount === 'number' && col >= columnCount) continue;
+    if (!Array.isArray(selected)) continue;
+    const values = selected.filter((item): item is string => typeof item === 'string');
+    // Deduplicate while preserving order.
+    const unique = [...new Set(values)];
+    filters.push({ col, selected: unique });
+  }
+  return filters.length > 0 ? filters : null;
 }
 
 export function stripEasyViewTableMeta(markdown: string): {
@@ -117,12 +143,15 @@ export function collectEasyViewTableMeta(doc: ProsemirrorNode): EasyViewTableMet
     });
 
     const colWidths = collectTableColWidths(node);
-    if (cells.length > 0 || hasRowHeights || colWidths) {
+    const mapWidth = TableMap.get(node).width;
+    const filters = normalizeTableFilters(node.attrs.filters, mapWidth);
+    if (cells.length > 0 || hasRowHeights || colWidths || filters) {
       tables.push({
         shape,
         cells,
         ...(colWidths ? { colWidths } : {}),
         ...(hasRowHeights ? { rowHeights: rowHeights.map((height) => height ?? 0) } : {}),
+        ...(filters ? { filters } : {}),
       });
     }
 
@@ -214,6 +243,11 @@ export function applyEasyViewTableMeta(doc: ProsemirrorNode, meta: EasyViewTable
       // widths so a structural edit never silently discards the saved widths.
       const usePerCellWidths = shapeMatches && currentMeta.cells.length > 0;
       const colWidths = usePerCellWidths ? null : resolveTableColWidths(currentMeta);
+      const mapWidth = TableMap.get(nextTable).width;
+      const nextFilters = normalizeTableFilters(currentMeta.filters, mapWidth);
+      const existingFilters = normalizeTableFilters(nextTable.attrs.filters, mapWidth);
+      const filtersChanged =
+        JSON.stringify(existingFilters ?? null) !== JSON.stringify(nextFilters ?? null);
 
       const updatedRows: ProsemirrorNode[] = [];
       let tableChanged = false;
@@ -281,6 +315,15 @@ export function applyEasyViewTableMeta(doc: ProsemirrorNode, meta: EasyViewTable
         nextTable = nextTable.type.create(nextTable.attrs, updatedRows, nextTable.marks);
       } else if (childChanged) {
         changed = true;
+      }
+
+      if (filtersChanged) {
+        changed = true;
+        nextTable = nextTable.type.create(
+          { ...nextTable.attrs, filters: nextFilters },
+          nextTable.content,
+          nextTable.marks,
+        );
       }
 
       return nextTable;

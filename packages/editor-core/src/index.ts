@@ -650,6 +650,114 @@ function ensureTableWidthStyles(): void {
 
     /* The normal table grip starts hidden until table focus. The sticky copy
        is an always-visible vertical-scroll anchor and remains interactive. */
+    .ProseMirror th.easyview-table-header-filterable {
+      position: relative;
+      padding-right: 22px;
+    }
+
+    .easyview-table-filter-btn {
+      position: absolute;
+      right: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border: none;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #999);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 6;
+      pointer-events: auto;
+      opacity: 0.75;
+    }
+
+    .easyview-table-filter-btn:hover,
+    .easyview-table-filter-btn.is-active {
+      opacity: 1;
+      color: var(--vscode-focusBorder, #007fd4);
+      background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 16%, transparent);
+    }
+
+    .easyview-table-row-filtered-out {
+      display: none !important;
+    }
+
+    .easyview-table-filter-popup {
+      position: fixed;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: min(360px, 70vh);
+      padding: 10px;
+      box-sizing: border-box;
+      border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+      border-radius: 6px;
+      background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #1e1e1e));
+      color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground, #ccc));
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    .easyview-table-filter-search {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px 8px;
+      border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.4));
+      border-radius: 4px;
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #ccc);
+    }
+
+    .easyview-table-filter-actions,
+    .easyview-table-filter-footer {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .easyview-table-filter-actions button,
+    .easyview-table-filter-footer button {
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 4px;
+      padding: 3px 8px;
+      background: var(--vscode-button-secondaryBackground, #3a3d41);
+      color: var(--vscode-button-secondaryForeground, #ccc);
+      cursor: pointer;
+    }
+
+    .easyview-table-filter-footer button.primary {
+      background: var(--vscode-button-background, #0e639c);
+      color: var(--vscode-button-foreground, #fff);
+    }
+
+    .easyview-table-filter-list {
+      overflow: auto;
+      flex: 1 1 auto;
+      min-height: 80px;
+      max-height: 220px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .easyview-table-filter-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .easyview-table-filter-option span {
+      overflow-wrap: anywhere;
+    }
+
     .easyview-sticky-table-grip {
       position: absolute;
       z-index: 8;

@@ -1,0 +1,14 @@
+{
+  "format": "docx",
+  "fixture": "sample/docx/sample.docx",
+  "ops": [
+    {
+      "source": "ai",
+      "target": { "part": "word/document.xml" },
+      "op": "replace_text",
+      "args": { "op": "replace_text", "paragraphIndex": 0, "search": "", "replaceWith": "" }
+    }
+  ],
+  "expectUntouchedParts": ["word/styles.xml", "[Content_Types].xml"],
+  "note": "Harness resolves search from paragraph 0 preview at runtime when search is empty placeholder."
+}

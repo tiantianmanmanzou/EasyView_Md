@@ -21,7 +21,7 @@
 | P1 | ooxml-xlsx 去 ExcelJS | **基本完成** — 生产 load/save/export/AI 已去 ExcelJS；`exceljsBridge` 仅测试/parity；exceljs 已降为 preview-ui devDependency |
 | P2 | ooxml-docx 并轨 + AI 改正文 | **基本完成** — AI 确认后写正文；正文 replace 走精准 run 级 XML；批注仍经 DocxReviewer |
 | P3 | ooxml-pptx | **进行中** — 适配器 + AI inspect/apply_slide_ops + host/prompt 已接；预览桥接与更多 slide ops 待续 |
-| P4–P6 | 宿主同步、测试加固、验收 | 待开始 |
+| P4–P6 | 宿主同步、测试加固、验收 | **进行中** — sample 夹具 + DocumentService 保真 harness 已落地；宿主 EXTERNAL_MODIFIED UI 已有基础；全面验收待 CI |
 
 ### P1 细项
 

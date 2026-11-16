@@ -1,7 +1,8 @@
 # OOXML fidelity harness
 
-Place format samples under `sample/xlsx`, `sample/docx`, `sample/pptx`.
-JSON operation cases go in `sample/cases`.
+Fixtures live under `sample/xlsx`, `sample/docx`, `sample/pptx`.
+JSON case sketches live under `sample/cases`.
 
-Core package unit tests currently use `samples/English/Sample Spreadsheet.xlsx`
-as a baseline until curated fixtures are copied here.
+Executable coverage is `packages/node-runtime/src/ai/ooxml-sample-fidelity.test.ts`:
+it opens each sample through `DocumentService`, applies one edit, and asserts
+untouched OPC parts stay byte-identical after save.

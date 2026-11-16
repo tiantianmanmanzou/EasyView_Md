@@ -25,6 +25,21 @@ export interface PreviewHost {
   readText?(sessionId: string): Promise<PreviewTextResult>;
   /** Persist document-route bytes back to the source file (Excel first; Word/PPT later). */
   writeBytes?(sessionId: string, bytes: Uint8Array): Promise<PreviewWriteResult>;
+  /**
+   * Report whether the open preview has unsaved edits so the host can warn on
+   * close / quit / switch-away.
+   */
+  setDirty?(dirty: boolean): void;
+  /**
+   * Register the active viewer's save implementation. Hosts call it when the
+   * user chooses Save in an unsaved-changes dialog. Returns a disposer.
+   */
+  registerSaveHandler?(save: () => Promise<void>): () => void;
+  /**
+   * When set (e.g. VS Code custom editor), the Save button should ask the host
+   * to run its native save path so the tab dirty state clears correctly.
+   */
+  requestHostSave?(): void;
   listArchive?(sessionId: string): Promise<ArchiveEntry[]>;
   openArchiveEntry?(sessionId: string, path: string): Promise<ArchiveEntryPreview>;
   exportArchiveEntry?(sessionId: string, path: string): Promise<void>;

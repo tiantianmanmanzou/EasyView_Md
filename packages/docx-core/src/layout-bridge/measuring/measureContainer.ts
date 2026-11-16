@@ -103,6 +103,7 @@ export function resetCanvasContext(): void {
 interface ResolvedFontCache {
   cssFallback: string;
   singleLineRatio: number;
+  halfWidthAscii: boolean;
 }
 
 /** Cache for resolved font data */
@@ -115,11 +116,34 @@ function getResolvedData(fontFamily: string): ResolvedFontCache {
   let cached = fontResolvedCache.get(fontFamily);
   if (cached === undefined) {
     const resolved = resolveFontFamily(fontFamily);
-    cached = { cssFallback: resolved.cssFallback, singleLineRatio: resolved.singleLineRatio };
+    cached = {
+      cssFallback: resolved.cssFallback,
+      singleLineRatio: resolved.singleLineRatio,
+      halfWidthAscii: resolved.halfWidthAscii,
+    };
     fontResolvedCache.set(fontFamily, cached);
   }
   return cached;
 }
+
+/**
+ * Width to add to each space so it is half an em, as in the Chinese GB fonts. Forms leave blanks
+ * of spaces ("【      】", "日    期") that signatures and stamps are placed over; a substitute
+ * font draws a narrower space. `ctx.font` must already be the style's font.
+ */
+function spaceWidening(ctx: CanvasRenderingContext2D, style: FontStyle): number {
+  if (!getResolvedData(style.fontFamily ?? DEFAULT_FONT_FAMILY).halfWidthAscii) return 0;
+  return Math.max(0, ptToPx(style.fontSize ?? DEFAULT_FONT_SIZE) / 2 - ctx.measureText(' ').width);
+}
+
+/** Extra px per space for runs in `style`; the painter applies it as `word-spacing`. */
+export function halfWidthSpaceExtra(style: FontStyle): number {
+  const ctx = getCanvasContext();
+  ctx.font = buildFontString(style);
+  return spaceWidening(ctx, style);
+}
+
+const countSpaces = (text: string): number => text.split(' ').length - 1;
 
 /**
  * Get the CSS fallback string for a font family, with caching.
@@ -239,6 +263,7 @@ export function measureTextWidth(text: string, style: FontStyle): number {
   // Painted width (actualBoundingBox) includes glyph overhang which is visual only
   // and should not affect line breaking decisions.
   let width = metrics.width;
+  if (text.includes(' ')) width += countSpaces(text) * spaceWidening(ctx, style);
 
   // Apply letter spacing if specified
   if (style.letterSpacing && text.length > 1) {
@@ -285,6 +310,7 @@ export function measureRun(text: string, style: FontStyle): RunMeasurement {
   ctx.font = buildFontString(style);
 
   const letterSpacing = style.letterSpacing ?? 0;
+  const widening = text.includes(' ') ? spaceWidening(ctx, style) : 0;
   const charWidths: number[] = [];
   let totalWidth = 0;
 
@@ -295,6 +321,7 @@ export function measureRun(text: string, style: FontStyle): RunMeasurement {
 
     // Use advance width for individual characters
     let charWidth = charMetrics.width;
+    if (char === ' ') charWidth += widening;
 
     // Add letter spacing after each character except the last
     if (letterSpacing && i < text.length - 1) {

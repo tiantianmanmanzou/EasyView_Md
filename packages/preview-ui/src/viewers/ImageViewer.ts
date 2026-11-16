@@ -1,15 +1,19 @@
 import * as React from 'react';
+import { isPreviewWritableFile } from '@easyview/contracts';
 import { extension, h, UniversalFilePreview, loadingElement, ViewerError, usePreviewAppearance, type ViewerProps } from './shared';
 import { usePreviewAssets } from '../assets';
 import { tPreview } from '../preview.i18n';
 import { PreviewAppearanceContext } from '../appearanceContext';
+import type { PreviewHost } from '../types';
 import {
   DocumentRouteShell,
   useDocumentRouteTheme,
   useToolbarPinned,
 } from './DocumentRouteChrome';
+import { IMAGE_FRAME_SELECTOR, useImageEditor } from './ImageEditor';
+import type { FileViewerHandle } from '@file-viewer/react-full';
 
-export function ImageViewer({ descriptor }: ViewerProps): React.ReactElement {
+export function ImageViewer({ descriptor, host }: ViewerProps & { host?: PreviewHost }): React.ReactElement {
   const suffix = extension(descriptor.fileName);
   const assets = usePreviewAssets();
   // HEIC needs an isolated decoder host; chrome matches other images (DocumentChrome).
@@ -29,7 +33,44 @@ export function ImageViewer({ descriptor }: ViewerProps): React.ReactElement {
       body: h(HeicImageViewer, { descriptor, heicHostUrl: assets.heicHostUrl }),
     });
   }
+  if (host?.writeBytes && isPreviewWritableFile(descriptor.fileName)) {
+    return h(EditableImageViewer, {
+      key: descriptor.sessionId,
+      descriptor,
+      host,
+      writeBytes: host.writeBytes.bind(host),
+    });
+  }
   return h(UniversalFilePreview, { descriptor, loadingLabel: tPreview('image.loadingViewer') });
+}
+
+/** Preview whose toolbar carries rotate / crop, applied on the shown picture. After a save it shows the saved picture. */
+function EditableImageViewer({ descriptor, host, writeBytes }: ViewerProps & {
+  host: PreviewHost;
+  writeBytes: NonNullable<PreviewHost['writeBytes']>;
+}): React.ReactElement {
+  const [savedUrl, setSavedUrl] = React.useState<string | null>(null);
+  const viewerRef = React.useRef<FileViewerHandle | null>(null);
+  React.useEffect(() => () => {
+    if (savedUrl) URL.revokeObjectURL(savedUrl);
+  }, [savedUrl]);
+  const shown = savedUrl ? { ...descriptor, contentUrl: savedUrl } : descriptor;
+  const editor = useImageEditor({
+    descriptor,
+    sourceUrl: shown.contentUrl,
+    viewerRef,
+    writeBytes,
+    host,
+    onSaved: (saved) => setSavedUrl(URL.createObjectURL(saved)),
+  });
+  return h(UniversalFilePreview, {
+    key: shown.contentUrl,
+    descriptor: shown,
+    loadingLabel: tPreview('image.loadingViewer'),
+    toolbarExtra: editor.actions,
+    viewerRef,
+    overlay: editor.overlay ? { target: IMAGE_FRAME_SELECTOR, content: editor.overlay } : undefined,
+  });
 }
 
 function DocumentImageShell({

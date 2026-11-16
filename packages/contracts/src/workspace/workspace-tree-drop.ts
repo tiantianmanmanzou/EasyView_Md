@@ -280,17 +280,15 @@ export async function collectWorkspaceExternalDropSources(
     return { sourcePaths, sourceUris, items: [] };
   }
 
+  // Drag data is only readable during the drop event: take every entry before the first await.
+  const entries = Array.from(dataTransfer.items ?? [], getAsFileSystemEntry).filter((entry) => entry !== null);
+  const files = Array.from(dataTransfer.files);
   const items: WorkspaceExternalDropContentItem[] = [];
-  const transferItems = Array.from(dataTransfer.items ?? []);
-  let walked = false;
-  for (const item of transferItems) {
-    const entry = getAsFileSystemEntry(item);
-    if (!entry) continue;
-    walked = true;
+  for (const entry of entries) {
     await walkFileSystemEntry(entry, '', items);
   }
-  if (!walked) {
-    for (const file of Array.from(dataTransfer.files)) {
+  if (entries.length === 0) {
+    for (const file of files) {
       items.push({
         kind: 'file',
         relativePath: file.name,

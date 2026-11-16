@@ -30,6 +30,22 @@ describe('DesktopTabRegistry', () => {
     expect(registry.get('a')).toMatchObject({ kind: 'editor', dirty: true });
   });
 
+  it('opens a browser tab beside documents and persists its address', () => {
+    const registry = new DesktopTabRegistry();
+    const browser = registry.openBrowser({ id: 'browser-1', url: 'https://example.com', fileName: 'example.com' });
+    registry.openBrowser({ url: 'https://example.com', fileName: 'again' });
+    expect(registry.snapshot().tabs.filter((tab) => tab.kind === 'browser')).toHaveLength(1);
+    expect(registry.active()?.id).toBe(browser.id);
+    registry.updateBrowser(browser.id, { title: 'Example', fileName: 'Example', loading: false, canGoBack: true });
+    expect(registry.get(browser.id)).toMatchObject({ fileName: 'Example', canGoBack: true, loading: false });
+    expect(registry.persisted()).toContainEqual({ id: 'browser-1', kind: 'browser', url: 'https://example.com' });
+    const renamed = registry.renameBrowser('page.html', 'moved.html', 'moved.html', 'file:///tmp/moved.html');
+    expect(renamed).toEqual([]);
+    registry.openBrowser({ id: 'local', url: 'file:///tmp/page.html', fileName: 'page.html', relativePath: 'page.html' });
+    expect(registry.renameBrowser('page.html', 'moved.html', 'moved.html', 'file:///tmp/moved.html')).toEqual(['local']);
+    expect(registry.get('local')).toMatchObject({ relativePath: 'moved.html', url: 'file:///tmp/moved.html' });
+  });
+
   it('persists file identity without renderer-only state', () => {
     const registry = new DesktopTabRegistry();
     registry.openEditor(p('/tmp/a.md'), 'a.md', 'a');

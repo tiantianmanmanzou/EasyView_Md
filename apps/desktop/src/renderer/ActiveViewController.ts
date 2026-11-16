@@ -9,16 +9,18 @@ import type { EasyViewDesktopApi } from '../preload/desktopApi';
 import { renderDesktopTabBar } from './renderDesktopTabBar';
 import { readToolbarPinned, subscribeToolbarVisibility, writeToolbarPinned } from '@easyview/preview-ui/toolbar';
 import { tDesktop } from './desktopRenderer.i18n';
+import { mountBrowserChrome, showBrowserTab } from './browser/browserChrome';
 
 export type ActiveWorkspaceView =
   | { kind: 'empty' }
   | { kind: 'history'; tabId: string; filePath: string }
   | { kind: 'editor'; tabId: string; filePath: string }
-  | { kind: 'preview'; tabId: string; relativePath: string };
+  | { kind: 'preview'; tabId: string; relativePath: string }
+  | { kind: 'browser'; tabId: string; url: string };
 
 interface PreviewIsland {
   open(relativePath: string): Promise<boolean>;
-  close(): Promise<void>;
+  close(): Promise<boolean>;
   dispose(): void;
 }
 
@@ -37,6 +39,7 @@ interface GroupPane {
   tabBar: HTMLElement;
   editorMount: HTMLElement;
   previewRoot: HTMLElement;
+  browserHost: HTMLElement;
   toolbarToggle: HTMLButtonElement;
 }
 
@@ -69,7 +72,7 @@ export class ActiveViewController {
     if (!this.snapshot) return;
     for (const group of this.snapshot.groups) {
       const tab = group.tabs.find((item) => item.id === group.activeTabId);
-      if (!tab || tab.kind === 'editor' || tab.kind === 'history' || !previewPathMatches(absolutePath, tab.relativePath)) continue;
+      if (!tab || tab.kind !== 'preview' || !previewPathMatches(absolutePath, tab.relativePath)) continue;
       const island = this.islands.get(group.id);
       if (!island) continue;
       const key = previewKey(tab.id, tab.relativePath);
@@ -136,6 +139,7 @@ export class ActiveViewController {
       tabBar: this.options.tabBar,
       editorMount: this.options.editorBody,
       previewRoot: this.options.previewBody,
+      browserHost: this.ensureBrowserHost(this.options.previewBody.parentElement ?? root),
       toolbarToggle: this.createToolbarButton(root),
     };
     this.bindPaneFocus(pane);
@@ -235,10 +239,11 @@ export class ActiveViewController {
     const previewRoot = document.createElement('div');
     previewRoot.className = 'desktop-preview-root';
     previewRoot.hidden = true;
-    surface.append(editorMount, previewRoot);
+    const browserHost = this.ensureBrowserHost(surface);
+    surface.append(editorMount, previewRoot, browserHost);
     content.append(surface);
     root.append(tabBar, content);
-    const pane = { groupId, root, tabBar, editorMount, previewRoot, toolbarToggle: this.createToolbarButton(root) };
+    const pane = { groupId, root, tabBar, editorMount, previewRoot, browserHost, toolbarToggle: this.createToolbarButton(root) };
     this.bindPaneFocus(pane);
     return pane;
   }
@@ -274,15 +279,46 @@ export class ActiveViewController {
     return split;
   }
 
+  private ensureBrowserHost(parent: HTMLElement): HTMLElement {
+    const existing = parent.querySelector<HTMLElement>(':scope > .desktop-browser-host');
+    if (existing) return existing;
+    const host = document.createElement('div');
+    host.className = 'desktop-browser-host';
+    host.hidden = true;
+    mountBrowserChrome(host);
+    parent.append(host);
+    return host;
+  }
+
   private async showPaneTab(pane: GroupPane, tab: DesktopTab | null, request: number): Promise<void> {
-    pane.toolbarToggle.hidden = !tab || tab.kind === 'history';
+    pane.toolbarToggle.hidden = !tab || tab.kind === 'history' || tab.kind === 'browser';
     const history = this.historyViews.get(pane.groupId);
     if (history && history.tabId !== tab?.id) { history.view.dispose(); this.historyViews.delete(pane.groupId); }
     if (tab?.kind !== 'preview') this.shownPreviews.delete(pane.groupId);
+    if (tab?.kind === 'browser') {
+      const previousPreview = this.shownPreviews.get(pane.groupId);
+      if (this.islands.get(pane.groupId) && !(await this.islands.get(pane.groupId)!.close())) {
+        const previousTabId = previousPreview?.slice(0, previousPreview.indexOf('\0'));
+        if (previousTabId) void this.options.api.tabs.activate(previousTabId);
+        return;
+      }
+      pane.editorMount.hidden = true;
+      pane.previewRoot.hidden = true;
+      pane.browserHost.hidden = false;
+      showBrowserTab(pane.browserHost, tab);
+      return;
+    }
+    pane.browserHost.hidden = true;
+    delete pane.browserHost.dataset.tabId;
     if (tab?.kind === 'history') {
       pane.editorMount.hidden = true; pane.previewRoot.hidden = false;
       if (history?.tabId === tab.id) return;
-      await this.islands.get(pane.groupId)?.close();
+      const previousPreview = this.shownPreviews.get(pane.groupId);
+      if (this.islands.get(pane.groupId) && !(await this.islands.get(pane.groupId)!.close())) {
+        const previousTabId = previousPreview?.slice(0, previousPreview.indexOf('\0'));
+        if (previousTabId) void this.options.api.tabs.activate(previousTabId);
+        return;
+      }
       const result = await this.options.api.timeline.comparison(tab.id);
       if (request !== this.previewRequest) return;
       if (!result.ok) { pane.previewRoot.textContent = result.message; return; }
@@ -297,7 +333,12 @@ export class ActiveViewController {
       return;
     }
     if (tab.kind === 'editor') {
-      await this.islands.get(pane.groupId)?.close();
+      const previousPreview = this.shownPreviews.get(pane.groupId);
+      if (this.islands.get(pane.groupId) && !(await this.islands.get(pane.groupId)!.close())) {
+        const previousTabId = previousPreview?.slice(0, previousPreview.indexOf('\0'));
+        if (previousTabId) void this.options.api.tabs.activate(previousTabId);
+        return;
+      }
       if (request !== this.previewRequest) return;
       pane.editorMount.hidden = false;
       pane.previewRoot.hidden = true;
@@ -307,11 +348,16 @@ export class ActiveViewController {
     pane.previewRoot.hidden = false;
     const key = previewKey(tab.id, tab.relativePath);
     if (this.shownPreviews.get(pane.groupId) === key) return;
+    const previousKey = this.shownPreviews.get(pane.groupId);
     const island = await this.getIsland(pane);
     if (request !== this.previewRequest) return;
     this.shownPreviews.set(pane.groupId, key);
     if (!(await island.open(tab.relativePath)) && this.shownPreviews.get(pane.groupId) === key) {
-      this.shownPreviews.delete(pane.groupId);
+      // User cancelled leaving a dirty preview — stay on the previous file and restore its tab.
+      if (previousKey) this.shownPreviews.set(pane.groupId, previousKey);
+      else this.shownPreviews.delete(pane.groupId);
+      const previousTabId = previousKey?.slice(0, previousKey.indexOf('\0'));
+      if (previousTabId) void this.options.api.tabs.activate(previousTabId);
     }
   }
 
@@ -319,6 +365,8 @@ export class ActiveViewController {
     pane.toolbarToggle.hidden = true;
     pane.editorMount.hidden = true;
     pane.previewRoot.hidden = true;
+    pane.browserHost.hidden = true;
+    delete pane.browserHost.dataset.tabId;
     if (notify) this.options.onViewChanged(this.state);
   }
 
@@ -327,7 +375,11 @@ export class ActiveViewController {
       ? { kind: 'empty' }
       : tab.kind === 'editor'
         ? { kind: 'editor', tabId: tab.id, filePath: tab.filePath }
-        : tab.kind === 'history' ? { kind: 'history', tabId: tab.id, filePath: tab.filePath } : { kind: 'preview', tabId: tab.id, relativePath: tab.relativePath };
+        : tab.kind === 'history'
+          ? { kind: 'history', tabId: tab.id, filePath: tab.filePath }
+          : tab.kind === 'browser'
+            ? { kind: 'browser', tabId: tab.id, url: tab.url }
+            : { kind: 'preview', tabId: tab.id, relativePath: tab.relativePath };
     this.options.onViewChanged(this.state);
   }
 

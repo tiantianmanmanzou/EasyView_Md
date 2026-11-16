@@ -57,6 +57,7 @@ import {
   refreshAiChangeMarkers,
 } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
+import { tContextMenu } from './ui/contextMenu.i18n';
 import { createPasteParser, extractTextblockLineMap, extractBlockLineMap } from './editor/lib/MarkdownParser';
 import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
 import { LazyExportController } from './controllers/lazyExportController';
@@ -92,6 +93,7 @@ import type { EditorHostTransport, EditorSourceDocumentRequest, GitRefreshStatus
 import { EditorSyncAdapter } from './sync/editorSyncAdapter';
 import type { EasyViewEditorHostActions } from './hosts/host-actions';
 export type { EasyViewEditorHostActions } from './hosts/host-actions';
+export { browserLinkFromEvent } from './ui/browserLinkTarget';
 import { handleHostMessageSideEffect } from './hostMessageRouter';
 import { tEditorCore } from './editorCore.i18n';
 import { createEditorDomContext, type EasyViewEditorRoot } from './runtime/editorDomContext';
@@ -2067,6 +2069,9 @@ function initEditor() {
     () => contextPasteParser,
     dom.root,
     error => showToast(error instanceof Error ? error.message : String(error)),
+    hostActions.openInBuiltinBrowser
+      ? { label: tContextMenu('openInBrowser'), open: hostActions.openInBuiltinBrowser }
+      : undefined,
   );
 
   // Create Find & Replace panel

@@ -7,6 +7,8 @@ import type {
   WorkspaceSearchResult,
 } from '@easyview/contracts';
 import type {
+  DesktopBrowserLayout,
+  DesktopBrowserState,
   DesktopMenuCommand,
   DesktopMenuState,
   DesktopThemeMode,
@@ -119,6 +121,13 @@ const api: EasyViewDesktopApi = {
     getTheme: () => ipcRenderer.invoke('app.getTheme') as Promise<OperationResult<DesktopThemeMode>>,
     newWindow: () => ipcRenderer.invoke('app.newWindow') as Promise<OperationResult<boolean>>,
     getZoomFactor: () => webFrame.getZoomFactor(),
+    onZoomChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, zoomFactor: unknown) => {
+        if (typeof zoomFactor === 'number' && Number.isFinite(zoomFactor)) listener(zoomFactor);
+      };
+      ipcRenderer.on('app.zoomChanged', handler);
+      return subscription(() => ipcRenderer.removeListener('app.zoomChanged', handler));
+    },
     locale,
     openedFileAtLaunch: process.argv.includes(DESKTOP_OPENED_FILE_AT_LAUNCH_ARGUMENT),
     onThemeChanged: (listener) => {
@@ -340,6 +349,32 @@ const api: EasyViewDesktopApi = {
       assertString(sessionId, 'sessionId');
       return ipcRenderer.invoke('preview.java.decompile', sessionId);
     },
+    setDirty: (relativePath: string, dirty: boolean) => {
+      assertRelativePath(relativePath);
+      return ipcRenderer.invoke('preview.setDirty', { relativePath, dirty: !!dirty });
+    },
+    confirmUnsaved: async (fileName: string) => {
+      assertString(fileName, 'fileName');
+      const result = await ipcRenderer.invoke('preview.confirmUnsaved', fileName);
+      if (result && result.ok && (result.value === 'save' || result.value === 'discard' || result.value === 'cancel')) {
+        return result.value as 'save' | 'discard' | 'cancel';
+      }
+      return 'cancel';
+    },
+    onSaveRequest: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, request: { requestId: string; relativePath: string }) => listener(request);
+      ipcRenderer.on('preview.saveRequest', handler);
+      return subscription(() => ipcRenderer.removeListener('preview.saveRequest', handler));
+    },
+    reportSaveResult: (requestId: string, ok: boolean) => {
+      assertString(requestId, 'requestId');
+      return ipcRenderer.invoke('preview.saveResult', { requestId, ok: !!ok });
+    },
+    onClearDirty: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, relativePath: string) => listener(relativePath);
+      ipcRenderer.on('preview.clearDirty', handler);
+      return subscription(() => ipcRenderer.removeListener('preview.clearDirty', handler));
+    },
     onFileChanged: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, relativePaths: string[]) => listener(relativePaths);
       ipcRenderer.on('preview.fileChanged', handler);
@@ -377,6 +412,35 @@ const api: EasyViewDesktopApi = {
     extract: (sessionId: string) => {
       assertString(sessionId, 'sessionId');
       return ipcRenderer.invoke('archive.extract', { sessionId });
+    },
+  },
+  browser: {
+    open: (url?: string) => {
+      if (url !== undefined) assertString(url, 'url');
+      return ipcRenderer.invoke('browser.open', url);
+    },
+    navigate: (tabId, address) => {
+      assertString(tabId, 'tabId');
+      assertString(address, 'address');
+      return ipcRenderer.invoke('browser.navigate', tabId, address);
+    },
+    back: (tabId) => {
+      assertString(tabId, 'tabId');
+      return ipcRenderer.invoke('browser.back', tabId);
+    },
+    forward: (tabId) => {
+      assertString(tabId, 'tabId');
+      return ipcRenderer.invoke('browser.forward', tabId);
+    },
+    reload: (tabId) => {
+      assertString(tabId, 'tabId');
+      return ipcRenderer.invoke('browser.reload', tabId);
+    },
+    setLayout: (layout: DesktopBrowserLayout) => { ipcRenderer.send('browser.layout', layout); },
+    onState: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: DesktopBrowserState) => listener(state);
+      ipcRenderer.on('browser.state', handler);
+      return subscription(() => ipcRenderer.removeListener('browser.state', handler));
     },
   },
   menu: {

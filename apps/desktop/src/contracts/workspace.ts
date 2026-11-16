@@ -47,7 +47,16 @@ export interface PersistedPreviewTab {
   pinned?: boolean;
 }
 
-export type PersistedDesktopTab = PersistedEditorTab | PersistedPreviewTab;
+export interface PersistedBrowserTab {
+  id: string;
+  kind: 'browser';
+  url: string;
+  /** Set when the tab was opened from a workspace HTML file. */
+  relativePath?: string;
+  pinned?: boolean;
+}
+
+export type PersistedDesktopTab = PersistedEditorTab | PersistedPreviewTab | PersistedBrowserTab;
 
 export interface DesktopEditorTab extends PersistedEditorTab {
   fileName: string;
@@ -61,6 +70,22 @@ export interface DesktopEditorTab extends PersistedEditorTab {
 export interface DesktopPreviewTab extends PersistedPreviewTab {
   fileName: string;
   route: PreviewRoute;
+  /** Unsaved edits in the preview viewer (xlsx / docx / text / image). */
+  dirty?: boolean;
+}
+
+export interface DesktopBrowserTab {
+  id: string;
+  kind: 'browser';
+  url: string;
+  title: string;
+  fileName: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  /** Workspace-relative path for a local HTML file; absent for external pages. */
+  relativePath?: string;
+  pinned?: boolean;
 }
 
 export interface DesktopHistoryTab {
@@ -75,7 +100,7 @@ export interface DesktopHistoryTab {
   /** History comparisons are transient and never pinned. */
   pinned?: never;
 }
-export type DesktopTab = DesktopEditorTab | DesktopPreviewTab | DesktopHistoryTab;
+export type DesktopTab = DesktopEditorTab | DesktopPreviewTab | DesktopBrowserTab | DesktopHistoryTab;
 
 export interface DesktopEditorGroupSnapshot {
   id: string;

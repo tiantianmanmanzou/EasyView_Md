@@ -17,7 +17,7 @@ import type {
   PreviewTextResult,
   SaveDocumentResult,
 } from '../contracts';
-import type { DesktopMenuCommand, DesktopMenuState, DesktopTabsApi, WorkspaceApi } from '../contracts';
+import type { DesktopBrowserApi, DesktopMenuCommand, DesktopMenuState, DesktopTabsApi, WorkspaceApi } from '../contracts';
 
 export type DesktopDocumentResult = OperationResult<DocumentOpenResult | null>;
 export type DesktopSaveResult = OperationResult<SaveDocumentResult | null>;
@@ -64,6 +64,7 @@ export interface EasyViewDesktopApi {
     newWindow(): Promise<OperationResult<boolean>>;
     /** Page zoom set by View › 放大/缩小 (1 = 100%). */
     getZoomFactor(): number;
+    onZoomChanged(listener: (zoomFactor: number) => void): { unsubscribe(): void };
     /** UI locale resolved by the main process at startup; changing it requires a restart. */
     readonly locale: Locale;
     /** True when this window was created for a document opened by the launch (argv / Finder). */
@@ -74,6 +75,7 @@ export interface EasyViewDesktopApi {
   };
   workspace: WorkspaceApi;
   tabs: DesktopTabsApi;
+  browser: DesktopBrowserApi;
   preview: {
     open(relativePath: string): Promise<OperationResult<PreviewDescriptor>>;
     close(sessionId: string): Promise<OperationResult<boolean>>;
@@ -81,6 +83,15 @@ export interface EasyViewDesktopApi {
     writeBytes(sessionId: string, bytesBase64: string): Promise<OperationResult<PreviewWriteResult>>;
     sendHttp(request: HttpPreviewRequest): Promise<OperationResult<HttpPreviewResponse>>;
     decompileJava(sessionId: string): Promise<OperationResult<JavaDecompileResult>>;
+    /** Report unsaved state for tab dots / quit prompts. */
+    setDirty(relativePath: string, dirty: boolean): Promise<OperationResult<boolean>>;
+    /** Save / Don't Save / Cancel while leaving a dirty preview. */
+    confirmUnsaved(fileName: string): Promise<'save' | 'discard' | 'cancel'>;
+    /** Main asks the renderer to save a dirty preview during close-all. */
+    onSaveRequest(listener: (request: { requestId: string; relativePath: string }) => void): { unsubscribe(): void };
+    reportSaveResult(requestId: string, ok: boolean): Promise<OperationResult<boolean>>;
+    /** Main discarded unsaved preview edits — drop local dirty without prompting again. */
+    onClearDirty(listener: (relativePath: string) => void): { unsubscribe(): void };
     /** Workspace-relative paths of open previews whose file was changed outside the preview. */
     onFileChanged(listener: (relativePaths: string[]) => void): { unsubscribe(): void };
   };

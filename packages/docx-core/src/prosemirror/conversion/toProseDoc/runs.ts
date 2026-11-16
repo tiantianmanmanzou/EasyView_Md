@@ -25,6 +25,7 @@ import type {
   TextFormatting,
 } from '../../../types/document';
 import { emuToPixels } from '../../../docx/imageParser';
+import { symbolText } from '../../../docx/symbolChars';
 import { isWrapNone } from '../../../docx/wrapTypes';
 import { mergeTextFormatting } from '../../../utils/textFormattingMerge';
 import type { StyleResolver } from '../../styles';
@@ -155,6 +156,12 @@ function convertRunContent(content: RunContent, marks: ReturnType<typeof schema.
     case 'fieldChar':
     case 'instrText':
       return [schema.node('field', { fieldKind: 'marker', fieldType: 'MARKER', rawContent: content }, undefined, marks)];
+
+    case 'symbol': {
+      const text = symbolText(content.font, content.char);
+      if (!text) return [];
+      return [schema.text(text, [...marks, schema.mark('symbol', { font: content.font, char: content.char })])];
+    }
 
     case 'tab':
       // Carry marks (including any enclosing hyperlink) so round-trip keeps

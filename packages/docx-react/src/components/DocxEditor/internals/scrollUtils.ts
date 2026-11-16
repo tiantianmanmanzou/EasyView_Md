@@ -5,7 +5,7 @@
  * `renderPages` rebuilds the DOM.
  */
 
-import { findBodyPmAnchors } from '@easyview/docx-core/layout-bridge';
+import { findBodyPmAnchors, getTotalDocumentHeight } from '@easyview/docx-core/layout-bridge';
 import type { Layout } from '@easyview/docx-core/layout-engine';
 import { VIEWPORT_PADDING_BOTTOM, VIEWPORT_PADDING_TOP } from './styles';
 
@@ -74,11 +74,9 @@ export function findPaintedPmStartAtOrBefore(pages: HTMLElement, pmPos: number):
   return best;
 }
 
-/** Min-height of the zoom/viewport wrapper: top + bottom padding plus the page stack. */
+/** Min-height of the zoom/viewport wrapper: top + bottom padding plus the rows of pages. */
 export function viewportMinHeightPx(layout: Layout, pageGap: number): number {
-  const n = layout.pages.length;
-  const pagesHeight = layout.pages.reduce((sum, page) => sum + page.size.h, 0);
   return (
-    pagesHeight + Math.max(0, n - 1) * pageGap + VIEWPORT_PADDING_TOP + VIEWPORT_PADDING_BOTTOM
+    getTotalDocumentHeight({ ...layout, pageGap }) + VIEWPORT_PADDING_TOP + VIEWPORT_PADDING_BOTTOM
   );
 }

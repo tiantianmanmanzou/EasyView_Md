@@ -29,7 +29,6 @@ const toolbar: Record<string, ButtonName[]> = {
   'sample.pdf': ['sidebar', 'search', 'zoomIn', 'zoomOut', 'zoomReset', 'download', 'print', 'html', 'theme'],
   'sample.png': ['zoomIn', 'zoomOut', 'download', 'print', 'html', 'theme'],
   'sample.pptx': ['sidebar', 'search', 'zoomIn', 'zoomOut', 'download', 'print', 'html', 'theme', 'slideshow'],
-  'sample.html': ['htmlSource', 'htmlPreview', 'theme'],
   'sample.json': ['theme'],
   'sample.svg': ['theme'],
   'sample.zip': ['extract', 'theme'],
@@ -75,7 +74,18 @@ async function exercise(ws: PreviewWorkspace, file: string, name: ButtonName) {
     case 'search': {
       await target.click();
       const input = root(page).locator('input[type="search"], input[placeholder*="搜索"], .preview-search input').first();
-      await expect(input).toBeVisible(); await page.keyboard.press('Escape');
+      await expect(input).toBeVisible();
+      const group = root(page).locator('.file-viewer-web-search');
+      if (await group.count()) {
+        // Match navigation (‹ › × n/m) stays out of the toolbar until a search has run.
+        const matchNav = group.locator('button:not([type="submit"]), .file-viewer-web-search-count');
+        await expect(matchNav.filter({ visible: true })).toHaveCount(0);
+        await input.fill('e'); await input.press('Enter');
+        await expect(group.locator('.file-viewer-web-search-count')).toBeVisible();
+        await group.getByRole('button', { name: '清除搜索' }).click();
+        await expect(matchNav.filter({ visible: true })).toHaveCount(0);
+      }
+      await page.keyboard.press('Escape');
       return;
     }
     case 'zoomIn': case 'zoomOut': case 'zoomReset': {

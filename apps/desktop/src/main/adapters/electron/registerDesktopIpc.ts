@@ -57,6 +57,7 @@ import {
   setDesktopMenuState,
   setWorkspaceState,
   success,
+  syncTabState,
   tabRegistry,
   tabSnapshot,
   trustedRenderer,
@@ -84,6 +85,8 @@ import { recentFolderStore } from '../../application/workspace/recentFolders';
 import { explorerExpansionStore } from '../../application/workspace/explorerExpansion';
 import { tRuntime } from '../../application/host/desktopRuntime.i18n';
 import { tIpc } from './desktopIpc.i18n';
+import { tBrowser } from '../../application/browser/browser.i18n';
+import { applyBrowserLayout, goBrowser, isBrowserLayout, navigateBrowserTab, openBrowserTab, resolveBrowserAddress } from '../../application/browser/browserWorkflow';
 
 function registerHandle<TArgs extends unknown[], TResult>(
   channel: string,
@@ -300,6 +303,49 @@ export function registerDesktopIpc(): void {
     return closeGroupTabs(tabId);
   });
 
+  registerHandle('browser.open', async (event, url: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (url === undefined || url === '') return openBrowserTab();
+    if (typeof url !== 'string') return failure('INVALID_ARGUMENT', tBrowser('invalidAddress'));
+    const resolved = await resolveBrowserAddress(url);
+    if (!resolved) return failure('INVALID_ARGUMENT', tBrowser('invalidAddress'));
+    return openBrowserTab({ url: resolved });
+  });
+
+  registerHandle('browser.navigate', async (event, tabId: unknown, address: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof tabId !== 'string' || typeof address !== 'string') return failure('INVALID_ARGUMENT', tBrowser('invalidAddress'));
+    return navigateBrowserTab(tabId, address);
+  });
+
+  registerHandle('browser.back', (event, tabId: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof tabId !== 'string') return failure('INVALID_ARGUMENT', tIpc('tabs.invalidId'));
+    return goBrowser(tabId, 'back');
+  });
+
+  registerHandle('browser.forward', (event, tabId: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof tabId !== 'string') return failure('INVALID_ARGUMENT', tIpc('tabs.invalidId'));
+    return goBrowser(tabId, 'forward');
+  });
+
+  registerHandle('browser.reload', (event, tabId: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof tabId !== 'string') return failure('INVALID_ARGUMENT', tIpc('tabs.invalidId'));
+    return goBrowser(tabId, 'reload');
+  });
+
+  registerEvent('browser.layout', (event, layout: unknown) => {
+    if (!trustedRenderer(event) || !isBrowserLayout(layout)) return;
+    applyBrowserLayout(layout);
+  });
+
   registerHandle('tabs.openPreview', async (event, relativePath: unknown) => {
     const denied = assertTrustedRenderer(event);
     if (denied) return denied;
@@ -371,6 +417,36 @@ export function registerDesktopIpc(): void {
     } catch (error) {
       return previewFailure(error);
     }
+  });
+
+  registerHandle('preview.setDirty', async (event, request: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!isRecord(request) || typeof request.relativePath !== 'string' || typeof request.dirty !== 'boolean') {
+      return failure('INVALID_ARGUMENT', tIpc('preview.invalidWriteRequest'));
+    }
+    tabRegistry.setPreviewDirty(request.relativePath, request.dirty);
+    syncTabState();
+    return success(true);
+  });
+
+  registerHandle('preview.confirmUnsaved', async (event, fileName: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (typeof fileName !== 'string') return failure('INVALID_ARGUMENT', tIpc('preview.invalidWriteRequest'));
+    const { confirmUnsavedPreview } = await import('../../application/document/documentWorkflow');
+    return success(await confirmUnsavedPreview(fileName));
+  });
+
+  registerHandle('preview.saveResult', async (event, request: unknown) => {
+    const denied = assertTrustedRenderer(event);
+    if (denied) return denied;
+    if (!isRecord(request) || typeof request.requestId !== 'string' || typeof request.ok !== 'boolean') {
+      return failure('INVALID_ARGUMENT', tIpc('preview.invalidWriteRequest'));
+    }
+    const { completePreviewSave } = await import('../../application/document/documentWorkflow');
+    completePreviewSave(request.requestId, request.ok);
+    return success(true);
   });
 
   registerHandle('preview.http.send', async (event, request: unknown) => {

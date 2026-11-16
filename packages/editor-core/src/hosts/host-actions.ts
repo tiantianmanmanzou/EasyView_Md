@@ -6,4 +6,6 @@ export interface EasyViewEditorHostActions {
   persistOpenEditorShortcut?(shortcut: string): void;
   insertIntoITerm?(text: string): void;
   openChatWithPrompt?(prompt: string): void;
+  /** Desktop only. Plain link clicks stay on the system browser. */
+  openInBuiltinBrowser?(url: string): void;
 }

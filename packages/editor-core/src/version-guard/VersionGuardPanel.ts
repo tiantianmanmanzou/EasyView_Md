@@ -526,7 +526,7 @@ export class VersionGuardPanel {
           option.addEventListener('contextmenu', event => {
             event.preventDefault();
             event.stopPropagation();
-            this.openBranchMenu(event.clientX, event.clientY, branch);
+            this.openBranchMenu(event.clientX, event.clientY, repo, branch);
           });
         }
         list.append(option);
@@ -632,11 +632,12 @@ export class VersionGuardPanel {
       { label: tGuard('copyRelativePath'), shortcut: mac ? '⇧⌥⌘C' : 'Ctrl+Shift+Alt+C', run: () => this.entryRequest('copyRelativePath', entry) },
     ]);
   }
-  /** Branch picker: copy the short name or the git ref path (`refs/heads/…` / `refs/remotes/…` / `refs/tags/…`). */
-  private openBranchMenu(x: number, y: number, branch: GuardBranch): void {
+  /** Branch picker: copy the short name, the repository's local root, or its remote URL. */
+  private openBranchMenu(x: number, y: number, repo: GuardRepository, branch: GuardBranch): void {
     this.openMenu(x, y, [
       { label: tGuard('copyName'), run: () => this.copyText(branch.name) },
-      { label: tGuard('copyPath'), run: () => this.copyText(branchRefPath(branch)) },
+      { label: tGuard('copyLocalPath'), run: () => this.copyText(repo.rootPath) },
+      { label: tGuard('copyRemoteUrl'), run: async () => this.copyText(await this.options.client.request({ method: 'remoteUrl', repository: repo.id, branch: branchRefPath(branch) }) as string) },
     ]);
   }
   private async copyText(text: string): Promise<void> {

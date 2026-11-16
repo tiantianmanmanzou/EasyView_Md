@@ -16,13 +16,16 @@ import {
 import {
   DocumentChromeActions,
   DocumentExportIcon,
+  DocumentHighlightIcon,
   DocumentPrintIcon,
   DocumentRouteShell,
   easyViewThemeToDocxColorMode,
   readWordCommentsSidebarOpen,
+  readWordShowHighlights,
   useDocumentRouteTheme,
   useToolbarPinned,
   writeWordCommentsSidebarOpen,
+  writeWordShowHighlights,
 } from './DocumentRouteChrome';
 import { isEditableWordFile } from '../word/editableFormats';
 import { tPreview } from '../preview.i18n';
@@ -31,6 +34,9 @@ import { PREVIEW_SIDEBAR_ICON } from '../previewSidebarToggle';
 import { readWordOutlinePinned, writeWordOutlinePinned } from './wordOutlinePrefs';
 import { installWordOutline, wordOutlineLabels } from './wordOutlinePane';
 import { createDocxEditorOutlineSource, type DocxOutlineEditor } from './wordOutlineSources';
+import { DocumentStatusBar, useDocumentPages } from './DocumentStatusBar';
+import { readTwoPageView, TwoPageButton, twoPageFitScale, writeTwoPageView } from './twoPageView';
+import { usePreviewUnsaved } from './usePreviewUnsaved';
 
 export interface DocViewerProps extends ViewerProps {
   host?: PreviewHost;
@@ -49,8 +55,12 @@ export function DocViewer({ descriptor, host }: DocViewerProps): React.ReactElem
   if (isEditableWordFile(descriptor.fileName) && host?.writeBytes) {
     return h(WordEditor, { descriptor, host });
   }
-  return h(UniversalFilePreview, { descriptor, loadingLabel: tPreview('word.loadingViewer') });
+  // .doc pages are fixed boxes the stage can lay out in pairs; the read-only DOCX renderer stretches
+  // every page frame across the full width.
+  return h(UniversalFilePreview, { descriptor, loadingLabel: tPreview('word.loadingViewer'), twoPage: extension(descriptor.fileName) === '.doc' });
 }
+
+const DOCX_PAGE_SELECTOR = '.paged-editor__pages > .layout-page';
 
 function WordEditor({ descriptor, host }: { descriptor: ViewerProps['descriptor']; host: PreviewHost }): React.ReactElement {
   const editorRef = React.useRef<DocxEditorRef | null>(null);
@@ -64,6 +74,7 @@ function WordEditor({ descriptor, host }: { descriptor: ViewerProps['descriptor'
   const { themeMode, cycleTheme, viewerVars } = useDocumentRouteTheme(descriptor.relativePath);
   const { pinnedOpen, togglePinned } = useToolbarPinned();
   const [commentsSidebarOpen, setCommentsSidebarOpen] = React.useState(readWordCommentsSidebarOpen);
+  const [showHighlights, setShowHighlights] = React.useState(readWordShowHighlights);
   // DocxEditor auto-opens the comments sidebar when a document has comments.
   // Accept opens only from comment-related controls — not theme / save / other toolbar clicks.
   const commentsSidebarUserGestureRef = React.useRef(false);
@@ -71,6 +82,52 @@ function WordEditor({ descriptor, host }: { descriptor: ViewerProps['descriptor'
   const mountRef = React.useRef<HTMLDivElement | null>(null);
   const outlineListenersRef = React.useRef(new Set<() => void>());
   const [sidebarHidden, setSidebarHidden] = React.useState(() => !readWordOutlinePinned());
+  const [zoomPercent, setZoomPercent] = React.useState(100);
+  const pages = useDocumentPages(mountRef, loading || !DocxEditor || !buffer ? null : DOCX_PAGE_SELECTOR);
+  const zoomPercentRef = React.useRef(zoomPercent);
+  zoomPercentRef.current = zoomPercent;
+  const applyZoom = React.useCallback((percent: number) => {
+    const next = Math.min(400, Math.max(10, Math.round(percent)));
+    setZoomPercent(next);
+    editorRef.current?.setZoom(next / 100);
+    return next;
+  }, []);
+  const [twoPageOn, setTwoPageOn] = React.useState(readTwoPageView);
+  const spreadZoomRef = React.useRef<number | null>(null);
+  const fitSpread = React.useCallback(() => {
+    const mount = mountRef.current;
+    // Zoom scales the pages with a transform; their layout boxes stay at 100%.
+    const scale = mount ? twoPageFitScale(mount, DOCX_PAGE_SELECTOR, 1) : null;
+    if (scale) spreadZoomRef.current = applyZoom(scale * 100);
+  }, [applyZoom]);
+  const hasPages = (pages?.count ?? 0) > 0;
+  React.useEffect(() => {
+    if (twoPageOn && hasPages) fitSpread();
+  }, [twoPageOn, hasPages, fitSpread]);
+  React.useEffect(() => {
+    const mount = mountRef.current;
+    if (!twoPageOn || !hasPages || !mount) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (zoomPercentRef.current === spreadZoomRef.current) fitSpread();
+      });
+    });
+    observer.observe(mount);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [twoPageOn, hasPages, fitSpread]);
+  const toggleTwoPage = React.useCallback(() => {
+    setTwoPageOn((on) => {
+      writeTwoPageView(!on);
+      return !on;
+    });
+    spreadZoomRef.current = null;
+    if (twoPageOn) applyZoom(100);
+  }, [applyZoom, twoPageOn]);
   const toggleSidebar = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     setSidebarHidden((hidden) => {
@@ -278,10 +335,13 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
       await persist(bytes);
     } catch (reason) {
       setSaveMessage(reason instanceof Error ? reason.message : tPreview('common.saveFailed'));
+      throw reason;
     } finally {
       setSaving(false);
     }
   }, [persist, saving]);
+
+  usePreviewUnsaved(host, dirty, save);
 
   const exportDocx = React.useCallback(async () => {
     try {
@@ -329,8 +389,24 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
           printDoc();
         },
       }, h(DocumentPrintIcon, null)),
+      h('button', {
+        type: 'button',
+        className: 'preview-chrome-btn preview-chrome-btn--icon',
+        title: tPreview('word.showHighlights'),
+        'aria-label': tPreview('word.showHighlights'),
+        'aria-pressed': showHighlights,
+        disabled: !buffer,
+        onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+          event.stopPropagation();
+          setShowHighlights((show) => {
+            writeWordShowHighlights(!show);
+            return !show;
+          });
+        },
+      }, h(DocumentHighlightIcon, null)),
+      h(TwoPageButton, { on: twoPageOn, disabled: !buffer, onToggle: toggleTwoPage }),
     )
-  ), [buffer, exportDocx, printDoc, saving]);
+  ), [buffer, exportDocx, printDoc, saving, showHighlights, toggleTwoPage, twoPageOn]);
 
   // Sidebar toggle leads the formatting bar (before undo), like installPreviewSidebarToggle does
   // for @file-viewer toolbars. DocxEditor only appends toolbarExtra, so the button is portaled
@@ -389,7 +465,7 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
       saving,
       saveDisabled: !buffer,
       saveMessage,
-      onSave: () => { void save(); },
+      onSave: () => { if (host.requestHostSave) host.requestHostSave(); else void save().catch(() => {}); },
       documentActions,
     })
   ), [buffer, cycleTheme, dirty, documentActions, save, saveMessage, saving, themeMode, togglePinned]);
@@ -412,6 +488,7 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
           className: 'preview-word-mount',
           ref: mountRef,
           'data-preview-sidebar': sidebarHidden ? 'hidden' : 'visible',
+          'data-highlights': showHighlights ? 'visible' : 'hidden',
         },
           sidebarToggle,
           h(DocxEditor, {
@@ -425,7 +502,12 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
             showToolbar: true,
             showFileOpen: false,
             showHelpMenu: false,
-            showZoomControl: true,
+            showZoomControl: false,
+            pagesPerRow: twoPageOn ? 2 : 1,
+            onZoomChange: (zoom: number) => {
+              const next = Math.round(zoom * 100);
+              setZoomPercent((current) => (current === next ? current : next));
+            },
             // EasyView renders its own outline rail (see installWordOutline above).
             showOutline: false,
             showOutlineButton: false,
@@ -459,5 +541,26 @@ html, body, .preview-root, .preview-shell, .preview-content, .preview-word-edito
             style: { height: '100%', width: '100%' },
           }),
         ),
+    !(loading || !DocxEditor || !buffer) ? h(DocumentStatusBar, {
+      pages,
+      percent: zoomPercent,
+      onPercent: applyZoom,
+      onStep: (direction) => { applyZoom(zoomPercent + direction * 10); },
+      onReset: () => { applyZoom(100); },
+      onFit: () => {
+        if (twoPageOn) {
+          fitSpread();
+          return;
+        }
+        const mount = mountRef.current;
+        const pages = mount?.querySelector('.paged-editor__pages');
+        const scroller = pages?.closest('.ep-root') as HTMLElement | null;
+        const zoom = zoomPercent / 100;
+        if (!pages || !scroller || zoom <= 0) return;
+        const natural = pages.getBoundingClientRect().width / zoom;
+        const available = scroller.clientWidth - 48;
+        if (natural > 0 && available > 0) applyZoom((available / natural) * 100);
+      },
+    }) : null,
   );
 }

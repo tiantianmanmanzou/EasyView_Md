@@ -31,6 +31,8 @@ export type RunFormatting = {
   strike?: boolean;
   color?: string;
   highlight?: string;
+  /** The background is a w:highlight palette color, not run shading (hosts may hide highlights). */
+  paletteHighlight?: boolean;
   fontFamily?: string;
   fontSize?: number;
   letterSpacing?: number;
@@ -990,6 +992,8 @@ export type Layout = {
   footers?: Record<string, HeaderFooterLayout>;
   /** Gap between pages in pixels (for rendering). */
   pageGap?: number;
+  /** Pages side by side in each rendered row (two-page view); 1 when unset. */
+  pagesPerRow?: number;
 };
 
 // =============================================================================
@@ -1035,6 +1039,8 @@ export type LayoutOptions = {
   columns?: ColumnLayout;
   /** Gap between rendered pages (for UI). */
   pageGap?: number;
+  /** Pages side by side in each rendered row (for UI). */
+  pagesPerRow?: number;
   /** Default line height multiplier. */
   defaultLineHeight?: number;
   /** Header content heights by variant. */

@@ -24,6 +24,8 @@ export interface ResolvedFont {
   hasGoogleEquivalent: boolean;
   /** OS/2 single-line ratio: (usWinAscent + usWinDescent) / unitsPerEm (no external leading) */
   singleLineRatio: number;
+  /** The font sets ASCII (spaces included) half an em wide, like the Chinese GB fonts. */
+  halfWidthAscii: boolean;
 }
 
 /**
@@ -40,6 +42,7 @@ interface FontMapping {
   fallbackStack: string[];
   /** OS/2 single-line ratio: (usWinAscent + usWinDescent) / unitsPerEm (no external leading) */
   singleLineRatio: number;
+  halfWidthAscii?: boolean;
 }
 
 /**
@@ -220,12 +223,14 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     category: 'sans-serif',
     fallbackStack: ['SimHei', 'Noto Sans SC', 'sans-serif'],
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: true,
   },
   simsun: {
     googleFont: 'Noto Serif SC',
     category: 'serif',
     fallbackStack: ['SimSun', 'Noto Serif SC', 'serif'],
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: true,
   },
   'malgun gothic': {
     googleFont: 'Noto Sans KR',
@@ -246,12 +251,14 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     category: 'serif',
     fallbackStack: ['SimSun', '宋体', 'Noto Serif SC', 'serif'],
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: true,
   },
   黑体: {
     googleFont: 'Noto Sans SC',
     category: 'sans-serif',
     fallbackStack: ['SimHei', '黑体', 'Noto Sans SC', 'sans-serif'],
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: true,
   },
   微软雅黑: {
     googleFont: 'Noto Sans SC',
@@ -270,12 +277,14 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     category: 'serif',
     fallbackStack: ['FangSong', '仿宋', 'Noto Serif SC', 'serif'],
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: true,
   },
   楷体: {
     googleFont: 'Noto Serif SC',
     category: 'serif',
     fallbackStack: ['KaiTi', '楷体', 'Noto Serif SC', 'serif'],
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: true,
   },
 
   // Traditional Chinese
@@ -423,6 +432,10 @@ const CJK_FONT_ALIASES: Record<string, string> = {
   dengxian: '等线',
   fangsong: '仿宋',
   kaiti: '楷体',
+  仿宋_gb2312: '仿宋',
+  fangsong_gb2312: '仿宋',
+  楷体_gb2312: '楷体',
+  kaiti_gb2312: '楷体',
   // Traditional Chinese
   pmingliu: '新細明體',
   mingliu: '細明體',
@@ -449,12 +462,16 @@ export function resolveFontFamily(docxFontName: string): ResolvedFont {
   const mapping = FONT_MAPPINGS[CJK_FONT_ALIASES[normalizedName] ?? normalizedName];
 
   if (mapping) {
+    // An aliased spelling (e.g. 仿宋_GB2312) stays first so an installed copy still wins.
+    const named = mapping.fallbackStack.some((font) => font.toLowerCase() === normalizedName);
+    const stack = named ? mapping.fallbackStack : [docxFontName.trim(), ...mapping.fallbackStack];
     return {
       googleFont: mapping.googleFont,
-      cssFallback: mapping.fallbackStack.map(quoteFontName).join(', '),
+      cssFallback: stack.map(quoteFontName).join(', '),
       originalFont: docxFontName,
       hasGoogleEquivalent: true,
       singleLineRatio: mapping.singleLineRatio,
+      halfWidthAscii: mapping.halfWidthAscii ?? false,
     };
   }
 
@@ -468,6 +485,7 @@ export function resolveFontFamily(docxFontName: string): ResolvedFont {
     originalFont: docxFontName,
     hasGoogleEquivalent: false,
     singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    halfWidthAscii: false,
   };
 }
 

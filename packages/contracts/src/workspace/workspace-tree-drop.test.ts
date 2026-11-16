@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  collectWorkspaceExternalDropSources,
   filePathToWorkspaceDropUri,
   isExternalWorkspaceFileDrag,
   parseWorkspaceDropPlainPath,
@@ -128,5 +129,21 @@ describe('workspace tree external drop helpers', () => {
       uri: filePathToWorkspaceDropUri('C:\\docs\\a.md'),
     });
     expect(parseWorkspaceDropPlainPath('docs/notes.md')).toEqual({});
+  });
+
+  it('imports every dropped file, though the drag data turns unreadable once the drop handler yields', async () => {
+    let readable = true;
+    const file = (name: string) => ({ name, arrayBuffer: async () => new TextEncoder().encode(name).buffer as ArrayBuffer });
+    const entry = (name: string) => ({ isFile: true, isDirectory: false, name, file: (done: (value: ReturnType<typeof file>) => void) => done(file(name)) });
+    const names = ['a.md', 'b.md', 'c.md'];
+    const pending = collectWorkspaceExternalDropSources({
+      types: ['Files'],
+      getData: () => '',
+      files: names.map(file),
+      items: names.map((name) => ({ webkitGetAsEntry: () => (readable ? entry(name) : null) })),
+    });
+    readable = false;
+    const sources = await pending;
+    expect(sources.items.map((item) => item.relativePath)).toEqual(names);
   });
 });

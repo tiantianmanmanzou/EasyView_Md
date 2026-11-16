@@ -449,7 +449,7 @@ describe('VersionGuardPanel', () => {
       panel.dispose();
     } finally { vi.useRealTimers(); }
   });
-  it('offers Copy Name and Copy Path on branch picker rows', async () => {
+  it('offers Copy Name, Local Path, and Remote URL on branch picker rows', async () => {
     const guard = client(); const base = guard.request;
     guard.request = vi.fn(async (request: GuardRequest) => {
       if (request.method === 'branches') {
@@ -463,6 +463,7 @@ describe('VersionGuardPanel', () => {
         ];
       }
       if (request.method === 'remoteVisibility') { guard.calls.push(request); return { origin: 'private', github: 'public' }; }
+      if (request.method === 'remoteUrl') { guard.calls.push(request); return request.branch === 'refs/remotes/origin/release/v2.0.0' ? 'https://github.com/acme/repo.git' : 'https://github.com/acme/fallback.git'; }
       return base(request);
     });
     const panel = new VersionGuardPanel({ client: guard }); document.body.append(panel.element);
@@ -475,29 +476,30 @@ describe('VersionGuardPanel', () => {
     design.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
     const menu = () => document.body.querySelector<HTMLElement>('.guard-context-menu');
     expect(menu()).not.toBeNull();
-    expect([...menu()!.querySelectorAll('button')].map(button => button.textContent)).toEqual(['复制名称', '复制路径']);
+    expect([...menu()!.querySelectorAll('button')].map(button => button.textContent)).toEqual(['复制名称', '复制本地路径', '复制仓库地址']);
     expect(panel.element.querySelector('.guard-branch-picker')).not.toBeNull();
     [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制名称')!.click();
     for (let i = 0; i < 3; i++) await flush();
     expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({ method: 'copyText', text: 'design_zxy' });
     expect(panel.element.querySelector('.guard-branch-picker')).not.toBeNull();
 
-    const remote = [...panel.element.querySelectorAll('.guard-branch-item')].find(row => row.querySelector('.guard-branch-item-name')?.textContent === 'origin/release/v2.0.0')!;
-    remote.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
-    [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制路径')!.click();
-    for (let i = 0; i < 3; i++) await flush();
-    expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({
-      method: 'copyText',
-      text: 'refs/remotes/origin/release/v2.0.0',
-    });
-    // Local branch Copy Path uses refs/heads/…
     const local = [...panel.element.querySelectorAll('.guard-branch-item')].find(row => row.querySelector('.guard-branch-item-name')?.textContent === 'design_zxy')!;
     local.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
-    [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制路径')!.click();
+    [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制本地路径')!.click();
     for (let i = 0; i < 3; i++) await flush();
     expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({
       method: 'copyText',
-      text: 'refs/heads/design_zxy',
+      text: '/repo',
+    });
+
+    const remote = [...panel.element.querySelectorAll('.guard-branch-item')].find(row => row.querySelector('.guard-branch-item-name')?.textContent === 'origin/release/v2.0.0')!;
+    remote.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
+    [...menu()!.querySelectorAll('button')].find(button => button.textContent === '复制仓库地址')!.click();
+    for (let i = 0; i < 3; i++) await flush();
+    expect(guard.calls).toContainEqual({ method: 'remoteUrl', repository: '/repo', branch: 'refs/remotes/origin/release/v2.0.0' });
+    expect(guard.calls.filter(call => call.method === 'copyText').at(-1)).toMatchObject({
+      method: 'copyText',
+      text: 'https://github.com/acme/repo.git',
     });
     // Visibility is asked once per repository until the repository is refreshed.
     const reopen = async () => { for (let i = 0; i < 2; i++) { panel.element.querySelector<HTMLButtonElement>('.guard-branch-name')!.click(); for (let j = 0; j < 3; j++) await flush(); } };

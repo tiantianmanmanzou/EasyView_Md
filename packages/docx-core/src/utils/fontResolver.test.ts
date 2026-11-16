@@ -36,3 +36,17 @@ describe('fontResolver — native CJK theme typefaces map to matched Noto webfon
     });
   }
 });
+
+describe('fontResolver — Chinese GB fonts', () => {
+  test('_GB2312 names resolve to their family and keep the original name first', () => {
+    const resolved = resolveFontFamily('仿宋_GB2312');
+    expect(resolved.cssFallback).toBe('仿宋_GB2312, FangSong, 仿宋, "Noto Serif SC", serif');
+    expect(resolved.halfWidthAscii).toBe(true);
+    expect(resolveFontFamily('楷体_GB2312').googleFont).toBe('Noto Serif SC');
+  });
+
+  test('only the GB fonts set ASCII half an em wide', () => {
+    expect(['宋体', 'SimSun', '黑体', '仿宋', 'KaiTi'].map((name) => resolveFontFamily(name).halfWidthAscii)).toEqual([true, true, true, true, true]);
+    expect(['微软雅黑', '等线', 'Calibri', 'Times New Roman'].map((name) => resolveFontFamily(name).halfWidthAscii)).toEqual([false, false, false, false]);
+  });
+});

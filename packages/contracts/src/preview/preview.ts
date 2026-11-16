@@ -28,7 +28,7 @@ export type PreviewChrome = 'basic' | 'document';
  * Routes the host may accept for `writeBytes`. Suffix-level writability is
  * finer-grained via `writableSuffixes` / `isPreviewWritableFile`.
  */
-export const WRITABLE_PREVIEW_ROUTES = ['text', 'word', 'spreadsheet'] as const;
+export const WRITABLE_PREVIEW_ROUTES = ['text', 'word', 'spreadsheet', 'image'] as const;
 export type WritablePreviewRoute = (typeof WRITABLE_PREVIEW_ROUTES)[number];
 
 export interface PreviewRouteDefinition {
@@ -87,7 +87,7 @@ export const PREVIEW_ROUTES: readonly PreviewRouteDefinition[] = [
     '.env', '.editorconfig', '.gitignore', '.dockerignore', '.npmrc',
     '.prettierrc', '.eslintrc',
   ], maxSourceBytes: 32 * MEBIBYTE, mimeType: 'text/plain; charset=utf-8' },
-  { route: 'image', chrome: 'document', suffixes: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.icns', '.tif', '.tiff', '.heic', '.heif'], maxSourceBytes: 128 * MEBIBYTE, mimeType: 'application/octet-stream' },
+  { route: 'image', chrome: 'document', writableSuffixes: ['.png', '.jpg', '.jpeg', '.webp'], suffixes: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.icns', '.tif', '.tiff', '.heic', '.heif'], maxSourceBytes: 128 * MEBIBYTE, mimeType: 'application/octet-stream' },
   { route: 'svg', chrome: 'basic', suffixes: ['.svg'], maxSourceBytes: 16 * MEBIBYTE, mimeType: 'image/svg+xml' },
   { route: 'html', chrome: 'basic', suffixes: ['.html', '.htm'], maxSourceBytes: 32 * MEBIBYTE, mimeType: 'text/html; charset=utf-8' },
   { route: 'pdf', chrome: 'document', suffixes: ['.pdf'], maxSourceBytes: 256 * MEBIBYTE, mimeType: 'application/pdf' },

@@ -20,6 +20,11 @@ vi.mock('vscode', () => {
   const uri = (fsPath: string) => ({ scheme: 'file', fsPath, path: fsPath, toString: () => `file://${fsPath}`, with: () => uri(fsPath) });
   return {
     Uri: { file: uri, joinPath: (base: { fsPath: string }, ...parts: string[]) => uri([base.fsPath, ...parts].join('/')) },
+    EventEmitter: class {
+      event = () => ({ dispose() {} });
+      fire() {}
+      dispose() {}
+    },
     RelativePattern: class { constructor(readonly base: unknown, readonly pattern: string) {} },
     window: { registerCustomEditorProvider: vi.fn() },
     workspace: {

@@ -602,6 +602,27 @@ function extractParagraphContent(paragraph: PMNode): ParagraphContent[] {
       return;
     }
 
+    const symbolMark = node.marks.find((m) => m.type.name === 'symbol');
+    if (symbolMark && node.text) {
+      if (currentRun) {
+        content.push(currentRun);
+        currentRun = null;
+        currentMarksKey = null;
+      }
+      if (currentHyperlink) {
+        content.push(currentHyperlink);
+        currentHyperlink = null;
+      }
+      const formatting = marksToTextFormatting(node.marks.filter((m) => m !== symbolMark));
+      const { font, char } = symbolMark.attrs as { font: string; char: string };
+      content.push({
+        type: 'run',
+        formatting: Object.keys(formatting).length > 0 ? formatting : undefined,
+        content: Array.from(node.text, () => ({ type: 'symbol' as const, font, char })),
+      });
+      return;
+    }
+
     // Check for tracked change marks (insertion/deletion)
     const insertionMark = node.marks.find((m) => m.type.name === 'insertion');
     const deletionMark = node.marks.find((m) => m.type.name === 'deletion');

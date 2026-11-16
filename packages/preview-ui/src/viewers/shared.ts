@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import type { FileViewerProps, ViewerOptions } from '@file-viewer/react-full';
+import type { FileViewerHandle, FileViewerProps, ViewerOptions, ViewerState } from '@file-viewer/react-full';
 import type { PreviewDescriptor } from '@easyview/contracts';
 import { EASYVIEW_THEME_PALETTE } from '@easyview/contracts';
 import { getLocale } from '@easyview/contracts/i18n';
@@ -25,6 +25,7 @@ import { installCompactToolbarIcons } from '../toolbarIcons';
 import { installPptxThumbnails } from './pptxThumbnails';
 import { installPptxViewerRegistry, pptxSlideMaterializer } from './pptxSlideMaterializer';
 import { PPTX_OUTLINE_SUFFIX, readPptxSlideTitles } from './pptxOutline';
+import { installDocFloatingPictures, readDocFloatingPictures } from './docFloatingPictures';
 import { installPdfOutlineFirst } from './pdfOutlineFirst';
 import { installPdfPageNavEnhance } from './pdfPageNavEnhance';
 import { installPreviewSidebarResize } from '../previewSidebarResize';
@@ -32,6 +33,8 @@ import { installWordOutline, wordOutlineLabels, type WordOutlineController } fro
 import { createDocxPreviewOutlineSource, createMsdocOutlineSource, readDocxPackageHeadings } from './wordOutlineSources';
 import { installPreviewSidebarToggle } from '../previewSidebarToggle';
 import { installCompactToolbarSearch } from '../toolbarSearch';
+import { DocumentStatusBar, useDocumentPages } from './DocumentStatusBar';
+import { readTwoPageView, TwoPageButton, twoPageFitScale, writeTwoPageView } from './twoPageView';
 
 export type { PreviewDescriptor };
 
@@ -379,6 +382,29 @@ function useFileViewerToolbarChromeSlot(
   return host;
 }
 
+/** The first rendered element matching `selector`, followed across renderer re-mounts. */
+function useRenderedElement(
+  rootRef: React.RefObject<HTMLElement | null>,
+  selector: string | null,
+): HTMLElement | null {
+  const [element, setElement] = React.useState<HTMLElement | null>(null);
+
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!selector || !root) return;
+    const find = () => setElement(root.querySelector<HTMLElement>(selector));
+    find();
+    const observer = new MutationObserver(find);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      setElement(null);
+    };
+  }, [selector, rootRef]);
+
+  return element;
+}
+
 /** Mounts the PPTX thumbnail rail on each rendered deck; theme reloads replace the deck DOM. */
 function usePptxThumbnails(
   rootRef: React.RefObject<HTMLDivElement | null>,
@@ -488,6 +514,32 @@ function useWordOutline(
   }, [enabled, rootRef, contentUrl, fileName]);
 }
 
+/** Floating pictures (stamps, signatures, logos) that the .doc renderer leaves out. */
+function useDocFloatingPictures(
+  rootRef: React.RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+  contentUrl: string,
+  fileName: string,
+): void {
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!enabled || !root || !WORD_BINARY_SUFFIX.test(fileName)) return;
+    let disposed = false;
+    let uninstall: (() => void) | null = null;
+    void fetch(contentUrl)
+      .then(response => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(String(response.status)))))
+      .then((data) => {
+        const layer = readDocFloatingPictures(data);
+        if (layer && !disposed) uninstall = installDocFloatingPictures(root, layer);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      uninstall?.();
+    };
+  }, [enabled, rootRef, contentUrl, fileName]);
+}
+
 /** PDF navigation opens on the outline; documents without one fall back to pages. */
 function usePdfOutlineFirst(rootRef: React.RefObject<HTMLDivElement | null>, enabled: boolean): void {
   React.useEffect(() => {
@@ -513,10 +565,23 @@ function usePreviewSidebarResize(rootRef: React.RefObject<HTMLDivElement | null>
   }, [enabled, rootRef]);
 }
 
-export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('common.loadingFileViewer'), toolbarExtra }: ViewerProps & {
+/** Routes with the bottom status bar, and the elements their renderers draw one page or slide into. */
+const DOCUMENT_PAGE_SELECTORS: Partial<Record<string, string>> = {
+  pdf: '.pdfViewer > .page',
+  powerpoint: '.flyfish-pptx-slide-slot',
+  word: '.msdoc-page, .docx-wrapper > section',
+};
+
+export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('common.loadingFileViewer'), toolbarExtra, viewerRef: outerViewerRef, overlay, twoPage = false }: ViewerProps & {
   loadingLabel?: string;
+  /** Offer the two-page toggle; the renderer's pages (DOCUMENT_PAGE_SELECTORS) then lay out two per row. */
+  twoPage?: boolean;
   /** Route actions placed before the theme button in the viewer toolbar. */
   toolbarExtra?: React.ReactNode;
+  /** Receives the viewer handle, for routes that drive the rendered file (e.g. image rotation). */
+  viewerRef?: React.RefObject<FileViewerHandle | null>;
+  /** Drawn inside the rendered element matching `target`, on top of the file (e.g. the image crop box). */
+  overlay?: { target: string; content: React.ReactNode };
 }): React.ReactElement {
   const assets = usePreviewAssets();
   const rootRef = React.useRef<HTMLDivElement | null>(null);
@@ -533,14 +598,73 @@ export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('comm
     resolvePreviewThemeMode(themeStorage, descriptor.relativePath)
   ));
   const appearance = appearanceFromThemeMode(themeMode);
+  const pageSelector = DOCUMENT_PAGE_SELECTORS[descriptor.route] ?? null;
+  const statusBar = pageSelector !== null;
+  const innerViewerRef = React.useRef<FileViewerHandle | null>(null);
+  const viewerRef = outerViewerRef ?? innerViewerRef;
+  const [zoomPercent, setZoomPercent] = React.useState(100);
+  const setZoomPercentRef = React.useRef(setZoomPercent);
+  setZoomPercentRef.current = setZoomPercent;
+  const onViewerState = React.useCallback((state: ViewerState) => {
+    const scale = state.zoom?.scale;
+    if (typeof scale !== 'number' || scale <= 0) return;
+    const next = Math.round(scale * 100);
+    setZoomPercentRef.current((current) => (current === next ? current : next));
+  }, []);
   const needsPptxWorker = descriptor.route === 'powerpoint';
   const needsArchiveWorker = descriptor.route === 'archive';
+  const pages = useDocumentPages(rootRef, Viewer && (!needsPptxWorker || pptxWorkerUrl) ? pageSelector : null);
+  const [twoPageOn, setTwoPageOn] = React.useState(readTwoPageView);
+  const spread = twoPage && statusBar && twoPageOn;
+  // Zoom the last two-page fit settled on; a resize refits only while the user has not zoomed since.
+  const spreadScaleRef = React.useRef<number | null>(null);
+  const fitSpread = React.useCallback(() => {
+    const root = rootRef.current, handle = viewerRef.current;
+    const scale = handle?.getZoomState()?.scale;
+    const next = root && pageSelector && scale ? twoPageFitScale(root, pageSelector, scale) : null;
+    if (!handle || !next) return;
+    void handle.applyViewState({ scale: next }).then(() => {
+      spreadScaleRef.current = handle.getZoomState()?.scale ?? next;
+    });
+  }, [pageSelector, viewerRef]);
+  const hasPages = (pages?.count ?? 0) > 0;
+  React.useEffect(() => {
+    if (spread && hasPages) fitSpread();
+  }, [spread, hasPages, fitSpread]);
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!spread || !root) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const scale = viewerRef.current?.getZoomState()?.scale;
+        if (scale && spreadScaleRef.current && Math.abs(scale - spreadScaleRef.current) < 0.01) fitSpread();
+      });
+    });
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [spread, fitSpread, viewerRef]);
+  const toggleTwoPage = React.useCallback(() => {
+    const next = !twoPageOn;
+    writeTwoPageView(next);
+    setTwoPageOn(next);
+    if (next) return;
+    spreadScaleRef.current = null;
+    // Back to each renderer's opening view: PDF fits the width, DOC fits up to actual size.
+    void (descriptor.route === 'pdf' ? viewerRef.current?.fitToView('width') : viewerRef.current?.resetZoom());
+  }, [descriptor.route, twoPageOn, viewerRef]);
   const toolbarChrome = useFileViewerToolbarChromeSlot(rootRef, !!Viewer, !!assets.compactToolbars);
+  const overlayHost = useRenderedElement(rootRef, Viewer && overlay ? overlay.target : null);
   useLiftPreviewThemeSurface(themeMode);
   usePptxThumbnails(rootRef, needsPptxWorker && !!Viewer && !!pptxWorkerUrl, descriptor.contentUrl, descriptor.fileName);
   usePdfOutlineFirst(rootRef, descriptor.route === 'pdf' && !!Viewer);
   usePdfPageNavEnhance(rootRef, descriptor.route === 'pdf' && !!Viewer);
   useWordOutline(rootRef, descriptor.route === 'word' && !!Viewer, descriptor.contentUrl, descriptor.fileName);
+  useDocFloatingPictures(rootRef, descriptor.route === 'word' && !!Viewer, descriptor.contentUrl, descriptor.fileName);
   usePreviewSidebarResize(rootRef, !!Viewer && (descriptor.route === 'pdf' || descriptor.route === 'powerpoint' || descriptor.route === 'word' || extension(descriptor.fileName) === '.xmind'));
 
   React.useEffect(() => {
@@ -644,7 +768,7 @@ export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('comm
     locale: getLocale() === 'en' ? 'en-US' : 'zh-CN',
     styleIsolation: 'none',
     // Keep toolbar mounted; .is-toolbar-collapsed animates it upward (do not destroy).
-    toolbar: { theme: false, position: 'top' },
+    toolbar: { theme: false, position: 'top', ...(statusBar ? { zoom: false } : {}) },
     pdf: { toolbar: false, thumbnails: true },
     ui: {
       density: 'compact',
@@ -683,6 +807,7 @@ export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('comm
     ? createPortal(
         h(React.Fragment, null,
           toolbarExtra,
+          twoPage && statusBar ? h(TwoPageButton, { on: spread, onToggle: toggleTwoPage }) : null,
           h('button', {
             type: 'button',
             className: 'preview-chrome-btn preview-chrome-btn--icon preview-toolbar-theme',
@@ -710,16 +835,33 @@ export function UniversalFilePreview({ descriptor, loadingLabel = tPreview('comm
     className: `preview-universal-viewer${pinnedOpen ? ' is-toolbar-pinned' : ' is-toolbar-collapsed'}`,
     'data-preview-theme': themeMode,
     'data-preview-chrome': 'document',
+    'data-two-page': spread ? 'on' : undefined,
     style: viewerVars,
   },
-    h(Viewer, {
+    h(Viewer as React.ComponentType<FileViewerProps & { ref?: React.Ref<FileViewerHandle | null> }>, {
+      ref: viewerRef,
       className: 'file-viewer-host',
       url: descriptor.contentUrl,
       filename: descriptor.fileName,
       options,
       style,
+      ...(statusBar ? { onStateChange: onViewerState } : {}),
     }),
+    statusBar ? h(DocumentStatusBar, {
+      pages,
+      percent: zoomPercent,
+      onPercent: (percent) => {
+        setZoomPercent(percent);
+        void viewerRef.current?.applyViewState({ scale: percent / 100 });
+      },
+      onStep: (direction) => {
+        void (direction < 0 ? viewerRef.current?.zoomOut() : viewerRef.current?.zoomIn());
+      },
+      onReset: () => { void viewerRef.current?.resetZoom(); },
+      onFit: () => { if (spread) fitSpread(); else void viewerRef.current?.fitToView('width'); },
+    }) : null,
     chromePortal,
+    overlayHost && overlay ? createPortal(overlay.content, overlayHost) : null,
     pinnedOpen || assets.compactToolbars
       ? null
       : h('button', {

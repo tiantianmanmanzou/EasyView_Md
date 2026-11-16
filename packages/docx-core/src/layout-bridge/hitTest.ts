@@ -157,19 +157,26 @@ export function hitTestPage(layout: Layout, point: Point): PageHit | null {
 }
 
 /**
+ * Heights of the rendered rows of pages: one page per row, or `layout.pagesPerRow` side by side
+ * (two-page view), each row as tall as its tallest page.
+ */
+function rowHeights(layout: Layout): number[] {
+  const perRow = Math.max(1, layout.pagesPerRow ?? 1);
+  const rows: number[] = [];
+  layout.pages.forEach((page, index) => {
+    const row = Math.floor(index / perRow);
+    rows[row] = Math.max(rows[row] ?? 0, page.size?.h ?? layout.pageSize.h);
+  });
+  return rows;
+}
+
+/**
  * Calculate the Y offset of a page from the top of the document.
  */
 export function getPageTop(layout: Layout, pageIndex: number): number {
   const pageGap = layout.pageGap ?? 0;
-  let y = 0;
-
-  for (let i = 0; i < pageIndex && i < layout.pages.length; i++) {
-    const page = layout.pages[i];
-    const pageHeight = page.size?.h ?? layout.pageSize.h;
-    y += pageHeight + pageGap;
-  }
-
-  return y;
+  const row = Math.floor(pageIndex / Math.max(1, layout.pagesPerRow ?? 1));
+  return rowHeights(layout).slice(0, row).reduce((y, height) => y + height + pageGap, 0);
 }
 
 /**
@@ -554,23 +561,12 @@ export function hitTest(
 // =============================================================================
 
 /**
- * Get the total document height (all pages + gaps).
+ * Get the total document height (all rows of pages + gaps).
  */
 export function getTotalDocumentHeight(layout: Layout): number {
-  if (layout.pages.length === 0) return 0;
-
-  const pageGap = layout.pageGap ?? 0;
-  let height = 0;
-
-  for (let i = 0; i < layout.pages.length; i++) {
-    const page = layout.pages[i];
-    height += page.size?.h ?? layout.pageSize.h;
-    if (i < layout.pages.length - 1) {
-      height += pageGap;
-    }
-  }
-
-  return height;
+  const rows = rowHeights(layout);
+  if (rows.length === 0) return 0;
+  return rows.reduce((sum, height) => sum + height, 0) + (rows.length - 1) * (layout.pageGap ?? 0);
 }
 
 /**

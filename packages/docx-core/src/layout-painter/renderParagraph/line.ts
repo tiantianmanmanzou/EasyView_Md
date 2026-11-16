@@ -23,6 +23,7 @@ import {
   type TabStop as TabCalcStop,
 } from '../../prosemirror/utils/tabCalculator';
 import { resolveFontFamily } from '../../utils/fontResolver';
+import { halfWidthSpaceExtra } from '../../layout-bridge/measuring/measureContainer';
 import {
   PARAGRAPH_CLASS_NAMES,
   isTextRun,
@@ -275,7 +276,9 @@ function createTextMeasurer(
     if (bold) parts.push('bold');
     parts.push(`${fontSizePx}px`, cssFallback);
     ctx.font = parts.join(' ');
-    return ctx.measureText(text).width;
+    const spaces = text.split(' ').length - 1;
+    const widening = spaces ? halfWidthSpaceExtra({ fontFamily, fontSize, bold, italic }) : 0;
+    return ctx.measureText(text).width + spaces * widening;
   };
 }
 

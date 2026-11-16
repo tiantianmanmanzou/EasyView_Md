@@ -28,8 +28,23 @@ import {
   spreadsheetDefaultStyle,
 } from '../spreadsheet/spreadsheetTheme';
 import { attachSpreadsheetWheelNormalization } from '../spreadsheet/spreadsheetWheel';
+import { attachSpreadsheetPaste } from '../spreadsheet/spreadsheetPaste';
+import { attachSpreadsheetFilter, patchSpreadsheetFilterRender } from '../spreadsheet/spreadsheetFilter';
+import { patchSpreadsheetSelector } from '../spreadsheet/spreadsheetSelector';
+import { guardSpreadsheetFocus } from '../spreadsheet/spreadsheetFocus';
+import {
+  bindSpreadsheetZoom,
+  clampZoom,
+  fitZoomPercent,
+  refreshSpreadsheetAfterZoom,
+  zoomPercentAfterWheel,
+  type SpreadsheetZoom,
+} from '../spreadsheet/spreadsheetZoom';
+import { ZoomControls } from './DocumentStatusBar';
+import type { XsSheetData } from '../spreadsheet/xSpreadsheetTypes';
 import { tPreview } from '../preview.i18n';
 import { usePreviewAssets } from '../assets';
+import { usePreviewUnsaved } from './usePreviewUnsaved';
 import { openSpreadsheetWorker } from '../spreadsheet/spreadsheetWorker';
 
 /** x-data-spreadsheet hardcodes these when computing sheet viewHeight (data_proxy). */
@@ -106,6 +121,38 @@ export function SpreadsheetViewer({ descriptor, host }: SpreadsheetViewerProps):
   return h(SpreadsheetEditor, { descriptor, host });
 }
 
+interface SheetCanvasOptions {
+  row?: { len?: number; height?: number };
+  col?: { len?: number; width?: number; indexWidth?: number; minWidth?: number };
+}
+
+/** Apply Excel zoom and default row/column size, then drop those fields so getData() cannot save them scaled. */
+function applySheetMetrics(
+  spreadsheet: XsSpreadsheetInstance,
+  index: number,
+  data: XsSheetData,
+  zoom: SpreadsheetZoom,
+  zoomBySheet: Map<number, number>,
+  metricsBySheet: Map<number, { row?: number; col?: number }>,
+): number {
+  const options = (spreadsheet as XsSpreadsheetInstance & { options?: SheetCanvasOptions }).options;
+  const prev = metricsBySheet.get(index);
+  const row = data.defaultRowPx ?? prev?.row;
+  const col = data.defaultColPx ?? prev?.col;
+  if (row !== undefined || col !== undefined) metricsBySheet.set(index, { row, col });
+  if (options) {
+    if (typeof row === 'number') options.row = { ...options.row, height: row };
+    if (typeof col === 'number') options.col = { ...options.col, width: col };
+  }
+  const percent = clampZoom(zoomBySheet.get(index) ?? data.zoom ?? 100);
+  zoom.scale = percent / 100;
+  zoomBySheet.set(index, percent);
+  delete data.zoom;
+  delete data.defaultRowPx;
+  delete data.defaultColPx;
+  return percent;
+}
+
 function SpreadsheetEditor({ descriptor, host }: { descriptor: ViewerProps['descriptor']; host: PreviewHost }): React.ReactElement {
   const assets = usePreviewAssets();
   const mountRef = React.useRef<HTMLDivElement | null>(null);
@@ -128,6 +175,10 @@ function SpreadsheetEditor({ descriptor, host }: { descriptor: ViewerProps['desc
   const { pinnedOpen, togglePinned } = useToolbarPinned();
   const themeModeRef = React.useRef(themeMode);
   themeModeRef.current = themeMode;
+  const zoomRef = React.useRef<SpreadsheetZoom>({ scale: 1 });
+  const zoomBySheet = React.useRef(new Map<number, number>());
+  const metricsBySheet = React.useRef(new Map<number, { row?: number; col?: number }>());
+  const [zoomPercent, setZoomPercent] = React.useState(100);
 
   React.useEffect(() => {
     let disposed = false;
@@ -141,6 +192,8 @@ function SpreadsheetEditor({ descriptor, host }: { descriptor: ViewerProps['desc
     const abort = new AbortController();
     let resizeObserver: ResizeObserver | null = null;
     let detachWheel: (() => void) | null = null;
+    let detachPaste: (() => void) | null = null;
+    let detachFilter: (() => void) | null = null;
 
     async function boot(): Promise<void> {
       setLoading(true);
@@ -208,7 +261,7 @@ html, body, .preview-root, .preview-shell, .preview-content {
           showGrid: true,
           showContextmenu: true,
           showBottomBar: false,
-          style: spreadsheetDefaultStyle(themeModeRef.current),
+          style: { ...spreadsheetDefaultStyle(themeModeRef.current), valign: 'bottom' },
           view: {
             // Library subtracts fixed 41+41; compensate from measured CSS chrome
             // (toolbar may be collapsed to display:none — fixed 30px math left a bottom gap).
@@ -218,12 +271,36 @@ html, body, .preview-root, .preview-shell, .preview-content {
         });
         ownedSpreadsheet = spreadsheet;
         sheetRef.current = spreadsheet;
+        guardSpreadsheetFocus(mountRef.current);
+        const percent = applySheetMetrics(
+          spreadsheet,
+          workbook.overview.active,
+          sheets[0],
+          zoomRef.current,
+          zoomBySheet.current,
+          metricsBySheet.current,
+        );
+        if (!disposed) setZoomPercent(percent);
         spreadsheet.loadData(sheets);
+        bindSpreadsheetZoom(spreadsheet, zoomRef.current);
         spreadsheet.change(() => {
           if (!disposed && !switching.current) { revisionRef.current++; setDirty(true); }
         });
         applyXSpreadsheetTheme(spreadsheet, themeModeRef.current);
-        detachWheel = attachSpreadsheetWheelNormalization(mountRef.current);
+        detachWheel = attachSpreadsheetWheelNormalization(mountRef.current, {
+          onZoomDelta: (deltaY) => {
+            if (disposed) return;
+            const next = zoomPercentAfterWheel(zoomRef.current.scale * 100, deltaY);
+            zoomRef.current.scale = next / 100;
+            zoomBySheet.current.set(activeSheet.current, next);
+            setZoomPercent(next);
+            refreshSpreadsheetAfterZoom(sheetRef.current);
+          },
+        });
+        detachPaste = attachSpreadsheetPaste(spreadsheet, mountRef.current);
+        detachFilter = attachSpreadsheetFilter(spreadsheet);
+        patchSpreadsheetSelector(spreadsheet.sheet);
+        spreadsheet.sheet?.selector?.resetAreaOffset?.();
 
         // Portal mount after formatting buttons (divider/visuals live on embedded DocumentChrome, like Word).
         const toolbar = mountRef.current.querySelector<HTMLElement>('.x-spreadsheet-toolbar');
@@ -270,6 +347,10 @@ html, body, .preview-root, .preview-shell, .preview-content {
       workingSheets.current.clear();
       detachWheel?.();
       detachWheel = null;
+      detachPaste?.();
+      detachPaste = null;
+      detachFilter?.();
+      detachFilter = null;
       resizeObserver?.disconnect();
       releaseSpreadsheet();
       if (generationRef.current === generation) generationRef.current++;
@@ -319,10 +400,13 @@ html, body, .preview-root, .preview-shell, .preview-content {
       setSaveMessage(tPreview('common.savedSize', { size: (result.size / 1024).toFixed(result.size >= 10240 ? 0 : 1) }));
     } catch (reason) {
       if (generationRef.current === generation) setSaveMessage(reason instanceof Error ? reason.message : tPreview('common.saveFailed'));
+      throw reason;
     } finally {
       if (generationRef.current === generation) setSaving(false);
     }
   }, [descriptor.sessionId, host, saving]);
+
+  usePreviewUnsaved(host, dirty, save);
 
   const switchSheet = async (index: number): Promise<void> => {
     const workbook = workbookRef.current, spreadsheet = sheetRef.current;
@@ -331,13 +415,32 @@ html, body, .preview-root, .preview-shell, .preview-content {
     workingSheets.current.set(activeSheet.current, structuredClone(spreadsheet.getData()[0]));
     switching.current = true; setLoading(true);
     try {
-      const data = workingSheets.current.get(index) ?? await workbook.load(index);
+      const data = structuredClone(workingSheets.current.get(index) ?? await workbook.load(index));
       if (generation !== generationRef.current) return;
       activeSheet.current = index; setSelectedSheet(index);
-      spreadsheet.loadData([structuredClone(data)]);
+      const percent = applySheetMetrics(spreadsheet, index, data, zoomRef.current, zoomBySheet.current, metricsBySheet.current);
+      setZoomPercent(percent);
+      spreadsheet.loadData([data]);
+      bindSpreadsheetZoom(spreadsheet, zoomRef.current);
+      patchSpreadsheetFilterRender(spreadsheet);
       applyXSpreadsheetTheme(spreadsheet, themeModeRef.current);
     } catch (reason) { if (generation === generationRef.current) setSaveMessage(String(reason)); }
     finally { switching.current = false; if (generation === generationRef.current) setLoading(false); }
+  };
+
+  const changeZoom = (percent: number): void => {
+    const next = clampZoom(percent);
+    zoomRef.current.scale = next / 100;
+    zoomBySheet.current.set(activeSheet.current, next);
+    setZoomPercent(next);
+    // reload (not reRender): selection overlay and scrollbars must remeasure scaled rows/cols.
+    refreshSpreadsheetAfterZoom(sheetRef.current);
+  };
+  const fitZoom = (): void => {
+    const mount = mountRef.current;
+    const spreadsheet = sheetRef.current;
+    if (!mount || !spreadsheet) return;
+    changeZoom(fitZoomPercent(spreadsheet, mount.clientWidth, zoomRef.current.scale));
   };
 
   const toolbarChrome = chromeSlot
@@ -350,7 +453,7 @@ html, body, .preview-root, .preview-shell, .preview-content {
           dirty,
           saving,
           saveMessage,
-          onSave: () => { void save(); },
+          onSave: () => { if (host.requestHostSave) host.requestHostSave(); else void save().catch(() => {}); },
         }),
         chromeSlot,
       )
@@ -373,13 +476,21 @@ html, body, .preview-root, .preview-shell, .preview-content {
       ref: mountRef,
       'aria-busy': loading || undefined,
     }),
-    h('div', { className: 'preview-spreadsheet-tabs', role: 'tablist' },
-      ...sheetNames.map((name, index) => h('button', { key: index, role: 'tab', 'aria-selected': selectedSheet === index, disabled: loading, onClick: () => { void switchSheet(index); } }, name))),
+    h('div', { className: 'preview-statusbar preview-spreadsheet-footer' },
+      h('div', { className: 'preview-spreadsheet-tabs', role: 'tablist' },
+        ...sheetNames.map((name, index) => h('button', { key: index, role: 'tab', 'aria-selected': selectedSheet === index, disabled: loading, onClick: () => { void switchSheet(index); } }, name))),
+      h(ZoomControls, {
+        percent: zoomPercent,
+        onPercent: changeZoom,
+        onStep: (direction) => { changeZoom(zoomPercent + direction * 10); },
+        onReset: () => { changeZoom(100); },
+        onFit: fitZoom,
+      }),
+    ),
     toolbarChrome,
     loading ? h('div', { className: 'preview-spreadsheet-loading' }, loadingElement(tPreview('spreadsheet.loadingEditor'))) : null,
   );
 }
-
 
 function resolveXSpreadsheetFactory(moduleValue: unknown): XsSpreadsheetFactory {
   const fromWindow = (window as unknown as Window & { x_spreadsheet?: XsSpreadsheetFactory }).x_spreadsheet;

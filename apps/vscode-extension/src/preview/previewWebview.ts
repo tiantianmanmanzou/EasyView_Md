@@ -105,9 +105,12 @@ function installPreviewUiStatePersistence(): void {
 class ExtensionPreviewHost implements PreviewHost {
   private readonly listeners = new Set<() => void>();
   private state: PreviewState;
+  private dirty = false;
+  private saveHandler: (() => Promise<void>) | null = null;
 
   constructor(descriptor: PreviewDescriptor) {
     this.state = { descriptor, status: 'ready', error: null };
+    window.addEventListener('message', this.onHostMessage);
   }
 
   getState = (): PreviewState => this.state;
@@ -115,6 +118,48 @@ class ExtensionPreviewHost implements PreviewHost {
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  setDirty = (dirty: boolean): void => {
+    if (this.dirty === dirty) return;
+    this.dirty = dirty;
+    vscode?.postMessage({ type: 'setDirty', dirty });
+  };
+
+  registerSaveHandler = (save: () => Promise<void>): (() => void) => {
+    this.saveHandler = save;
+    return () => {
+      if (this.saveHandler === save) this.saveHandler = null;
+    };
+  };
+
+  requestHostSave = (): void => {
+    vscode?.postMessage({ type: 'requestSave' });
+  };
+
+  private onHostMessage = (event: MessageEvent): void => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.type === 'hostSaveRequest' && typeof data.id === 'string') {
+      void (async () => {
+        try {
+          if (this.saveHandler) await this.saveHandler();
+          vscode?.postMessage({ type: 'hostSaveResult', id: data.id, ok: true });
+        } catch (error) {
+          vscode?.postMessage({
+            type: 'hostSaveResult',
+            id: data.id,
+            ok: false,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+      return;
+    }
+    if (data.type === 'hostRevertRequest') {
+      // Reload is handled by the provider re-rendering; clear local dirty.
+      this.setDirty(false);
+    }
   };
 
   async readText(sessionId: string): Promise<PreviewTextResult> {

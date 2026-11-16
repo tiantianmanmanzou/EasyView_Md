@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 
 import { layoutDocument } from '../index';
 import type { FlowBlock, Measure } from '../types';
-import { hitTestPage, hitTestFragment, getPageTop } from '../../layout-bridge/hitTest';
+import { hitTestPage, hitTestFragment, getPageTop, getTotalDocumentHeight } from '../../layout-bridge/hitTest';
 import { clickToPosition, clickToPositionInParagraph } from '../../layout-bridge/clickToPosition';
 
 import {
@@ -71,6 +71,25 @@ describe('Click-to-Position Mapping', () => {
         const expectedPage1Top = layout.pageSize.h + 20;
         expect(getPageTop(layout, 1)).toBe(expectedPage1Top);
       }
+    });
+
+    test('two pages per row share a top and stack rows', () => {
+      const blocks: FlowBlock[] = [];
+      const measures: Measure[] = [];
+
+      for (let i = 0; i < 40; i++) {
+        blocks.push(makeParagraphBlock(i, `Para ${i}`, i * 10));
+        measures.push(makeParagraphMeasure([makeLine(0, 0, 0, 8, 60, 50)]));
+      }
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions({ pageGap: 20, pagesPerRow: 2 }));
+      const rowHeight = layout.pageSize.h;
+      const rows = Math.ceil(layout.pages.length / 2);
+
+      expect(layout.pages.length).toBeGreaterThan(2);
+      expect(getPageTop(layout, 1)).toBe(0);
+      expect(getPageTop(layout, 2)).toBe(rowHeight + 20);
+      expect(getTotalDocumentHeight(layout)).toBe(rows * rowHeight + (rows - 1) * 20);
     });
   });
 

@@ -157,12 +157,16 @@ function computeOptionsHash(options: RenderPageOptions): string {
 }
 
 /**
- * Apply standard container styles for the pages wrapper.
+ * Apply standard container styles for the pages wrapper: one page per row, or `pagesPerRow`
+ * pages side by side (rows as tall as their tallest page, as `getPageTop` measures them).
  */
-function applyContainerStyles(container: HTMLElement, pageGap: number): void {
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.alignItems = 'center';
+function applyContainerStyles(container: HTMLElement, pageGap: number, pagesPerRow: number): void {
+  const grid = pagesPerRow > 1;
+  container.style.display = grid ? 'grid' : 'flex';
+  container.style.flexDirection = grid ? '' : 'column';
+  container.style.gridTemplateColumns = grid ? `repeat(${pagesPerRow}, max-content)` : '';
+  container.style.justifyContent = grid ? 'center' : '';
+  container.style.alignItems = grid ? 'start' : 'center';
   container.style.gap = `${pageGap}px`;
   container.style.padding = `${pageGap}px`;
   container.style.backgroundColor = 'var(--doc-bg, #f8f9fa)';
@@ -192,12 +196,14 @@ export function renderPages(
   container: HTMLElement,
   options: RenderPageOptions & {
     pageGap?: number;
+    pagesPerRow?: number;
     footnotesByPage?: Map<number, FootnoteRenderItem[]>;
   } = {}
 ): RenderPagesUpdateKind {
   const totalPages = pages.length;
   const pageGap = options.pageGap ?? 24;
   const pc = container as PageContainer;
+  applyContainerStyles(container, pageGap, options.pagesPerRow ?? 1);
   const prevState = pc.__pageRenderState;
   const currentOptionsHash = computeOptionsHash(options);
   const useVirtualization = totalPages >= VIRTUALIZATION_THRESHOLD;
@@ -321,8 +327,6 @@ export function renderPages(
   // Clear existing content
   container.innerHTML = '';
   pc.__pageRenderState = undefined;
-
-  applyContainerStyles(container, pageGap);
 
   // Build all page shells
   const pageShells: HTMLElement[] = [];

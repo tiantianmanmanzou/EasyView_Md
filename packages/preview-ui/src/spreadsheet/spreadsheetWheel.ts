@@ -35,15 +35,31 @@ function isSpreadsheetOverlayerEvent(evt: Event, mount: HTMLElement): boolean {
   return !!overlayer && mount.contains(overlayer);
 }
 
+export interface SpreadsheetWheelOptions {
+  /**
+   * Trackpad pinch / ctrl+wheel zoom. Chromium reports pinch as wheel+ctrlKey;
+   * positive deltaY means zoom out. Omit to leave those events alone.
+   */
+  onZoomDelta?: (deltaY: number) => void;
+}
+
 /**
  * Attach capture-phase wheel normalization on a spreadsheet mount.
  * Returns a disposer.
  */
-export function attachSpreadsheetWheelNormalization(mount: HTMLElement): () => void {
+export function attachSpreadsheetWheelNormalization(mount: HTMLElement, options?: SpreadsheetWheelOptions): () => void {
   const onWheel = (evt: WheelEvent) => {
     if (!isSpreadsheetOverlayerEvent(evt, mount)) return;
     const sheet = (evt.target as Element).closest('.x-spreadsheet');
     if (!sheet || !mount.contains(sheet)) return;
+
+    // Pinch-to-zoom: do not scroll.
+    if (evt.ctrlKey && options?.onZoomDelta) {
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      if (evt.deltaY !== 0) options.onZoomDelta(evt.deltaY);
+      return;
+    }
 
     const vertical = sheet.querySelector(VERTICAL_SCROLLBAR) as HTMLElement | null;
     const horizontal = sheet.querySelector(HORIZONTAL_SCROLLBAR) as HTMLElement | null;

@@ -5,7 +5,9 @@ import { extractableArchiveSuffix, isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_
 import { Menu, clipboard, dialog, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isLocalHtmlPath } from '../browser/browserPolicy';
+import { openBrowserTab, retargetBrowserFile } from '../browser/browserWorkflow';
 import { normalizeWorkspaceRelativePath } from '@easyview/node-runtime';
 import type { OperationResult } from '@easyview/contracts';
 import type {
@@ -163,6 +165,7 @@ export async function openWorkspacePreview(relativePath: string): Promise<Operat
     const filePath = await resolveWorkspaceFilePath(relativePath);
     const stat = await fs.lstat(filePath);
     if (!stat.isFile() && !stat.isSymbolicLink()) return failure('INVALID_ARGUMENT', tWorkspace('preview.filesOnly'));
+    if (isLocalHtmlPath(filePath)) return openBrowserTab({ url: pathToFileURL(filePath).href, relativePath });
     const snapshot = await registerPreviewTab(relativePath);
     return success(snapshot);
   } catch (error) {
@@ -175,6 +178,15 @@ export function tabResourcePaths(tab: DesktopTab): { absolutePath: string; relat
     const rootPath = workspaceRoot();
     const relativePath = rootPath ? path.relative(rootPath, tab.filePath).split(path.sep).join('/') : tab.fileName;
     return { absolutePath: tab.filePath, relativePath };
+  }
+  if (tab.kind === 'browser') {
+    if (tab.relativePath && workspaceRoot()) {
+      try {
+        const paths = workspaceCore.resourcePaths(tab.relativePath);
+        return { absolutePath: paths.absolutePath, relativePath: paths.relativePath };
+      } catch { /* fall through to the address */ }
+    }
+    return { absolutePath: tab.url, relativePath: tab.relativePath ?? tab.url };
   }
   if (!workspaceRoot()) return null;
   const paths = workspaceCore.resourcePaths(tab.relativePath);
@@ -241,6 +253,7 @@ export async function renameWorkspaceEntry(request: WorkspaceRenameRequest): Pro
       void watchDocumentSession(session);
     }
     tabRegistry.renamePreview(request.relativePath, entry.relativePath, entry.name);
+    retargetBrowserFile(request.relativePath, entry.relativePath, entry.name, nextPaths.absolutePath);
     syncTabState();
     if (tabRegistry.active()?.kind === 'editor') notifyActiveDocument('reload');
     sendToWindow('workspace.changed', [workspaceCore.parentRelativePath(request.relativePath), workspaceCore.parentRelativePath(entry.relativePath)]);
@@ -273,7 +286,9 @@ export async function deleteWorkspaceEntry(request: WorkspaceDeleteRequest, owne
         const targetKey = filePathKey(paths.absolutePath);
         return key === targetKey || (stat.isDirectory() && key.startsWith(`${targetKey}${path.sep}`));
       }
-      const normalized = tab.relativePath.replace(/\\/g, '/');
+      const relative = tab.kind === 'browser' ? tab.relativePath : tab.relativePath;
+      if (!relative) return false;
+      const normalized = relative.replace(/\\/g, '/');
       return normalized === request.relativePath || (stat.isDirectory() && normalized.startsWith(`${request.relativePath}/`));
     });
     if (!(await closeTabIds([...new Set(affectedTabs.map((tab) => tab.id))]))) return failure('CANCELLED', tWorkspace('delete.cancelled'));

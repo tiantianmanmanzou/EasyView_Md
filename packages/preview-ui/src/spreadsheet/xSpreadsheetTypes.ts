@@ -65,6 +65,12 @@ export interface XsSheetData {
   merges?: string[];
   cols?: XsColumnsData;
   rows?: XsRowsData;
+  /** Excel sheet view zoomScale (percent). Stripped before the grid loads; not written by getData(). */
+  zoom?: number;
+  /** Default row height in CSS pixels. Stripped before the grid loads. */
+  defaultRowPx?: number;
+  /** Default column width in CSS pixels. Stripped before the grid loads. */
+  defaultColPx?: number;
 }
 
 export interface XsStyleLike {
@@ -76,17 +82,50 @@ export interface XsStyleLike {
 export interface XsDataLike {
   settings?: { style?: XsStyleLike };
   getCellStyleOrDefault?: (ri: number, ci: number) => XsStyleLike;
+  getSelectedCellStyle?: () => XsStyleLike;
+  selector?: { ri: number; ci: number };
 }
 
 export interface XsDrawLike {
   attr: (options: Record<string, unknown>) => unknown;
+  text?: (text: string, box: unknown, attr?: Record<string, unknown>, wrap?: boolean) => unknown;
+}
+
+export interface XsCellRangeLike {
+  sri: number;
+  sci: number;
+  eri: number;
+  eci: number;
+}
+
+/** The parts of the active sheet's DataProxy that paste handling drives. */
+export interface XsSheetDataLike {
+  settings: { mode?: string };
+  selector: { range: XsCellRangeLike };
+  clipboard: { range: XsCellRangeLike | null; isClear(): boolean };
+  rows: {
+    len: number;
+    getCell(ri: number, ci: number): { text?: unknown } | null;
+    setCellText(ri: number, ci: number, text: string): void;
+  };
+  cols: { len: number };
+  changeData(callback: () => void): void;
+  clearClipboard(): void;
 }
 
 export interface XsSpreadsheetLike {
   reRender?: () => void;
   datas?: XsDataLike[];
   data?: XsDataLike;
-  sheet?: { table?: { draw?: XsDrawLike; render?: () => void } };
+  sheet?: {
+    table?: { draw?: XsDrawLike; render?: () => void };
+    /** Set by the library when the last click landed on the grid; gates its keyboard and paste handlers. */
+    focusing?: boolean;
+    data?: XsSheetDataLike;
+    selector?: { hideClipboard(): void; resetAreaOffset?(): void };
+    /** Full sheetReset: scrollbars, freeze, table paint, toolbar, selector. */
+    reload?: () => void;
+  };
 }
 
 export interface XsSpreadsheetInstance extends XsSpreadsheetLike {

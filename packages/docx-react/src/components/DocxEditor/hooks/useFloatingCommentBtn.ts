@@ -62,9 +62,13 @@ export function useFloatingCommentBtn({
     const top = findSelectionYPosition(container, parentEl, from);
     if (top == null) return;
     const pagesEl = container.querySelector('.paged-editor__pages');
-    const pageEl = pagesEl?.querySelector('.layout-page') as HTMLElement | null;
-    const left = pageEl
-      ? pageEl.getBoundingClientRect().right - parentEl.getBoundingClientRect().left
+    // Right edge of the first row: in the two-page view the second page shares the first's top.
+    const firstRow = Array.from(pagesEl?.querySelectorAll('.layout-page') ?? [])
+      .slice(0, 2)
+      .map((page) => page.getBoundingClientRect())
+      .filter((rect, _index, rects) => Math.abs(rect.top - rects[0].top) < 1);
+    const left = firstRow.length
+      ? Math.max(...firstRow.map((rect) => rect.right)) - parentEl.getBoundingClientRect().left
       : parentEl.getBoundingClientRect().width / 2 + 408;
     setFloatingCommentBtn({ top, left });
   }, [

@@ -191,6 +191,8 @@ export type DesktopMenuCommand =
   | 'toggleStickyNote'
   | 'toggleAiChat'
   | 'openTerminal'
+  | 'openBrowser'
+  | 'openCommandPalette'
   | 'stageFile'
   | 'openCommit'
   | 'syncGit'
@@ -258,6 +260,37 @@ export interface WorkspaceApi {
   openEntry(relativePath: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
   onChanged(listener: (relativePaths: string[] | null) => void): { unsubscribe(): void };
   onContextCommand(listener: (command: WorkspaceContextCommand, relativePath: string, detail?: string) => void): { unsubscribe(): void };
+}
+
+export interface DesktopBrowserBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DesktopBrowserState {
+  tabId: string;
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export interface DesktopBrowserLayout {
+  obscured: boolean;
+  views: Array<{ tabId: string; bounds: DesktopBrowserBounds | null }>;
+}
+
+export interface DesktopBrowserApi {
+  open(url?: string): Promise<import('@easyview/contracts').OperationResult<DesktopTabSnapshot>>;
+  navigate(tabId: string, address: string): Promise<import('@easyview/contracts').OperationResult<DesktopTabSnapshot>>;
+  back(tabId: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  forward(tabId: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  reload(tabId: string): Promise<import('@easyview/contracts').OperationResult<boolean>>;
+  setLayout(layout: DesktopBrowserLayout): void;
+  onState(listener: (state: DesktopBrowserState) => void): { unsubscribe(): void };
 }
 
 export interface DesktopTabsApi {

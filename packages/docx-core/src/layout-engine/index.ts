@@ -355,6 +355,7 @@ export function layoutDocument(
     pages: paginator.pages,
     columns: options.columns,
     pageGap: options.pageGap,
+    pagesPerRow: options.pagesPerRow,
   };
 }
 

@@ -266,6 +266,7 @@ export class WorkspaceExplorer {
     }
 
     this.activeRelativePath = relativePath;
+    if (this.editingName()) return;
     // Switching the active tab resumes follow-mode (default lock to the visible tab).
     this.selectionFollowsActive = true;
     if (relativePath && this.displayMode === 'icons') {
@@ -375,8 +376,9 @@ export class WorkspaceExplorer {
   private async refreshChanged(relativeDirectories: string[] | null): Promise<void> {
     if (!this.state?.rootPath) return;
     this.sizeRequests.clear();
-    if (this.showSize) this.render();
     if (this.searchOpen) this.searchPanel?.refresh();
+    if (this.editingName()) return;
+    if (this.showSize) this.render();
     if (relativeDirectories === null) {
       this.entriesByDirectory.clear();
       await this.refreshExpanded();
@@ -1184,12 +1186,17 @@ export class WorkspaceExplorer {
     input.className = 'workspace-rename-input';
     input.value = entry.name;
     input.addEventListener('click', (event) => event.stopPropagation());
+    // Right-click in the field edits text; the row's file menu would paste files and end the rename.
+    input.addEventListener('contextmenu', (event) => event.stopPropagation());
     input.addEventListener('keydown', (event) => {
       event.stopPropagation();
       if (event.key === 'Escape') { this.renameRelativePath = null; this.render(); }
       if (event.key === 'Enter') { event.preventDefault(); void this.renameEntry(entry.relativePath, input.value); }
     });
-    input.addEventListener('blur', () => { if (this.renameRelativePath === entry.relativePath) void this.renameEntry(entry.relativePath, input.value); });
+    // Leaving the window (e.g. to copy a name in another app) blurs the field too; that keeps the edit open.
+    input.addEventListener('blur', () => {
+      if (document.hasFocus() && this.renameRelativePath === entry.relativePath) void this.renameEntry(entry.relativePath, input.value);
+    });
     requestAnimationFrame(() => {
       // Editing may already have started before this frame (focus, select-all, typing).
       // Re-applying the stem selection then would replace only the stem and keep the
@@ -1199,6 +1206,11 @@ export class WorkspaceExplorer {
       input.setSelectionRange(...workspaceEntryNameSelectionRange(input.value));
     });
     return input;
+  }
+
+  /** A rename or new-item name field is open: re-rendering would rebuild it and blur commits it. */
+  private editingName(): boolean {
+    return this.renameRelativePath !== null || this.pendingCreate !== null;
   }
 
   private beginRename(relativePath: string): void {
@@ -1326,7 +1338,8 @@ export class WorkspaceExplorer {
     });
     // Re-rendering (e.g. the parent folder finishing its load) replaces this input, and Chromium
     // blurs a focused node while removing it; only a blur that leaves the input mounted commits.
-    input.addEventListener('blur', () => { queueMicrotask(() => { if (input.isConnected) void commit(); }); });
+    // Leaving the window (e.g. to copy a name in another app) blurs it too; that keeps the edit open.
+    input.addEventListener('blur', () => { if (document.hasFocus()) queueMicrotask(() => { if (input.isConnected) void commit(); }); });
     input.addEventListener('keydown', (event) => { if (event.key === 'Escape') { this.pendingCreate = null; this.render(); } });
     requestAnimationFrame(() => {
       if (!input.isConnected || document.activeElement === input) return;

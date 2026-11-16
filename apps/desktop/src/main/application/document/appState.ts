@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { writeFileAtomically } from '@easyview/node-runtime';
 import { normalizeDesktopPanelLayout, type DesktopWorkspaceState } from '../../../contracts/workspace';
+import { isPersistedBrowserUrl } from '../browser/browserPolicy';
 
 export interface WindowBounds {
   x?: number;
@@ -223,6 +224,10 @@ function normalizeOpenTabs(value: unknown): DesktopWorkspaceState['openTabs'] {
       seen.add(item.id);
     } else if (item.kind === 'preview' && typeof item.relativePath === 'string' && item.relativePath) {
       result.push({ id: item.id, kind: 'preview', relativePath: item.relativePath, ...pinned });
+      seen.add(item.id);
+    } else if (item.kind === 'browser' && typeof item.url === 'string' && isPersistedBrowserUrl(item.url)) {
+      const relativePath = typeof item.relativePath === 'string' && item.relativePath ? { relativePath: item.relativePath } : {};
+      result.push({ id: item.id, kind: 'browser', url: item.url, ...relativePath, ...pinned });
       seen.add(item.id);
     }
   }

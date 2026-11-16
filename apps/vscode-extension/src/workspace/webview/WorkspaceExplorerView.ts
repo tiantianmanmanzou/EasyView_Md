@@ -368,9 +368,9 @@ export class WorkspaceExplorerView {
   private async onFsChanged(relativePaths: string[]): Promise<void> {
     if (!this.hasRoot()) return;
     this.sizeRequests.clear();
-    if (this.showSize) this.render();
     if (this.searchOpen) this.searchPanel?.refresh();
     if (this.editing || this.pendingCreate || this.renamePath) return;
+    if (this.showSize) this.render();
     const targets = [...new Set(relativePaths.map(normalizeRelativePath))].filter(
       (value) => value === '' || this.expanded.has(value) || (this.displayMode === 'icons' && value === this.iconDirectory),
     );
@@ -383,6 +383,8 @@ export class WorkspaceExplorerView {
     if (!force && this.activeRelativePath === relativePath
       && (this.displayMode !== 'icons' || this.iconDirectory === parentRelativePath(relativePath))) return;
     this.activeRelativePath = relativePath;
+    // Re-rendering would rebuild an open rename / new-item field and drop what was typed.
+    if (this.pendingCreate || this.renamePath) return;
     if (this.displayMode === 'icons') {
       this.iconDirectory = parentRelativePath(relativePath);
       this.saveDisplayState();
@@ -1660,6 +1662,8 @@ export class WorkspaceExplorerView {
     input.value = entry.name;
     this.setEditing(true);
     input.addEventListener('click', (event) => event.stopPropagation());
+    // Right-click in the field edits text; the row's file menu would paste files and end the rename.
+    input.addEventListener('contextmenu', (event) => event.stopPropagation());
     input.addEventListener('keydown', (event) => {
       event.stopPropagation();
       if (event.key === 'Escape') {
@@ -1672,8 +1676,9 @@ export class WorkspaceExplorerView {
         void this.renameEntry(entry.relativePath, input.value);
       }
     });
+    // Focus leaving this view (e.g. to copy a name in another app) blurs the field too; that keeps the edit open.
     input.addEventListener('blur', () => {
-      if (this.renamePath === entry.relativePath) void this.renameEntry(entry.relativePath, input.value);
+      if (document.hasFocus() && this.renamePath === entry.relativePath) void this.renameEntry(entry.relativePath, input.value);
     });
     input.addEventListener('focus', () => this.setEditing(true));
     requestAnimationFrame(() => {
@@ -1870,7 +1875,9 @@ export class WorkspaceExplorerView {
     input.addEventListener('focus', () => this.setEditing(true));
     // Re-rendering (e.g. the parent folder finishing its load) replaces this input, and Chromium
     // blurs a focused node while removing it; only a blur that leaves the input mounted commits.
+    // Focus leaving this view (e.g. to copy a name in another app) blurs it too; that keeps the edit open.
     input.addEventListener('blur', () => {
+      if (!document.hasFocus()) return;
       queueMicrotask(() => {
         if (input.isConnected) commit();
       });

@@ -115,7 +115,7 @@ export function renderDesktopTabBar(
     activate.type = 'button';
     activate.className = 'desktop-tab-activate';
     activate.setAttribute('aria-label', tab.fileName);
-    const path = tab.kind === 'editor' ? tab.filePath : tab.relativePath;
+    const path = tab.kind === 'editor' ? tab.filePath : tab.kind === 'browser' ? (tab.relativePath || tab.url) : tab.relativePath;
     const showTooltip = (): void => showTabTooltip(activate, tab.fileName, path);
     const hideTooltip = (): void => hideTabTooltip(container.ownerDocument);
     activate.addEventListener('pointerenter', showTooltip);
@@ -136,7 +136,7 @@ export function renderDesktopTabBar(
     label.textContent = tab.fileName;
     activate.appendChild(label);
 
-    if (tab.kind === 'editor' && tab.dirty) {
+    if ((tab.kind === 'editor' || tab.kind === 'preview') && tab.dirty) {
       const dirty = document.createElement('span');
       dirty.className = 'desktop-tab-dirty';
       dirty.setAttribute('aria-label', tDesktop('tab.unsaved'));

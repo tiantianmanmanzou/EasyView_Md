@@ -3,6 +3,9 @@ import { captureDesktopHistory, desktopHistory } from './desktopHistory';
 import { app, dialog } from 'electron';
 import { promises as fs, watch } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { isLocalHtmlPath } from '../browser/browserPolicy';
+import { disposeBrowserViews, openBrowserTab, releaseBrowserTabs } from '../browser/browserWorkflow';
 import { hashContent, minimalTextPatch } from '@easyview/editor-sync';
 import { MARKDOWN_FILE_EXTENSIONS, type OperationResult } from '@easyview/contracts';
 import type { DesktopTabSnapshot, DocumentOpenResult, SaveDocumentResult } from '../../../contracts';
@@ -271,6 +274,9 @@ export async function openWorkspaceEntryTab(relativePath: string): Promise<Opera
       const result = await loadEditorTab(targetPath);
       return result.ok ? success(tabSnapshot()) : result;
     }
+    if (isLocalHtmlPath(targetPath)) {
+      return openBrowserTab({ url: pathToFileURL(targetPath).href, relativePath });
+    }
     return success(await registerPreviewTab(relativePath));
   } catch (error) {
     return previewFailure(error);
@@ -417,15 +423,81 @@ export async function confirmCloseSession(session: DocumentSession): Promise<boo
   return result.value !== null && !session.dirty;
 }
 
+/** Ask Save / Don't Save / Cancel for one preview file (used when switching away). */
+export async function confirmUnsavedPreview(fileName: string): Promise<'save' | 'discard' | 'cancel'> {
+  const response = await dialog.showMessageBox(getMainWindow()!, {
+    type: 'warning',
+    buttons: [tDocument('close.save'), tDocument('close.dontSave'), tDocument('close.cancel')],
+    defaultId: 0,
+    cancelId: 2,
+    message: tDocument('close.unsavedMessage', { fileName }),
+    detail: tDocument('close.unsavedDetail'),
+  });
+  if (response.response === 2) return 'cancel';
+  if (response.response === 1) return 'discard';
+  return 'save';
+}
+
+const pendingPreviewSaves = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>();
+
+/** Ask the renderer to run the active preview viewer's save for this path. */
+export function requestPreviewSave(relativePath: string): Promise<boolean> {
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingPreviewSaves.delete(requestId);
+      resolve(false);
+    }, 60_000);
+    pendingPreviewSaves.set(requestId, { resolve, timer });
+    if (!sendToWindow('preview.saveRequest', { requestId, relativePath })) {
+      clearTimeout(timer);
+      pendingPreviewSaves.delete(requestId);
+      resolve(false);
+    }
+  });
+}
+
+export function completePreviewSave(requestId: string, ok: boolean): void {
+  const pending = pendingPreviewSaves.get(requestId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingPreviewSaves.delete(requestId);
+  pending.resolve(ok);
+}
+
+export async function confirmClosePreview(relativePath: string, fileName: string): Promise<boolean> {
+  const action = await confirmUnsavedPreview(fileName);
+  if (action === 'cancel') return false;
+  if (action === 'discard') {
+    sendToWindow('preview.clearDirty', relativePath);
+    tabRegistry.setPreviewDirty(relativePath, false);
+    syncTabState();
+    return true;
+  }
+  const saved = await requestPreviewSave(relativePath);
+  if (!saved) {
+    await dialog.showMessageBox(getMainWindow()!, {
+      type: 'error',
+      message: tDocument('save.failed'),
+    });
+    return false;
+  }
+  tabRegistry.setPreviewDirty(relativePath, false);
+  syncTabState();
+  return true;
+}
+
 export async function confirmCloseAll(): Promise<boolean> {
   const dirtySessions = documentSessions.dirtySessions();
-  if (dirtySessions.length === 0) return true;
+  const dirtyPreviews = tabRegistry.dirtyPreviewTabs();
+  const count = dirtySessions.length + dirtyPreviews.length;
+  if (count === 0) return true;
   const response = await dialog.showMessageBox(getMainWindow()!, {
     type: 'warning',
     buttons: [tDocument('closeAll.saveAll'), tDocument('closeAll.discardAll'), tDocument('close.cancel')],
     defaultId: 0,
     cancelId: 2,
-    message: tDocument('closeAll.message', { count: dirtySessions.length }),
+    message: tDocument('closeAll.message', { count }),
     detail: tDocument('closeAll.detail'),
   });
   if (response.response === 2) return false;
@@ -433,6 +505,10 @@ export async function confirmCloseAll(): Promise<boolean> {
     for (const session of dirtySessions) {
       await documentSessions.revertToDisk(session);
       tabRegistry.setEditorDirty(session.tabId, false);
+    }
+    for (const preview of dirtyPreviews) {
+      sendToWindow('preview.clearDirty', preview.relativePath);
+      tabRegistry.setPreviewDirty(preview.relativePath, false);
     }
     syncTabState();
     return true;
@@ -447,11 +523,21 @@ export async function confirmCloseAll(): Promise<boolean> {
       return false;
     }
   }
+  for (const preview of dirtyPreviews) {
+    if (!(await requestPreviewSave(preview.relativePath))) {
+      await dialog.showMessageBox(getMainWindow()!, {
+        type: 'error',
+        message: tDocument('save.failed'),
+      });
+      return false;
+    }
+    tabRegistry.setPreviewDirty(preview.relativePath, false);
+  }
   if (originalActiveId && tabRegistry.get(originalActiveId)) {
     tabRegistry.activate(originalActiveId);
   }
   syncTabState();
-  return !documentSessions.hasDirty();
+  return !documentSessions.hasDirty() && !tabRegistry.hasDirtyPreviews();
 }
 
 export async function releaseEditorTabs(tabIds: readonly string[]): Promise<boolean> {
@@ -480,11 +566,32 @@ export async function releaseEditorTabs(tabIds: readonly string[]): Promise<bool
   return true;
 }
 
+/** Prompt for dirty preview tabs that will disappear with this close. */
+export async function releasePreviewTabs(tabIds: readonly string[]): Promise<boolean> {
+  const closing = new Set(tabIds);
+  const remaining = allOpenTabs().filter((tab) => !closing.has(tab.id));
+  const seen = new Set<string>();
+  for (const tabId of tabIds) {
+    const tab = tabRegistry.get(tabId);
+    if (tab?.kind !== 'preview' || !tab.dirty) continue;
+    if (seen.has(tab.relativePath)) continue;
+    seen.add(tab.relativePath);
+    const fileRemains = remaining.some((candidate) => (
+      candidate.kind === 'preview' && candidate.relativePath === tab.relativePath
+    ));
+    if (fileRemains) continue;
+    if (!(await confirmClosePreview(tab.relativePath, tab.fileName))) return false;
+  }
+  return true;
+}
+
 export async function closeTab(tabId: string): Promise<OperationResult<DesktopTabSnapshot | null>> {
   const tab = tabRegistry.get(tabId);
   if (!tab) return failure('NOT_FOUND', tDocument('tabs.notFound'));
   if (!(await releaseEditorTabs([tabId]))) return success(null);
+  if (!(await releasePreviewTabs([tabId]))) return success(null);
   releaseHistoryComparison(tabId);
+  releaseBrowserTabs([tabId]);
   tabRegistry.close(tabId);
   const active = tabRegistry.active();
   syncTabState();
@@ -494,6 +601,8 @@ export async function closeTab(tabId: string): Promise<OperationResult<DesktopTa
 
 export async function closeTabIds(tabIds: string[]): Promise<boolean> {
   if (!(await releaseEditorTabs(tabIds))) return false;
+  if (!(await releasePreviewTabs(tabIds))) return false;
+  releaseBrowserTabs(tabIds);
   for (const tabId of tabIds) { releaseHistoryComparison(tabId); tabRegistry.close(tabId); }
   const active = tabRegistry.active();
   syncTabState();
@@ -521,6 +630,7 @@ export async function closeGroupTabs(tabId: string): Promise<OperationResult<Des
 }
 
 export async function closeAllTabResources(): Promise<void> {
+  disposeBrowserViews();
   clearHistoryComparisons(tabRegistry.snapshot().groups.flatMap((group) => group.tabs.map((tab) => tab.id)));
   for (const session of documentSessions.values()) await stopWatcher(session);
   documentSessions.clear();
@@ -556,6 +666,8 @@ export async function restoreWorkspace(): Promise<void> {
       for (const tab of group.openTabs) {
         if (tab.kind === 'editor') {
           await loadEditorTab(tab.filePath, tab.id, false, group.id);
+        } else if (tab.kind === 'browser') {
+          await restoreBrowserTab(tab, rootPath, group.id);
         } else if (rootPath) {
           try {
             await registerPreviewTab(tab.relativePath, tab.id, false, group.id);
@@ -570,6 +682,8 @@ export async function restoreWorkspace(): Promise<void> {
     for (const tab of current.openTabs) {
       if (tab.kind === 'editor') {
         await loadEditorTab(tab.filePath, tab.id, false);
+      } else if (tab.kind === 'browser') {
+        await restoreBrowserTab(tab, rootPath);
       } else if (rootPath) {
         try {
           await registerPreviewTab(tab.relativePath, tab.id, false);
@@ -587,6 +701,23 @@ export async function restoreWorkspace(): Promise<void> {
   const active = tabRegistry.active();
   if (active?.kind === 'editor') activateEditorSession(active.id);
   persistTabs();
+}
+
+async function restoreBrowserTab(
+  tab: { id: string; url: string; relativePath?: string },
+  rootPath: string | null,
+  groupId?: string,
+): Promise<void> {
+  try {
+    let url = tab.url;
+    if (tab.relativePath) {
+      if (!rootPath) return;
+      url = pathToFileURL(await resolveWorkspaceFilePath(tab.relativePath)).href;
+    }
+    await openBrowserTab({ id: tab.id, url, relativePath: tab.relativePath, groupId, notify: false });
+  } catch {
+    // A missing local page is skipped, same as a missing preview tab.
+  }
 }
 
 export function documentDirectory(session = activeSession()): string {

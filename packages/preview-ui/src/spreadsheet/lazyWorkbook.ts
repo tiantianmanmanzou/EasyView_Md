@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { worksheetToXsSheet, applyXsStyleToCell, validateSheetXml } from './xSpreadsheetBridge';
+import { worksheetToXsSheet, applyXsStyleToCell, validateSheetXml, pxToExcelColumnWidth, pxToExcelRowPoints } from './xSpreadsheetBridge';
 import type { XsCell, XsSheetData } from './xSpreadsheetTypes';
 import { tPreview } from '../preview.i18n';
 
@@ -122,7 +122,7 @@ function applyChanges(sheet: ExcelJS.Worksheet, before: XsSheetData, after: XsSh
   const rows = new Set([...Object.keys(before.rows ?? {}), ...Object.keys(after.rows ?? {})].filter(key => key !== 'len'));
   for (const row of rows) {
     const ri = Number(row); const old = before.rows?.[ri]; const next = after.rows?.[ri];
-    if (old?.height !== next?.height) sheet.getRow(ri + 1).height = next?.height ?? 15;
+    if (old?.height !== next?.height) sheet.getRow(ri + 1).height = typeof next?.height === 'number' ? pxToExcelRowPoints(next.height) : 15;
     const cells = new Set([...Object.keys(old?.cells ?? {}), ...Object.keys(next?.cells ?? {})]);
     for (const column of cells) {
       const ci = Number(column), a = old?.cells?.[ci], b = next?.cells?.[ci];
@@ -140,7 +140,10 @@ function applyChanges(sheet: ExcelJS.Worksheet, before: XsSheetData, after: XsSh
   }
   for (const column of new Set([...Object.keys(before.cols ?? {}), ...Object.keys(after.cols ?? {})])) {
     if (column === 'len') continue;
-    const ci = Number(column); if (before.cols?.[ci]?.width !== after.cols?.[ci]?.width) sheet.getColumn(ci + 1).width = (after.cols?.[ci]?.width ?? 80) / 8;
+    const ci = Number(column); if (before.cols?.[ci]?.width !== after.cols?.[ci]?.width) {
+      const width = after.cols?.[ci]?.width;
+      sheet.getColumn(ci + 1).width = typeof width === 'number' ? pxToExcelColumnWidth(width) : 10;
+    }
   }
   if (freezeRef(before) !== freezeRef(after)) {
     const ref = parseCellRef(freezeRef(after));

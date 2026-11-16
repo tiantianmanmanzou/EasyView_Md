@@ -164,6 +164,8 @@ export interface DocxEditorProps {
   showHelpMenu?: boolean;
   /** Whether to show zoom control (default: true) */
   showZoomControl?: boolean;
+  /** Fired when the page zoom changes, including wheel and imperative setZoom. */
+  onZoomChange?: (zoom: number) => void;
   /** Whether to show page margin guides/boundaries (default: false) */
   showMarginGuides?: boolean;
   /** Color for margin guides (default: '#c0c0c0') */
@@ -174,6 +176,8 @@ export interface DocxEditorProps {
   rulerUnit?: 'inch' | 'cm';
   /** Initial zoom level (default: 1.0) */
   initialZoom?: number;
+  /** Pages side by side per row: 1 (default), or 2 for the two-page view */
+  pagesPerRow?: number;
   /** Whether the editor is read-only. When true, hides toolbar and rulers */
   readOnly?: boolean;
   /**
@@ -607,11 +611,13 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
     showFileOpen = true,
     showHelpMenu = true,
     showZoomControl = true,
+    onZoomChange: onZoomChangeProp,
     showMarginGuides: _showMarginGuides = false,
     marginGuideColor: _marginGuideColor,
     showRuler = false,
     rulerUnit = 'inch',
     initialZoom = 1.0,
+    pagesPerRow = 1,
     readOnly: readOnlyProp = false,
     disableFindReplaceShortcuts = false,
     toolbarExtra,
@@ -1154,8 +1160,9 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
   });
 
   const handleZoomChange = useCallback((zoom: number) => {
-    setState((prev) => ({ ...prev, zoom }));
-  }, []);
+    setState((prev) => (prev.zoom === zoom ? prev : { ...prev, zoom }));
+    onZoomChangeProp?.(zoom);
+  }, [onZoomChangeProp]);
 
   const {
     hyperlinkPopupData,
@@ -1270,7 +1277,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
     handleSave,
     handleDirectPrint,
     zoom: state.zoom,
-    setZoom: (zoom: number) => setState((prev) => ({ ...prev, zoom })),
+    setZoom: handleZoomChange,
     scrollPageInfo,
     loadParsedDocument,
     loadBuffer,
@@ -1858,6 +1865,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
             onBodyClick={handleBodyClick}
             getHfTargetElement={getHfTargetElement}
             zoom={state.zoom}
+            pagesPerRow={pagesPerRow}
             readOnly={readOnly}
             isSuggesting={editingMode === 'suggesting'}
             author={author}

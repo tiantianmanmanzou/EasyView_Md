@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { isEditableSpreadsheetFile } from './editableFormats';
 import {
+  excelColumnWidthToPx,
+  excelRowPointsToPx,
   workbookBytesToXsSheets,
+  worksheetToXsSheet,
   xsSheetsToWorkbookBytes,
 } from './xSpreadsheetBridge';
 
@@ -107,5 +110,89 @@ describe('xSpreadsheetBridge', () => {
     // Same merge x-spreadsheet applies before drawing a cell.
     const drawn = helper.merge({ font: { name: 'Arial', size: 10, bold: false, italic: false } }, style);
     expect(drawn.font).toEqual({ name: 'Arial', size: 10, bold: true, italic: false });
+  });
+
+  it('converts Excel column width, row height, zoom and accent fills into canvas units', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('入职');
+    sheet.properties.defaultRowHeight = 17.5;
+    sheet.properties.defaultColWidth = 9;
+    sheet.getColumn(1).width = 32.783;
+    sheet.getRow(1).height = 25.5;
+    sheet.getCell('A1').value = '入职流程';
+    sheet.getCell('A1').font = { name: '宋体', size: 20, bold: true };
+    sheet.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { theme: 4, tint: 0.8 } } as never;
+    sheet.views = [{ state: 'normal', zoomScale: 85 }];
+
+    const xs = worksheetToXsSheet(sheet, workbook);
+    expect(xs.zoom).toBe(85);
+    expect(xs.defaultRowPx).toBe(excelRowPointsToPx(17.5));
+    expect(xs.defaultColPx).toBe(excelColumnWidthToPx(9));
+    expect(xs.cols?.[0]?.width).toBe(excelColumnWidthToPx(32.783));
+    expect(xs.rows?.[0]?.height).toBe(34);
+    expect(xs.styles?.[0]?.font?.size).toBe(20);
+    expect(xs.styles?.[0]?.bgcolor).toBe('#deebf7');
+
+    const rewritten = await xsSheetsToWorkbookBytes([xs]);
+    const [again] = await workbookBytesToXsSheets(toArrayBuffer(rewritten));
+    expect(again?.cols?.[0]?.width).toBe(xs.cols?.[0]?.width);
+    expect(again?.rows?.[0]?.height).toBe(34);
+    expect(again?.styles?.[0]?.font?.size).toBe(20);
+  });
+
+  it('expands a header-only autoFilter so the filter menu can list column values', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('筛选');
+    sheet.getCell('A1').value = '分工';
+    sheet.getCell('B1').value = '备注';
+    sheet.getCell('A2').value = '数据安全中台';
+    sheet.getCell('A3').value = '数据安全运营';
+    sheet.getCell('A4').value = '数据安全中台';
+    sheet.getCell('B4').value = '说明';
+    sheet.autoFilter = 'A1:B1';
+
+    const xs = worksheetToXsSheet(sheet, workbook);
+    expect(xs.autofilter?.ref).toBe('A1:B4');
+
+    const source = await workbook.xlsx.writeBuffer();
+    const [loaded] = await workbookBytesToXsSheets(toArrayBuffer(source instanceof Uint8Array ? source : new Uint8Array(source)));
+    expect(loaded?.autofilter?.ref).toBe('A1:B4');
+  });
+
+  it('keeps borders on empty cells so blank grid cells still show their lines', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('表格');
+    const box = {
+      top: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      left: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      bottom: { style: 'thin' as const, color: { argb: 'FF000000' } },
+      right: { style: 'thin' as const, color: { argb: 'FF000000' } },
+    };
+    sheet.getCell('A1').value = '标题';
+    sheet.getCell('A1').border = box;
+    // Empty string keeps the style through ExcelJS write/read; a null value would be dropped on write.
+    sheet.getCell('B1').value = '';
+    sheet.getCell('B1').border = box;
+    sheet.getCell('A2').value = '';
+    sheet.getCell('A2').border = box;
+    sheet.getCell('B2').value = '';
+    sheet.getCell('B2').border = box;
+
+    const source = await workbook.xlsx.writeBuffer();
+    const [xs] = await workbookBytesToXsSheets(toArrayBuffer(source instanceof Uint8Array ? source : new Uint8Array(source)));
+    const empty = xs!.rows![0]!.cells![1]!;
+    expect(empty.text).toBe('');
+    expect(empty.style).toEqual(expect.any(Number));
+    expect(xs!.styles![empty.style as number]!.border).toEqual({
+      top: ['thin', '#000000'],
+      right: ['thin', '#000000'],
+      bottom: ['thin', '#000000'],
+      left: ['thin', '#000000'],
+    });
+    expect(xs!.rows![1]!.cells![0]!.style).toEqual(expect.any(Number));
+    expect(xs!.rows![1]!.cells![1]!.style).toEqual(expect.any(Number));
   });
 });

@@ -90,8 +90,8 @@ describe('preview routes', () => {
     expect(resolvePreviewRoute('legacy.ppt')).toMatchObject({ route: 'powerpoint', chrome: 'document' });
   });
 
-  it('exposes writable suffix info without enlarging the writeBytes route set', () => {
-    expect([...WRITABLE_PREVIEW_ROUTES]).toEqual(['text', 'word', 'spreadsheet']);
+  it('exposes writable suffix info for the writeBytes route set', () => {
+    expect([...WRITABLE_PREVIEW_ROUTES]).toEqual(['text', 'word', 'spreadsheet', 'image']);
     expect(isPreviewWritableFile('app.py')).toBe(true);
     expect(isPreviewWritableFile('Dockerfile')).toBe(true);
     expect(isPreviewWritableFile('letter.docx')).toBe(true);
@@ -103,7 +103,11 @@ describe('preview routes', () => {
     expect(isPreviewWritableFile('sheet.xls')).toBe(false);
     expect(isPreviewWritableFile('sheet.csv')).toBe(false);
     expect(isPreviewWritableFile('doc.pdf')).toBe(false);
-    expect(isPreviewWritableFile('photo.png')).toBe(false);
+    expect(isPreviewWritableFile('photo.png')).toBe(true);
+    expect(isPreviewWritableFile('photo.JPEG')).toBe(true);
+    expect(isPreviewWritableFile('photo.webp')).toBe(true);
+    expect(isPreviewWritableFile('photo.gif')).toBe(false);
+    expect(isPreviewWritableFile('photo.heic')).toBe(false);
     expect(isPreviewWritableFile('notes.md')).toBe(false);
   });
 });

@@ -68,14 +68,72 @@ function luminance(hex: string): number | null {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** Low-chroma colors only — keeps yellow/green fills out of theme remapping. */
+/**
+ * Channel spread below this is gray. Header chrome #f4f5f8 (spread 4) stays themeable.
+ * Excel accent tints such as #deebf7 (spread 25) must keep their fill.
+ */
+const NEUTRAL_CHANNEL_SPREAD = 16;
+
+/** Low-chroma colors only — keeps yellow/green and tinted accent fills out of theme remapping. */
 function isNearNeutral(hex: string): boolean {
   const n = normalizeCssHex(hex);
   if (!/^#[0-9a-f]{6}$/.test(n)) return false;
   const r = Number.parseInt(n.slice(1, 3), 16);
   const g = Number.parseInt(n.slice(3, 5), 16);
   const b = Number.parseInt(n.slice(5, 7), 16);
-  return Math.max(r, g, b) - Math.min(r, g, b) <= 28;
+  return Math.max(r, g, b) - Math.min(r, g, b) <= NEUTRAL_CHANNEL_SPREAD;
+}
+
+/** Point sizes x-spreadsheet already converts. Anything else is drawn as that many pixels. */
+const LIBRARY_FONT_PT = new Set([7.5, 8, 9, 10, 10.5, 11, 12, 14, 15, 16, 18, 22, 24, 26, 36, 42]);
+
+/** Leave mapped sizes in points so the library converts them once. Convert the rest to CSS pixels. */
+export function fontSizeForCanvas(pt: number): number {
+  return LIBRARY_FONT_PT.has(pt) ? pt : pt * 96 / 72;
+}
+
+const CJK_FONT_STACKS: Record<string, string> = {
+  '宋体': '"Songti SC", SimSun, STSong, serif',
+  '宋体-简': '"Songti SC", SimSun, STSong, serif',
+  simsun: '"Songti SC", SimSun, STSong, serif',
+  '等线': '"PingFang SC", "Microsoft YaHei", sans-serif',
+  dengxian: '"PingFang SC", "Microsoft YaHei", sans-serif',
+  '微软雅黑': '"PingFang SC", "Microsoft YaHei", sans-serif',
+  'microsoft yahei': '"PingFang SC", "Microsoft YaHei", sans-serif',
+  '黑体': '"Heiti SC", SimHei, sans-serif',
+  simhei: '"Heiti SC", SimHei, sans-serif',
+  '楷体': '"Kaiti SC", KaiTi, serif',
+  kaiti: '"Kaiti SC", KaiTi, serif',
+};
+
+/** Canvas family for a CJK face that is usually missing on macOS. Other names stay as stored. */
+export function canvasFontFamily(name: string): string {
+  const trimmed = name.trim();
+  return CJK_FONT_STACKS[trimmed] ?? CJK_FONT_STACKS[trimmed.toLowerCase()] ?? name;
+}
+
+/** Draw-only style: unmapped point sizes become pixels, and CJK names map to installed faces. */
+export function styleForDraw(style: XsStyleLike): XsStyleLike {
+  const font = style.font;
+  if (!font || typeof font !== 'object') return style;
+  const source = font as { name?: string; size?: number; bold?: boolean; italic?: boolean };
+  const nextFont = { ...source };
+  let changed = false;
+  if (typeof source.size === 'number') {
+    const size = fontSizeForCanvas(source.size);
+    if (size !== source.size) {
+      nextFont.size = size;
+      changed = true;
+    }
+  }
+  if (typeof source.name === 'string') {
+    const name = canvasFontFamily(source.name);
+    if (name !== source.name) {
+      nextFont.name = name;
+      changed = true;
+    }
+  }
+  return changed ? { ...style, font: nextFont } : style;
 }
 
 /** Near-white / Excel lt1 — treat as theme surface, keep green/yellow/etc. */
@@ -152,7 +210,16 @@ function installCellStyleHook(data: XsDataLike, getMode: () => EasyViewThemeMode
   const anyData = data as XsDataLike & { [STYLE_HOOK]?: boolean };
   if (anyData[STYLE_HOOK] || typeof data.getCellStyleOrDefault !== 'function') return;
   const original = data.getCellStyleOrDefault.bind(data);
-  data.getCellStyleOrDefault = (ri: number, ci: number) => adaptCellStyleForTheme(original(ri, ci) || {}, getMode());
+  // Drawing reads this. The toolbar reads getSelectedCellStyle, which must stay in points
+  // and keep the stored font name (20pt drawn as 20px was the mismatch with Excel).
+  data.getCellStyleOrDefault = (ri: number, ci: number) => styleForDraw(adaptCellStyleForTheme(original(ri, ci) || {}, getMode()));
+  if (typeof anyData.getSelectedCellStyle === 'function') {
+    anyData.getSelectedCellStyle = () => {
+      const ri = anyData.selector?.ri ?? 0;
+      const ci = anyData.selector?.ci ?? 0;
+      return adaptCellStyleForTheme(original(ri, ci) || {}, getMode());
+    };
+  }
   anyData[STYLE_HOOK] = true;
 }
 

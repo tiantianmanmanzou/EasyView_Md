@@ -3,13 +3,47 @@ import JSZip from 'jszip';
 import { tPreview } from '../preview.i18n';
 import type { XsCell, XsCellStyle, XsColumnsData, XsRowsData, XsSheetData } from './xSpreadsheetTypes';
 import { isThemeableBackground, isThemeableForeground } from './spreadsheetTheme';
+import { formatExcelDate } from './excelDateFormat';
 
 type XsStyle = XsCellStyle;
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLS = 26;
-const MAX_COL_WIDTH_PX = 480;
+/** Excel's widest column is 255 characters (~1785px at the default digit width). */
+const MAX_COL_WIDTH_PX = 1790;
 const MIN_COL_WIDTH_PX = 32;
+/** Calibri 11 max digit width. OOXML column width is defined against this. */
+const MAX_DIGIT_WIDTH = 7;
+
+/** Excel character width → CSS pixels (ECMA-376, MDW = 7). */
+export function excelColumnWidthToPx(width: number): number {
+  const padding = Math.trunc(128 / MAX_DIGIT_WIDTH);
+  const px = Math.trunc(((256 * width + padding) / 256) * MAX_DIGIT_WIDTH);
+  return Math.min(MAX_COL_WIDTH_PX, Math.max(MIN_COL_WIDTH_PX, px));
+}
+
+/** Inverse of excelColumnWidthToPx, in Excel character units. */
+export function pxToExcelColumnWidth(px: number): number {
+  const padding = Math.trunc(128 / MAX_DIGIT_WIDTH);
+  const approx = Math.max(0, Math.trunc(((px / MAX_DIGIT_WIDTH) * 256 - padding) / 256 * 100 + 0.5) / 100);
+  const target = Math.round(px);
+  const forward = (width: number) => Math.trunc(((256 * width + padding) / 256) * MAX_DIGIT_WIDTH);
+  for (let step = 0; step <= 20; step += 1) {
+    const probe = Math.round((approx + step / 100) * 100) / 100;
+    if (forward(probe) === target) return probe;
+  }
+  return approx;
+}
+
+/** Excel row height is in points; the canvas uses CSS pixels at 96dpi. */
+export function excelRowPointsToPx(points: number): number {
+  return Math.max(1, Math.round(points * 96 / 72));
+}
+
+/** Inverse of excelRowPointsToPx, in points. */
+export function pxToExcelRowPoints(px: number): number {
+  return Math.round(px * 72 / 96 * 100) / 100;
+}
 
 /** Load workbook bytes into x-data-spreadsheet sheet payloads. */
 export async function workbookBytesToXsSheets(bytes: ArrayBuffer): Promise<XsSheetData[]> {
@@ -79,8 +113,7 @@ export function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: Excel
 
   (worksheet.columns ?? []).forEach((column, index) => {
     if (column && typeof column.width === 'number' && column.width > 0) {
-      const px = Math.round(column.width * 8);
-      cols[index] = { width: Math.min(MAX_COL_WIDTH_PX, Math.max(MIN_COL_WIDTH_PX, px)) };
+      cols[index] = { width: excelColumnWidthToPx(column.width) };
     }
   });
 
@@ -88,11 +121,13 @@ export function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: Excel
     const ri = rowNumber - 1;
     if (typeof row.height === 'number' && row.height > 0) {
       rows[ri] = rows[ri] || { cells: {} };
-      (rows[ri] as { height?: number }).height = Math.round(row.height);
+      (rows[ri] as { height?: number }).height = excelRowPointsToPx(row.height);
     }
 
     const cells: Record<number, XsCell> = {};
-    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    // includeEmpty: empty cells still carry borders / fills from Excel; skipping them
+    // drops the grid lines the source file shows around blank cells.
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
       const ci = colNumber - 1;
       // ExcelJS owns merge membership; do not materialize a second coordinate set.
       if (cell.isMerged && cell.master && cell.master.address !== cell.address) return;
@@ -129,17 +164,31 @@ export function worksheetToXsSheet(worksheet: ExcelJS.Worksheet, workbook: Excel
     rows[sri] = row;
   }
 
-  const view = (worksheet.views || [])[0] as { state?: string; xSplit?: number; ySplit?: number } | undefined;
+  const view = (worksheet.views || [])[0] as { state?: string; xSplit?: number; ySplit?: number; zoomScale?: number } | undefined;
   const freeze = view?.state === 'frozen' && ((view.xSplit ?? 0) > 0 || (view.ySplit ?? 0) > 0)
     ? `${columnLetters(view.xSplit ?? 0)}${(view.ySplit ?? 0) + 1}`
     : undefined;
-  const filter = worksheet.autoFilter;
-  const filterRef = typeof filter === 'string' ? filter : undefined;
+  // Excel often stores autoFilter as the header row only (e.g. A2:K2); the grid then
+  // finds no values under the header and shows "0 / 0". Expand to the last data row.
+  const filterRef = expandAutoFilterRef(autoFilterRefOf(worksheet), rows);
+  const zoom = typeof view?.zoomScale === 'number' && view.zoomScale >= 10 && view.zoomScale <= 400
+    ? Math.round(view.zoomScale)
+    : undefined;
+  const props = worksheet.properties;
+  const defaultRowPx = typeof props?.defaultRowHeight === 'number' && props.defaultRowHeight > 0
+    ? excelRowPointsToPx(props.defaultRowHeight)
+    : undefined;
+  const defaultColPx = typeof props?.defaultColWidth === 'number' && props.defaultColWidth > 0
+    ? excelColumnWidthToPx(props.defaultColWidth)
+    : undefined;
 
   return {
     name: worksheet.name,
     ...(freeze ? { freeze } : {}),
     ...(filterRef ? { autofilter: { ref: filterRef, filters: [] } } : {}),
+    ...(zoom ? { zoom } : {}),
+    ...(defaultRowPx ? { defaultRowPx } : {}),
+    ...(defaultColPx ? { defaultColPx } : {}),
     styles,
     merges,
     cols,
@@ -161,14 +210,14 @@ function applyXsSheetToWorksheet(sheet: XsSheetData, worksheet: ExcelJS.Workshee
 
   for (let ci = 0; ci < maxCol; ci += 1) {
     const col = cols[ci] as { width?: number } | undefined;
-    if (col?.width) worksheet.getColumn(ci + 1).width = Math.max(4, col.width / 8);
+    if (col?.width) worksheet.getColumn(ci + 1).width = Math.max(0, pxToExcelColumnWidth(col.width));
   }
 
   for (let ri = 0; ri < maxRow; ri += 1) {
     const rowData = rows[ri] as { cells?: Record<number, XsCell>; height?: number } | undefined;
     if (!rowData) continue;
     const row = worksheet.getRow(ri + 1);
-    if (typeof rowData.height === 'number' && rowData.height > 0) row.height = rowData.height;
+    if (typeof rowData.height === 'number' && rowData.height > 0) row.height = pxToExcelRowPoints(rowData.height);
     const cells = rowData.cells || {};
     for (const [ciText, cellData] of Object.entries(cells)) {
       const ci = Number(ciText);
@@ -195,7 +244,7 @@ function cellToText(cell: ExcelJS.Cell): string {
     const value = cell.value;
     if (value == null) return '';
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
-    if (value instanceof Date) return value.toISOString();
+    if (value instanceof Date) return formatExcelDate(value, cell.numFmt);
     if (typeof value === 'object') {
       const rich = value as {
         richText?: Array<{ text?: unknown }>;
@@ -210,6 +259,7 @@ function cellToText(cell: ExcelJS.Cell): string {
         return rich.richText.map((part) => flattenText(part?.text)).join('');
       }
       if (rich.text != null) return flattenText(rich.text);
+      if (rich.result instanceof Date) return formatExcelDate(rich.result, cell.numFmt);
       if (rich.result != null) return flattenText(rich.result);
       if (typeof rich.error === 'string') return rich.error;
       if (typeof rich.formula === 'string') return `=${rich.formula}`;
@@ -420,6 +470,47 @@ function parseA1Range(range: string): { sri: number; sci: number; eri: number; e
     eci: colLettersToIndex(match[3]),
     eri: Number(match[4]) - 1,
   };
+}
+
+/** ExcelJS may expose autoFilter as a string or as { from, to }. */
+function autoFilterRefOf(worksheet: ExcelJS.Worksheet): string | undefined {
+  const filter = worksheet.autoFilter as unknown;
+  if (typeof filter === 'string' && filter.trim()) return filter.trim();
+  if (!filter || typeof filter !== 'object') return undefined;
+  const { from, to } = filter as {
+    from?: { row?: number; column?: number };
+    to?: { row?: number; column?: number };
+  };
+  if (!(from?.row && from.column && to?.row && to.column)) return undefined;
+  return `${columnLetters(from.column - 1)}${from.row}:${columnLetters(to.column - 1)}${to.row}`;
+}
+
+/**
+ * Grow a header-only (or short) autoFilter ref down to the last non-empty cell in its
+ * columns so the filter menu can list the column's values.
+ */
+function expandAutoFilterRef(ref: string | undefined, rows: NonNullable<XsSheetData['rows']>): string | undefined {
+  if (!ref) return undefined;
+  const parsed = parseA1Range(ref);
+  if (!parsed) return ref;
+  const { sri, sci, eri, eci } = parsed;
+  let last = eri;
+  for (const [key, row] of Object.entries(rows)) {
+    if (key === 'len') continue;
+    const ri = Number(key);
+    if (!Number.isFinite(ri) || ri <= sri) continue;
+    const cells = (row as { cells?: Record<number, XsCell> } | undefined)?.cells;
+    if (!cells) continue;
+    for (let ci = sci; ci <= eci; ci += 1) {
+      const text = cells[ci]?.text;
+      if (typeof text === 'string' && text.trim() !== '') {
+        last = Math.max(last, ri);
+        break;
+      }
+    }
+  }
+  if (last === eri) return ref;
+  return `${columnLetters(sci)}${sri + 1}:${columnLetters(eci)}${last + 1}`;
 }
 
 function colLettersToIndex(letters: string): number {

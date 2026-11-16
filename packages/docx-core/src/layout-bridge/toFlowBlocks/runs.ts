@@ -24,7 +24,7 @@ import type {
   FontFamilyAttrs,
 } from '../../prosemirror/schema/marks';
 import type { Theme } from '../../types/document';
-import { resolveColor, resolveHighlightToCss } from '../../utils/colorResolver';
+import { resolveColor, resolveHighlightColor, resolveHighlightToCss } from '../../utils/colorResolver';
 import { halfPointsToPixels, halfPointsToPoints } from '../../utils/units';
 import { twipsToPixels, constrainImageToPage } from './shared';
 import type { ToFlowBlocksOptions } from './shared';
@@ -81,6 +81,7 @@ function extractRunFormatting(marks: readonly Mark[], theme?: Theme | null): Run
 
       case 'highlight':
         formatting.highlight = resolveHighlightToCss(mark.attrs.color as string);
+        if (resolveHighlightColor(mark.attrs.color as string)) formatting.paletteHighlight = true;
         break;
 
       case 'fontSize': {

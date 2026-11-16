@@ -51,17 +51,16 @@ test('docx toolbar: every control applies, and formatting survives Save', async 
     await first.click(); await expect(shell).not.toHaveAttribute('data-preview-sidebar', sidebarBefore!);
     await first.click(); await expect(shell).toHaveAttribute('data-preview-sidebar', sidebarBefore!);
 
-    // Zoom out / zoom value presets / zoom in.
-    const zoomValue = control(page, 'Zoom: 100%');
-    await control(page, 'Zoom out').click();
-    await expect(bar(page).locator('[aria-label^="Zoom:"]').first()).not.toHaveAttribute('aria-label', 'Zoom: 100%');
-    await control(page, 'Zoom in').click();
-    await expect(bar(page).locator('[aria-label^="Zoom:"]').first()).toHaveAttribute('aria-label', 'Zoom: 100%');
-    await zoomValue.click();
-    await choose(page, /^150%$/);
-    await expect(bar(page).locator('[aria-label^="Zoom:"]').first()).toHaveAttribute('aria-label', 'Zoom: 150%');
-    await bar(page).locator('[aria-label^="Zoom:"]').first().click();
-    await choose(page, /^100%$/);
+    // Zoom lives in the bottom status bar: zoom out / zoom in / presets.
+    const statusbar = page.locator('.preview-word-editor .preview-document-statusbar');
+    const zoomValue = statusbar.locator('select');
+    await statusbar.getByRole('button', { name: '缩小预览' }).click();
+    await expect(zoomValue).toHaveValue('90');
+    await statusbar.getByRole('button', { name: '放大预览' }).click();
+    await expect(zoomValue).toHaveValue('100');
+    await zoomValue.selectOption('150');
+    await expect(zoomValue).toHaveValue('150');
+    await zoomValue.selectOption('100');
 
     // Run formatting on the fixture paragraph.
     await selectParagraph(page);

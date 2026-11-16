@@ -12,10 +12,6 @@ test.describe.serial('samples', () => {
   for (const file of listSampleFiles()) {
     test(file, async () => {
       const { page } = ws;
-      const htmlPageText = () => page.evaluate(() =>
-        document.querySelector<HTMLIFrameElement>('#file-preview-root iframe')?.contentDocument?.body?.innerText.trim() ?? '');
-      // HTML previews reuse the same iframe, so compare the page it shows rather than counting new elements.
-      const previousHtml = await htmlPageText();
       // Whatever the previous sample rendered must not count for this one.
       await page.evaluate(() => document.querySelectorAll('#file-preview-root *, .ProseMirror').forEach((node) => { (node as HTMLElement).dataset.e2eStale = '1'; }));
       await ws.open(`${SAMPLE_WORKSPACE_FOLDER}/${file}`);
@@ -23,24 +19,23 @@ test.describe.serial('samples', () => {
         await expect.poll(() => page.locator('.ProseMirror:not([data-e2e-stale])').filter({ visible: true }).innerText(), { timeout: 30_000 }).not.toBe('');
         return;
       }
+      if (/\.html?$/i.test(file)) {
+        await expect(page.locator('.desktop-browser-chrome')).toBeVisible({ timeout: 30_000 });
+        await expect.poll(() => ws.application.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+          return win?.contentView.children.some((view) => {
+            const guest = view as { webContents?: { isDestroyed(): boolean; getURL(): string } };
+            const contents = guest.webContents;
+            return !!contents && !contents.isDestroyed() && view.getVisible() && /\.html?$/i.test(contents.getURL());
+          }) ?? false;
+        }), { timeout: 30_000 }).toBe(true);
+        return;
+      }
       const root = page.locator('#file-preview-root');
       await expect(root).toBeVisible({ timeout: 30_000 });
       if (/\.(mp4|m4v|mp3|m4a|wav|ogg|oga|flac)$/i.test(file)) {
         const media = root.locator('video:not([data-e2e-stale]), audio:not([data-e2e-stale])');
         await expect.poll(() => media.evaluate((element: HTMLMediaElement) => element.duration).catch(() => 0), { timeout: 30_000 }).toBeGreaterThan(0);
-        return;
-      }
-      if (/\.html?$/i.test(file)) {
-        const frame = root.locator('iframe.preview-html-frame, iframe').first();
-        await expect(frame).toBeVisible({ timeout: 30_000 });
-        // Desktop loads easyview-preview:// directly; that origin is often opaque to
-        // contentDocument, so fall back to a real src (not about:blank) when text is empty.
-        await expect.poll(async () => {
-          const text = await htmlPageText();
-          if (text !== '' && text !== previousHtml) return true;
-          const src = await frame.getAttribute('src');
-          return !!src && src !== 'about:blank' && src.includes('://');
-        }, { timeout: 30_000 }).toBe(true);
         return;
       }
       await expect.poll(() => root.evaluate((element) => {

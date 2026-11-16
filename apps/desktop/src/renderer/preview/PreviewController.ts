@@ -9,6 +9,9 @@ export class PreviewController implements PreviewHost {
   private state: PreviewState = { descriptor: null, status: 'idle', error: null };
   private activeRequest = 0;
   private readonly listeners = new Set<() => void>();
+  private dirty = false;
+  private saveHandler: (() => Promise<void>) | null = null;
+  private relativePath: string | null = null;
 
   constructor(private readonly api: EasyViewDesktopApi) {}
 
@@ -19,9 +22,70 @@ export class PreviewController implements PreviewHost {
     return () => this.listeners.delete(listener);
   };
 
+  setDirty = (dirty: boolean): void => {
+    if (this.dirty === dirty) return;
+    this.dirty = dirty;
+    const path = this.relativePath ?? this.state.descriptor?.relativePath;
+    if (path) void this.api.preview.setDirty(path, dirty);
+  };
+
+  registerSaveHandler = (save: () => Promise<void>): (() => void) => {
+    this.saveHandler = save;
+    return () => {
+      if (this.saveHandler === save) this.saveHandler = null;
+    };
+  };
+
+  /** True when the open preview has unsaved edits. */
+  isDirty(): boolean {
+    return this.dirty;
+  }
+
+  matchesPath(relativePath: string): boolean {
+    return this.relativePath === relativePath
+      || this.state.descriptor?.relativePath === relativePath;
+  }
+
+  currentPath(): string | null {
+    return this.relativePath ?? this.state.descriptor?.relativePath ?? null;
+  }
+
+  /** Persist via the active viewer; used by close-with-save prompts. */
+  async save(): Promise<boolean> {
+    if (!this.saveHandler) return !this.dirty;
+    try {
+      await this.saveHandler();
+      return !this.dirty;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * If dirty, ask Save / Don't Save / Cancel. Returns false when the user
+   * cancels or save fails (caller must keep the current preview).
+   */
+  async ensureClean(): Promise<boolean> {
+    if (!this.dirty) return true;
+    const fileName = this.state.descriptor?.fileName ?? this.relativePath ?? '';
+    const action = await this.api.preview.confirmUnsaved(fileName);
+    if (action === 'cancel') return false;
+    if (action === 'save') {
+      if (!(await this.save())) return false;
+    } else {
+      this.setDirty(false);
+    }
+    return true;
+  }
+
   async open(relativePath: string): Promise<PreviewDescriptor | null> {
+    if (this.relativePath === relativePath && this.state.descriptor) {
+      return this.state.descriptor;
+    }
+    if (!(await this.ensureClean())) return null;
     const request = ++this.activeRequest;
     await this.closeCurrent(false);
+    this.relativePath = relativePath;
     this.update({ descriptor: null, status: 'loading', error: null });
     try {
       const result = await this.api.preview.open(relativePath);
@@ -40,9 +104,11 @@ export class PreviewController implements PreviewHost {
     }
   }
 
-  async close(): Promise<void> {
+  /** Close without prompting (caller already confirmed or is disposing). */
+  async closeForced(): Promise<void> {
     ++this.activeRequest;
     await this.closeCurrent(true);
+    this.relativePath = null;
   }
 
   async readText(sessionId: string): Promise<PreviewTextResult> {
@@ -105,13 +171,17 @@ export class PreviewController implements PreviewHost {
   }
 
   dispose(): void {
-    void this.close();
+    this.dirty = false;
+    this.saveHandler = null;
+    void this.closeCurrent(true);
     this.listeners.clear();
   }
 
   private async closeCurrent(reset: boolean): Promise<void> {
     const descriptor = this.state.descriptor;
     if (descriptor) await this.api.preview.close(descriptor.sessionId);
+    if (this.relativePath) void this.api.preview.setDirty(this.relativePath, false);
+    this.dirty = false;
     if (reset) this.update({ descriptor: null, status: 'idle', error: null });
   }
 

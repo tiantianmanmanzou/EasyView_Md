@@ -28,6 +28,10 @@ import { installAppMenuButton } from './appMenuButton';
 import { installTitleBarDoubleClick } from './titleBarDoubleClick';
 import { installTitleBarOverlaySync } from './titleBarOverlaySync';
 import { installToolbarWheelScroll } from './toolbarWheelScroll';
+import { bindBrowserChrome, browserChromeLabels } from './browser/browserChrome';
+import { installBrowserBounds } from './browser/browserBounds';
+import { installBrowserLinkMenu } from './browser/browserLinkMenu';
+import { installCommandPalette, type PaletteCommand } from './browser/commandPalette';
 import '@easyview/preview-ui/toolbar-styles';
 
 interface WindowWithDesktopApi extends Window {
@@ -44,7 +48,7 @@ interface WindowWithDesktopApi extends Window {
 declare const window: WindowWithDesktopApi;
 
 const api = window.easyViewDesktop;
-if (!api?.editor || !api.app || !api.document) {
+if (!api?.editor || !api.app || !api.document || !api.browser) {
   document.body.innerHTML = '<main style="padding:24px;font-family:system-ui">EasyView_Md 宿主接口加载失败。Failed to load the EasyView_Md host API.</main>'; // i18n-ignore
   throw new Error('EasyView_Md preload API is unavailable');
 }
@@ -126,6 +130,9 @@ const editors = new DesktopEditorInstanceRegistry({
     outlinePosition: panelLayout.outline,
     aiChatContainer: panelDockElements.panels.aiChat,
     root,
+    hostActions: {
+      openInBuiltinBrowser: (url) => { void api.browser.open(url); },
+    },
   }),
 });
 
@@ -406,6 +413,17 @@ const activeView = new ActiveViewController({
 api.preview.onFileChanged((relativePaths) => {
   for (const relativePath of relativePaths) void activeView.reloadPreviewMatching(relativePath);
 });
+api.preview.onSaveRequest(({ requestId, relativePath }) => {
+  void import('./preview/previewUnsavedRegistry').then(async ({ savePreviewByPath }) => {
+    const ok = await savePreviewByPath(relativePath);
+    await api.preview.reportSaveResult(requestId, ok);
+  });
+});
+api.preview.onClearDirty((relativePath) => {
+  void import('./preview/previewUnsavedRegistry').then(({ clearPreviewDirtyByPath }) => {
+    clearPreviewDirtyByPath(relativePath);
+  });
+});
 
 function visibleEditorTabs(snapshot: { groups: Array<{ tabs: DesktopTab[]; activeTabId: string | null }> }): DesktopEditorTab[] {
   const visible: DesktopEditorTab[] = [];
@@ -446,6 +464,7 @@ tabController = new TabController({
     bindVisibleEditors(snapshot, tab);
     if (!tab) workspaceExplorer.setActiveRelativePath(null);
     else if (tab.kind === 'editor') workspaceExplorer.setActiveDocument(tab.filePath);
+    else if (tab.kind === 'browser') workspaceExplorer.setActiveRelativePath(tab.relativePath ?? null);
     else if (tab.kind !== 'history') workspaceExplorer.setActiveRelativePath(tab.relativePath);
     publishMenuState();
   },
@@ -527,7 +546,43 @@ api.menu.onRevealInIndexArea((relativePath) => {
   void workspaceExplorer.revealRelativePath(relativePath);
 });
 
+const browserShortcut = navigator.platform.toLowerCase().includes('mac') ? '⇧⌘B' : 'Ctrl+Shift+B';
+const browserButton = document.getElementById('browser-toggle');
+if (browserButton) {
+  const browserLabel = `${tDesktop('shell.openBrowser')} (${browserShortcut})`;
+  browserButton.title = browserLabel;
+  browserButton.setAttribute('aria-label', browserLabel);
+  browserButton.addEventListener('click', () => { void api.browser.open(); });
+}
+const commandPalette = installCommandPalette({
+  placeholder: tDesktop('commandPalette.placeholder'),
+  emptyLabel: tDesktop('commandPalette.empty'),
+  commands: (): PaletteCommand[] => [
+    { id: 'openBrowser', title: tDesktop('shell.openBrowser'), shortcut: browserShortcut, keywords: 'browser url html', run: () => { void api.browser.open(); } },
+    { id: 'openTerminal', title: tDesktop('palette.terminal'), keywords: 'terminal', run: () => { activeEditor()?.executeCommand('openTerminal'); } },
+    { id: 'toggleAiChat', title: tDesktop('palette.aiChat'), shortcut: 'Alt+I', keywords: 'ai chat', run: () => { toggleAiChat(); } },
+    { id: 'toggleExplorer', title: tDesktop('palette.explorer'), keywords: 'index explorer', run: () => { workspaceExplorer.toggle(); } },
+  ],
+});
+const disposeBrowserChrome = bindBrowserChrome(api.browser, browserChromeLabels());
+const disposeBrowserBounds = installBrowserBounds({
+  browser: api.browser,
+  onZoomChanged: (listener) => api.app.onZoomChanged(() => listener()),
+});
+const disposeBrowserLinkMenu = installBrowserLinkMenu({
+  label: tDesktop('browser.openInBrowser'),
+  open: (url) => { void api.browser.open(url); },
+});
+
 api.menu.onCommand((command) => {
+  if (command === 'openBrowser') {
+    void api.browser.open();
+    return;
+  }
+  if (command === 'openCommandPalette') {
+    commandPalette.open();
+    return;
+  }
   if (command === 'toggleTheme') {
     productAppearance.cycleMode();
     return;
@@ -612,6 +667,10 @@ window.addEventListener('unload', () => {
   disposeTitleBarDoubleClick();
   disposeToolbarWheelScroll();
   unsubscribeToolbarVisibility();
+  disposeBrowserChrome();
+  disposeBrowserBounds();
+  disposeBrowserLinkMenu();
+  commandPalette.dispose();
   guardPanel.dispose();
   tabController.dispose();
   workspaceExplorer.dispose();

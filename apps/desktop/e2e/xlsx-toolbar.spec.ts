@@ -4,8 +4,8 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { resumeRestoredSession, terminateElectron } from './support/electronApp';
 
-// Cell geometry of x-spreadsheet's default grid (row header 60px, column 100px, row 25px).
-const cell = (col: number, row: number) => ({ x: 60 + col * 100 + 50, y: 25 + row * 25 + 12 });
+// Grid geometry for the generated book: row header 60px, column 100px, rows at the file's 15pt default (20px).
+const cell = (col: number, row: number) => ({ x: 60 + col * 100 + 50, y: 20 + row * 20 + 10 });
 const button = (page: Page, icon: string) => page.locator(`.x-spreadsheet-toolbar-btns > .x-spreadsheet-toolbar-btn:has(.x-spreadsheet-icon-img.${icon})`).first();
 const openMenu = (page: Page) => page.locator('.x-spreadsheet-toolbar .x-spreadsheet-dropdown-content:visible');
 
@@ -93,6 +93,28 @@ test('every working xlsx toolbar button changes the cell and survives save', asy
   } finally { await terminateElectron(application); if (temporary) await rm(temporary, { recursive: true, force: true }); }
 });
 
+test('text from the system clipboard pastes into cells and into the cell editor', async () => {
+  let application: ElectronApplication | undefined; let temporary = '';
+  try {
+    const opened = await launch(1400); application = opened.application; temporary = opened.temporary;
+    const { page, overlay, xlsx } = opened;
+    // Same path as Cmd/Ctrl+V through the app's Edit menu.
+    const paste = (text: string) => opened.application.evaluate(({ BrowserWindow, clipboard }, value) => {
+      clipboard.writeText(value); BrowserWindow.getAllWindows()[0].webContents.paste();
+    }, text);
+    await overlay.click({ position: cell(1, 1) }); await paste('hello'); // B2: no trailing newline
+    await overlay.click({ position: cell(2, 2) }); await paste('a\the said "hi"\nc\td\n'); // C3:D4
+    await overlay.click({ position: cell(0, 0) }); await page.keyboard.press('ControlOrMeta+C');
+    await overlay.click({ position: cell(0, 6) }); await paste('fresh'); // A7: newer external text beats the internal copy
+    await overlay.dblclick({ position: cell(3, 0) }); await paste('+x'); await page.keyboard.press('Enter'); // D1 while editing
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await expect.poll(async () => String((await readBook(xlsx)).getCell('B2').value)).toBe('hello');
+    const ws = await readBook(xlsx);
+    expect(['C3', 'D3', 'C4', 'D4', 'A7', 'D1'].map((address) => String(ws.getCell(address).value)))
+      .toEqual(['a', 'he said "hi"', 'c', 'd', 'fresh', '14+x']);
+  } finally { await terminateElectron(application); if (temporary) await rm(temporary, { recursive: true, force: true }); }
+});
+
 for (const width of [900, 700]) {
   test(`xlsx toolbar overflow never covers EasyView buttons at ${width}px`, async () => {
     let application: ElectronApplication | undefined; let temporary = '';
@@ -151,9 +173,10 @@ test('xlsx print preview, theme and the overflow menu work', async () => {
     const theme = page.locator('[data-easyview-spreadsheet-chrome] button[title*="主题"]');
     await theme.click(); await expect.poll(paint).not.toBe(before);
     await theme.click(); await theme.click(); await expect.poll(paint).toBe(before);
-    // More: at a narrow width the hidden buttons move into the "more" menu and still work there.
-    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(760, 800));
+    // More: hidden when every button fits; at a narrow width overflow items land in the menu.
     const more = page.locator('.x-spreadsheet-toolbar-btns > .x-spreadsheet-toolbar-btn:has(.x-spreadsheet-icon-img.ellipsis)');
+    await expect(more).toBeHidden();
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(760, 800));
     await expect(more).toBeVisible();
     await more.click();
     const menu = more.locator('.x-spreadsheet-dropdown-content').first();

@@ -28,6 +28,7 @@ import {
 } from '../InlineHeaderFooterEditor';
 import { UnifiedSidebar } from '../UnifiedSidebar';
 import { CommentMarginMarkers } from '../CommentMarginMarkers';
+import { DEFAULT_PAGE_GAP } from './internals/styles';
 import { Tooltip } from '../ui/Tooltip';
 import { MaterialSymbol } from '../ui/Icons';
 import { PENDING_COMMENT_ID } from './commentFactories';
@@ -72,6 +73,7 @@ export function DocxEditorPagedArea({
   getHfTargetElement,
   // Editor
   zoom,
+  pagesPerRow = 1,
   readOnly,
   extensionManager,
   externalPlugins,
@@ -138,6 +140,7 @@ export function DocxEditorPagedArea({
   onBodyClick: () => void;
   getHfTargetElement: (pos: 'header' | 'footer') => HTMLElement | null;
   zoom: number;
+  pagesPerRow?: number;
   readOnly: boolean;
   extensionManager: ExtensionManager;
   externalPlugins: Plugin[];
@@ -190,6 +193,8 @@ export function DocxEditorPagedArea({
   isSuggesting?: boolean;
   author?: string;
 }) {
+  // Comment markers and cards sit past the right edge of the whole row of pages.
+  const rowWidthPx = pageWidthPx * pagesPerRow + DEFAULT_PAGE_GAP * (pagesPerRow - 1);
   // Resolve the active HF block for the inline editor — first-page variant
   // wins when `titlePg` is set and the user double-clicked page 1.
   const activeHf = hfEditPosition
@@ -370,6 +375,7 @@ export function DocxEditorPagedArea({
         // now routes every HF gesture (click, drag, dblclick, image, hyperlink,
         // context menu) through the active-surface helper directly.
         zoom={zoom}
+        pagesPerRow={pagesPerRow}
         readOnly={readOnly}
         extensionManager={extensionManager}
         onDocumentChange={onDocumentChange}
@@ -402,7 +408,7 @@ export function DocxEditorPagedArea({
                 items={sidebarItems}
                 anchorPositions={anchorPositions}
                 renderedDomContext={pluginRenderedDomContext ?? null}
-                pageWidth={pageWidthPx}
+                pageWidth={rowWidthPx}
                 zoom={zoom}
                 editorContainerRef={scrollContainerRef}
                 onExpandedItemChange={setExpandedSidebarItem}
@@ -413,7 +419,7 @@ export function DocxEditorPagedArea({
               comments={comments}
               anchorPositions={anchorPositions}
               zoom={zoom}
-              pageWidth={pageWidthPx}
+              pageWidth={rowWidthPx}
               sidebarOpen={sidebarOpen}
               resolvedCommentIds={resolvedCommentIds}
               onMarkerClick={() => setShowCommentsSidebar(true)}

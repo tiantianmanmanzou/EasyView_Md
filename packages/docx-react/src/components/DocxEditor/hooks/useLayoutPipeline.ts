@@ -75,6 +75,8 @@ export interface UseLayoutPipelineOptions {
    */
   getHfPmDoc?: (hf: HeaderFooter) => PMNode | null;
   pageGap: number;
+  /** Pages side by side per rendered row (two-page view). */
+  pagesPerRow: number;
   zoom: number;
   resolvedCommentIds?: Set<number>;
   pagesContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -111,6 +113,7 @@ export function useLayoutPipeline(opts: UseLayoutPipelineOptions): UseLayoutPipe
     firstPageFooterContent,
     getHfPmDoc,
     pageGap,
+    pagesPerRow,
     zoom,
     resolvedCommentIds,
     pagesContainerRef,
@@ -238,6 +241,7 @@ export function useLayoutPipeline(opts: UseLayoutPipelineOptions): UseLayoutPipe
           finalMargins,
           finalColumns,
           pageGap,
+          pagesPerRow,
           contentWidth,
           theme,
           styles,
@@ -270,6 +274,7 @@ export function useLayoutPipeline(opts: UseLayoutPipelineOptions): UseLayoutPipe
 
           const renderPagesKind = renderPages(newLayout.pages, pagesContainerRef.current, {
             pageGap,
+            pagesPerRow,
             showShadow: true,
             pageBackground: 'var(--doc-page-bg, #ffffff)',
             blockLookup,
@@ -287,6 +292,7 @@ export function useLayoutPipeline(opts: UseLayoutPipelineOptions): UseLayoutPipe
             resolvedCommentIds,
           } as RenderPageOptions & {
             pageGap?: number;
+            pagesPerRow?: number;
             blockLookup?: BlockLookup;
             footnotesByPage?: Map<number, FootnoteRenderItem[]>;
           });
@@ -430,6 +436,7 @@ export function useLayoutPipeline(opts: UseLayoutPipelineOptions): UseLayoutPipe
       finalMargins,
       finalColumns,
       pageGap,
+      pagesPerRow,
       zoom,
       syncCoordinator,
       headerContent,

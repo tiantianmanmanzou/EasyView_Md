@@ -51,6 +51,7 @@ import {
   isMarkdownPath,
   previewSessions,
   publishMenuCommand,
+  sendToWindow,
   setActiveTerminalSessionId,
   setActiveWindowContext,
   setClosing,
@@ -69,6 +70,7 @@ import type { DesktopAccent, DesktopAppearanceMode, DesktopDocumentFont, Desktop
 import { getLocale, type LocalePreference } from '@easyview/contracts';
 import { getSelectedLanguagePreference, saveLanguagePreference } from '../settings/languageSettings';
 import { tMenu } from './windowService.i18n';
+import { disposeBrowserViews } from '../browser/browserWorkflow';
 
 const appearanceModeLabel = (mode: DesktopAppearanceMode) => tMenu(`appearance.${mode}`);
 const themeDepthLabel = (step: DesktopThemeDepthStep) => tMenu(`depth.${step}`);
@@ -134,6 +136,7 @@ export function applyWindowZoomLevel(level: number): void {
   if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
   target.webContents.setZoomLevel(next);
   syncWindowChromeToZoom(target, next);
+  sendToWindow('app.zoomChanged', target.webContents.getZoomFactor());
 }
 
 /** The renderer's 32px title row scales with page zoom; keep the native window controls centered in it. */
@@ -402,6 +405,16 @@ export function createMenu(): void {
         { label: tMenu('view.zoomIn'), accelerator: 'CmdOrCtrl+Plus', visible: false, acceleratorWorksWhenHidden: true, click: inContext(() => zoomWindowBy(1)) },
         { label: tMenu('view.zoomOut'), accelerator: 'CmdOrCtrl+-', click: inContext(() => zoomWindowBy(-1)) },
         { label: tMenu('view.resetZoom'), accelerator: 'CmdOrCtrl+0', click: inContext(() => resetWindowZoom()) },
+        { type: 'separator' },
+        command(tMenu('view.openBrowser'), 'openBrowser', { id: 'view-open-browser', accelerator: 'CmdOrCtrl+Shift+B', enabled: true }),
+        {
+          id: 'view-command-palette',
+          label: tMenu('view.commandPalette'),
+          accelerator: 'CmdOrCtrl+Shift+P',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: inContext(() => publishMenuCommand('openCommandPalette')),
+        },
       ],
     },
     {
@@ -534,8 +547,22 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
   window.webContents.on('will-navigate', (event, url) => {
     if (!isCurrentRendererUrl(url)) event.preventDefault();
   });
+  // Text fields without a page-provided menu (tree rename, search boxes) get the standard edit menu.
+  window.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+    const { editFlags } = params;
+    Menu.buildFromTemplate([
+      { role: 'undo', label: tMenu('edit.undo'), enabled: editFlags.canUndo },
+      { role: 'redo', label: tMenu('edit.redo'), enabled: editFlags.canRedo },
+      { type: 'separator' },
+      { role: 'cut', label: tMenu('edit.cut'), enabled: editFlags.canCut },
+      { role: 'copy', label: tMenu('edit.copy'), enabled: editFlags.canCopy },
+      { role: 'paste', label: tMenu('edit.paste'), enabled: editFlags.canPaste },
+      { role: 'selectAll', label: tMenu('edit.selectAll'), enabled: editFlags.canSelectAll },
+    ]).popup({ window });
+  });
   window.on('close', (event) => runInWindowContext(context, () => {
-    if (isWindowClosing() || !documentSessions.hasDirty()) return;
+    if (isWindowClosing() || (!documentSessions.hasDirty() && !tabRegistry.hasDirtyPreviews())) return;
     event.preventDefault();
     void confirmCloseAll().then((canClose) => {
       if (canClose) {
@@ -551,6 +578,7 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
     void Promise.all([...documentSessions.values()].map((session) => stopWatcher(session)));
     getTerminalService()?.disposeAll();
     setTerminalService(undefined);
+    disposeBrowserViews();
     previewSessions.closeAll();
     setActiveTerminalSessionId(undefined);
     setMainWindow(undefined);

@@ -104,6 +104,8 @@ export interface PagedEditorProps {
   readOnly?: boolean;
   /** Gap between pages in pixels. */
   pageGap?: number;
+  /** Pages side by side per row: 1, or 2 for the two-page view. */
+  pagesPerRow?: number;
   /** Zoom level (1 = 100%). */
   zoom?: number;
   /** Callback when document changes. */
@@ -298,6 +300,7 @@ const PagedEditorComponent = forwardRef<PagedEditorRef, PagedEditorProps>(
       firstPageFooterContent,
       readOnly = false,
       pageGap = DEFAULT_PAGE_GAP,
+      pagesPerRow = 1,
       zoom = 1,
       onDocumentChange,
       onSelectionChange,
@@ -461,6 +464,7 @@ const PagedEditorComponent = forwardRef<PagedEditorRef, PagedEditorProps>(
       firstPageFooterContent,
       getHfPmDoc,
       pageGap,
+      pagesPerRow,
       zoom,
       resolvedCommentIds,
       pagesContainerRef,
@@ -766,6 +770,12 @@ const PagedEditorComponent = forwardRef<PagedEditorRef, PagedEditorProps>(
         if (!readOnly) {
           // Use requestAnimationFrame to ensure DOM is ready
           requestAnimationFrame(() => {
+            // Leave focus where the user is typing: a text field on this page (e.g. the file tree's
+            // rename box), or another webview / window when the editor was opened in the background.
+            const ownerDocument = view.dom.ownerDocument;
+            const active = ownerDocument.activeElement;
+            if (!ownerDocument.hasFocus()) return;
+            if (active instanceof HTMLElement && active !== view.dom && (active.isContentEditable || active.matches('input, textarea'))) return;
             view.focus();
             setIsFocused(true);
           });

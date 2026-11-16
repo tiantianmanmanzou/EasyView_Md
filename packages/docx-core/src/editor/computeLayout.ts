@@ -78,6 +78,8 @@ export interface ComputeLayoutInputs {
   finalMargins: PageMargins;
   finalColumns: ColumnLayout | undefined;
   pageGap: number;
+  /** Pages side by side per rendered row (two-page view). */
+  pagesPerRow?: number;
   contentWidth: number;
   theme: Theme | null | undefined;
   styles: StyleDefinitions | null | undefined;
@@ -163,6 +165,7 @@ export function computeLayout(inputs: ComputeLayoutInputs): LayoutComputation {
     finalMargins,
     finalColumns,
     pageGap,
+    pagesPerRow,
     contentWidth,
     theme,
     styles,
@@ -272,6 +275,7 @@ export function computeLayout(inputs: ComputeLayoutInputs): LayoutComputation {
     columns: finalColumns,
     bodyBreakType,
     pageGap,
+    pagesPerRow,
   };
 
   let layout: Layout;

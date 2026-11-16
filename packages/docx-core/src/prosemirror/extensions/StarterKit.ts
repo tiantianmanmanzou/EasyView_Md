@@ -32,6 +32,7 @@ import { HyperlinkExtension } from './marks/HyperlinkExtension';
 import { AllCapsExtension } from './marks/AllCapsExtension';
 import { SmallCapsExtension } from './marks/SmallCapsExtension';
 import { FootnoteRefExtension } from './marks/FootnoteRefExtension';
+import { SymbolExtension } from './marks/SymbolExtension';
 import { CharacterSpacingExtension } from './marks/CharacterSpacingExtension';
 import { CommentExtension } from './marks/CommentExtension';
 import { InsertionExtension, DeletionExtension } from './marks/TrackedChangeExtensions';
@@ -124,6 +125,7 @@ export function createStarterKit(options: StarterKitOptions = {}): AnyExtension[
   add('allCaps', AllCapsExtension());
   add('smallCaps', SmallCapsExtension());
   add('footnoteRef', FootnoteRefExtension());
+  add('symbol', SymbolExtension());
   add('characterSpacing', CharacterSpacingExtension());
   add('emboss', EmbossExtension());
   add('imprint', ImprintExtension());

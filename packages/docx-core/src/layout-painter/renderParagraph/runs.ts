@@ -20,6 +20,7 @@ import type { RenderContext } from '../renderPage';
 import { isFloatingImageRun } from '../floatingImageFlow';
 import { applyImageVisualAttrs, hasImageVisualAttrs } from '../renderImage';
 import { resolveFontFamily } from '../../utils/fontResolver';
+import { halfWidthSpaceExtra } from '../../layout-bridge/measuring/measureContainer';
 import {
   PARAGRAPH_CLASS_NAMES,
   isTextRun,
@@ -65,6 +66,12 @@ function applyRunStyles(
   // Letter spacing
   if (run.letterSpacing) {
     element.style.letterSpacing = `${run.letterSpacing}px`;
+  }
+  const spaceExtra = run.fontFamily
+    ? halfWidthSpaceExtra({ fontFamily: run.fontFamily, fontSize: run.fontSize })
+    : 0;
+  if (spaceExtra) {
+    element.style.wordSpacing = `${spaceExtra}px`;
   }
 
   // Caps / small-caps. OOXML w:caps = render glyphs uppercase; w:smallCaps =
@@ -141,6 +148,7 @@ function applyRunStyles(
   // Highlight (background color)
   if (run.highlight) {
     element.style.backgroundColor = run.highlight;
+    if (run.paletteHighlight) element.dataset.highlight = '';
   }
 
   // Text decorations

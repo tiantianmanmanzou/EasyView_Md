@@ -1,4 +1,3 @@
-import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { OpcPackage } from '@easyview/ooxml-core/opc';
 import {
@@ -9,7 +8,8 @@ import {
   XlsxWorkbook,
   type XlsxCell,
 } from '@easyview/ooxml-xlsx';
-import { worksheetToXsSheet, validateSheetXml, pxToExcelColumnWidth, pxToExcelRowPoints } from './xSpreadsheetBridge';
+import { validateSheetXml, pxToExcelColumnWidth, pxToExcelRowPoints } from './xSpreadsheetBridge';
+import { sheetXmlToXsSheet } from './ooxmlSheetToXs';
 import { appendXsStyle, cellXfNumFmtId } from './stylesWrite';
 import type { XsCell, XsCellStyle, XsSheetData } from './xSpreadsheetTypes';
 import { tPreview } from '../preview.i18n';
@@ -54,30 +54,21 @@ export class LazyWorkbook {
   }
   async load(index: number): Promise<XsSheetData> {
     if (this.loaded.has(index)) return structuredClone(this.loaded.get(index)!.baseline);
-    const workbook = await this.decode(index);
-    const sheet = workbook.worksheets[0];
-    if (!sheet) throw new Error('Worksheet could not be decoded');
-    const baseline = worksheetToXsSheet(sheet, workbook);
-    this.loaded.set(index, { baseline });
-    return structuredClone(baseline);
-  }
-  private async decode(index: number): Promise<ExcelJS.Workbook> {
     const info = this.sheets[index];
     if (!info) throw new Error('Unknown worksheet');
     const xml = await this.zip.file(info.path)!.async('string');
     validateSheetXml(xml);
-    this.metrics.decodedSheets++; this.metrics.decodedSheetBytes += xml.length;
-    const subset = new JSZip();
-    // Share JSZipObject entries; generateAsync copies compressed entries without
-    // inflating them. Exclude every other worksheet before ExcelJS sees bytes.
-    for (const [name, entry] of Object.entries(this.zip.files)) {
-      if (name.startsWith('xl/worksheets/') && name !== info.path && name !== info.path.replace('worksheets/', 'worksheets/_rels/') + '.rels') continue;
-      subset.files[name] = entry;
-    }
-    subset.file('xl/workbook.xml', this.workbookXml.replace(section(this.workbookXml, 'sheets'), `<sheets>${info.element}</sheets>`).replace(/activeTab="\d+"/g, 'activeTab="0"'));
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(await subset.generateAsync({ type: 'arraybuffer' }));
-    return workbook;
+    this.metrics.decodedSheets += 1;
+    this.metrics.decodedSheetBytes += xml.length;
+    const stylesXml = this.zip.file('xl/styles.xml')
+      ? await this.zip.file('xl/styles.xml')!.async('string')
+      : '';
+    const sharedXml = this.zip.file('xl/sharedStrings.xml')
+      ? await this.zip.file('xl/sharedStrings.xml')!.async('string')
+      : null;
+    const baseline = sheetXmlToXsSheet(xml, stylesXml, sharedXml, info.name);
+    this.loaded.set(index, { baseline });
+    return structuredClone(baseline);
   }
   async save(changes: Array<{ index: number; data: XsSheetData }>): Promise<Uint8Array> {
     const pending = changes.filter(({ index, data }) => {

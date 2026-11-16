@@ -18,7 +18,7 @@
 |---|---|---|
 | 12.0 | 包骨架、接口草案、sample/、本文件入库 | **完成** |
 | P0 | OPC + engine.apply + ops/rev/IO | **完成** |
-| P1 | ooxml-xlsx 去 ExcelJS | **进行中** — 适配器 + AI + export + 预览样式保存已切 ooxml；预览 decode/load 仍用 ExcelJS |
+| P1 | ooxml-xlsx 去 ExcelJS | **进行中** — 适配器 + AI + export + 预览 load/save 已切 ooxml；`xSpreadsheetBridge` 全簿路径仍可触 ExcelJS |
 | P2 | ooxml-docx 并轨 + AI 改正文 | **进行中** — AI 确认后写正文；`ooxml-docx` 适配器已接入；精准 run 级 XML 写回待续 |
 | P3 | ooxml-pptx | **进行中** — 幻灯片/形状文本 query + 精准 XML replace 已通；AI/预览桥接待接 |
 | P4–P6 | 宿主同步、测试加固、验收 | 待开始 |
@@ -33,8 +33,8 @@
 | 2.4 | 插删行列级联（公式/图表锚点等全量） | 部分：单元格网格平移已支持；锚点/名称级联待补 |
 | 2.5 | 工作表增删改名 | 待开始 |
 | 2.6 | 替换 AI `xlsx-edit.ts`；去掉整簿 `writeBuffer` | **完成** |
-| 2.7 | 替换 `LazyWorkbook` / SpreadsheetViewer 保存路径 | **完成**（value-only + 样式/合并/冻结/筛选/列宽行高均走 XML；decode/load 仍 ExcelJS） |
-| 2.8 | new-file / export / git snapshot；移除生产 `exceljs` | 部分：new-file + snapshot + export 已切；预览 decode 与测试夹具仍依赖 exceljs |
+| 2.7 | 替换 `LazyWorkbook` / SpreadsheetViewer 保存路径 | **完成**（load + value/style/merge/freeze/filter/size 均走 ooxml/XML） |
+| 2.8 | new-file / export / git snapshot；移除生产 `exceljs` | 部分：new-file + snapshot + export + LazyWorkbook 已切；bridge 全簿辅助与测试夹具仍可依赖 exceljs |
 | 2.9 | `PreviewController.open` 同路径强制刷新 | **完成**（此前 CI 修复） |
 
 ## 3. 公开接口草案（冻结）

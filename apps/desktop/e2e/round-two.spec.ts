@@ -37,7 +37,9 @@ test('lazily switches worksheets, retains edits, saves and preserves unopened sh
     // The toolbar chrome is attached after mount and can shift the grid; aim at A1 only once the layout is stable.
     let previous = '';
     await expect.poll(async () => { const box = JSON.stringify(await overlay.boundingBox()); const stable = box === previous; previous = box; return stable; }, { intervals: [100] }).toBe(true);
-    await overlay.dblclick({ position: { x: 85, y: 40 } });
+    // Same A1 hit geometry as xlsx-toolbar.spec.ts (row header 60 / col 100 / row 20).
+    const a1 = { x: 60 + 50, y: 20 + 10 };
+    await overlay.dblclick({ position: a1 });
     const input = page.locator('.x-spreadsheet-editor textarea'); await expect(input).toBeVisible();
     // Select existing cell text, then paste — Windows-proven clipboard path from xlsx-toolbar.spec.ts.
     await input.press('ControlOrMeta+A');
@@ -47,6 +49,7 @@ test('lazily switches worksheets, retains edits, saves and preserves unopened sh
     });
     await expect(input).toHaveValue('Changed second');
     await page.keyboard.press('Enter');
+    await expect(input).toBeHidden();
     await first.click(); await expect(first).toHaveAttribute('aria-selected', 'true');
     await second.click(); await expect(second).toHaveAttribute('aria-selected', 'true'); await expect(first).toBeEnabled();
     const expand = page.getByRole('button', { name: '展开预览工具栏' }); if (await expand.isVisible()) await expand.click();

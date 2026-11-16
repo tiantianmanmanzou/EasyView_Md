@@ -78,8 +78,8 @@ export class PreviewController implements PreviewHost {
     return true;
   }
 
-  async open(relativePath: string): Promise<PreviewDescriptor | null> {
-    if (this.relativePath === relativePath && this.state.descriptor) {
+  async open(relativePath: string, options?: { force?: boolean }): Promise<PreviewDescriptor | null> {
+    if (!options?.force && this.relativePath === relativePath && this.state.descriptor) {
       return this.state.descriptor;
     }
     if (!(await this.ensureClean())) return null;

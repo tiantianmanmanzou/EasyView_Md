@@ -19,7 +19,7 @@ export type ActiveWorkspaceView =
   | { kind: 'browser'; tabId: string; url: string };
 
 interface PreviewIsland {
-  open(relativePath: string): Promise<boolean>;
+  open(relativePath: string, options?: { force?: boolean }): Promise<boolean>;
   close(): Promise<boolean>;
   dispose(): void;
 }
@@ -77,7 +77,10 @@ export class ActiveViewController {
       if (!island) continue;
       const key = previewKey(tab.id, tab.relativePath);
       this.shownPreviews.set(group.id, key);
-      if (!(await island.open(tab.relativePath)) && this.shownPreviews.get(group.id) === key) this.shownPreviews.delete(group.id);
+      // Same relative path must remount: PreviewController.open otherwise short-circuits.
+      if (!(await island.open(tab.relativePath, { force: true })) && this.shownPreviews.get(group.id) === key) {
+        this.shownPreviews.delete(group.id);
+      }
     }
   }
 

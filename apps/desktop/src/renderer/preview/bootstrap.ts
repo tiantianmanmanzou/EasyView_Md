@@ -6,7 +6,7 @@ import { PreviewShell } from './PreviewShell';
 import { trackPreviewController } from './previewUnsavedRegistry';
 
 export interface PreviewIsland {
-  open(relativePath: string): Promise<boolean>;
+  open(relativePath: string, options?: { force?: boolean }): Promise<boolean>;
   /** Returns false when the user cancels leaving unsaved edits. */
   close(): Promise<boolean>;
   dispose(): void;
@@ -21,8 +21,8 @@ export function createPreviewIsland(container: HTMLElement, api: EasyViewDesktop
   render();
 
   return {
-    async open(relativePath: string): Promise<boolean> {
-      return (await controller.open(relativePath)) !== null;
+    async open(relativePath: string, options?: { force?: boolean }): Promise<boolean> {
+      return (await controller.open(relativePath, options)) !== null;
     },
     async close(): Promise<boolean> {
       if (!(await controller.ensureClean())) return false;

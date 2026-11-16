@@ -19,9 +19,11 @@ for (const [name, content] of Object.entries(loaded)) {
         Menu.prototype.popup = function popup() { menus.push(this.items.map((item) => item.label)); };
         clipboard.writeText('粘贴');
       });
-      // Clicking opens the file; the rename starts before its preview has finished loading.
+      // Clicking opens the file; start rename via IPC so a fast xlsx mount cannot steal F2 focus.
       await page.locator(`.workspace-entry[data-relative-path="${name}"] .workspace-entry-name`).click();
-      await page.keyboard.press('F2');
+      await application.evaluate(({ BrowserWindow }, relativePath) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('workspace.contextCommand', 'rename', relativePath);
+      }, name);
       const input = page.locator('.workspace-rename-input');
       await expect(input).toBeFocused();
       await page.keyboard.press('ControlOrMeta+V');
@@ -62,7 +64,9 @@ test('leaving the window to copy a name keeps the tree rename and new-file field
   });
   try {
     await page.locator('.workspace-entry[data-relative-path="sample.xlsx"] .workspace-entry-name').click();
-    await page.keyboard.press('F2');
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('workspace.contextCommand', 'rename', 'sample.xlsx');
+    });
     const input = page.locator('.workspace-rename-input');
     await expect(input).toBeFocused();
     await leaveWindow(input);

@@ -11,8 +11,15 @@ export interface XlsxCell {
   value: XlsxCellValue;
   /** Formula without leading '='. */
   formula?: string;
+  /** Cached formula result (`<v>`) from the file, if any. */
+  cached?: string;
   /** Original style index from the sheet, if any. */
   style?: number;
+}
+
+export interface SheetRowProps {
+  /** Excel row height in points. */
+  height?: number;
 }
 
 const ROW_RE = /<row\b[^>]*>[\s\S]*?<\/row>/g;
@@ -67,9 +74,11 @@ export function parseSheetCells(sheetXml: string, sharedStrings: readonly string
       const type = a.t;
       const formula = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(inner)?.[1];
       if (formula !== undefined) {
+        const rawV = /<v>([\s\S]*?)<\/v>/.exec(inner)?.[1];
         cells.set(ref, {
           value: `=${decodeXmlEntities(formula)}`,
           formula: decodeXmlEntities(formula),
+          cached: rawV !== undefined ? decodeXmlEntities(rawV) : undefined,
           style: Number.isFinite(style) ? style : undefined,
         });
         continue;
@@ -114,7 +123,11 @@ function serializeCell(ref: string, cell: XlsxCell): string {
   const styleAttr = cell.style !== undefined ? ` s="${cell.style}"` : '';
   if (cell.formula) {
     const formula = encodeXmlText(cell.formula.replace(/^=/, ''));
-    return `<c r="${ref}"${styleAttr}><f>${formula}</f></c>`;
+    const cached =
+      cell.cached !== undefined && cell.cached !== ''
+        ? `<v>${encodeXmlText(cell.cached)}</v>`
+        : '';
+    return `<c r="${ref}"${styleAttr}><f>${formula}</f>${cached}</c>`;
   }
   const value = cell.value;
   if (value === null || value === undefined || value === '') {
@@ -151,22 +164,33 @@ function usedBounds(cells: Map<string, XlsxCell>): { top: number; left: number; 
   return { top, left, bottom, right };
 }
 
-export function buildSheetDataXml(cells: Map<string, XlsxCell>): string {
+export function buildSheetDataXml(
+  cells: Map<string, XlsxCell>,
+  rowProps?: Map<number, SheetRowProps>,
+): string {
   const byRow = new Map<number, Array<[string, XlsxCell]>>();
   for (const [ref, cell] of cells) {
     if (cell.value === null && !cell.formula && cell.style === undefined) continue;
-    if (cell.value === '' && !cell.formula) continue;
+    if (cell.value === '' && !cell.formula && cell.style === undefined) continue;
     const { row } = parseCellRef(ref);
     const list = byRow.get(row) ?? [];
     list.push([ref, cell]);
     byRow.set(row, list);
+  }
+  if (rowProps) {
+    for (const row of rowProps.keys()) {
+      if (!byRow.has(row)) byRow.set(row, []);
+    }
   }
   const rows = [...byRow.keys()].sort((a, b) => a - b);
   const parts: string[] = ['<sheetData>'];
   for (const row of rows) {
     const entries = byRow.get(row)!;
     entries.sort((a, b) => parseCellRef(a[0]).col - parseCellRef(b[0]).col);
-    parts.push(`<row r="${row}">`);
+    const height = rowProps?.get(row)?.height;
+    const heightAttr =
+      typeof height === 'number' && height > 0 ? ` ht="${height}" customHeight="1"` : '';
+    parts.push(`<row r="${row}"${heightAttr}>`);
     for (const [ref, cell] of entries) {
       const xml = serializeCell(ref, cell);
       if (xml) parts.push(xml);
@@ -178,8 +202,12 @@ export function buildSheetDataXml(cells: Map<string, XlsxCell>): string {
 }
 
 /** Replace sheetData (and dimension when present) from the cell map; keep other worksheet nodes. */
-export function rewriteWorksheetXml(originalXml: string, cells: Map<string, XlsxCell>): string {
-  const sheetData = buildSheetDataXml(cells);
+export function rewriteWorksheetXml(
+  originalXml: string,
+  cells: Map<string, XlsxCell>,
+  rowProps?: Map<number, SheetRowProps>,
+): string {
+  const sheetData = buildSheetDataXml(cells, rowProps);
   let xml = new TextDecoder('utf-8').decode(
     replaceFirstElementByName(new TextEncoder().encode(originalXml), 'sheetData', sheetData),
   );

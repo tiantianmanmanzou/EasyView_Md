@@ -115,16 +115,25 @@ export class OpcPackage {
     return bytes;
   }
 
-  /** SHA-256 of each non-directory part's uncompressed bytes. */
+  /** SHA-256 of each non-directory part's uncompressed bytes (Web Crypto — browser-safe). */
   async partDigests(): Promise<Map<string, string>> {
-    const { createHash } = await import('node:crypto');
     const digests = new Map<string, string>();
     for (const name of this.listParts()) {
       const data = await this.readPart(name);
-      digests.set(name, createHash('sha256').update(data).digest('hex'));
+      digests.set(name, await sha256Hex(data));
     }
     return digests;
   }
+}
+
+async function sha256Hex(data: Uint8Array): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error('Web Crypto SHA-256 is unavailable in this runtime');
+  // Copy into a plain ArrayBuffer — some runtimes reject SharedArrayBuffer views.
+  const copy = new Uint8Array(data.byteLength);
+  copy.set(data);
+  const digest = await subtle.digest('SHA-256', copy.buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 export function normalizePartName(name: string): string {

@@ -1,5 +1,6 @@
 export { createXlsxAdapter, getXlsxWorkbook } from './adapter';
 export {
+  definedNameTargetsSheet,
   dropAnchorsInDeletedRows,
   shiftAnchorRow,
   shiftDefinedNamesXml,

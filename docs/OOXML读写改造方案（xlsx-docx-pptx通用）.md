@@ -20,7 +20,7 @@
 | P0 | OPC + engine.apply + ops/rev/IO | **完成** |
 | P1 | ooxml-xlsx 去 ExcelJS | **完成** — 生产 load/save/export/AI 已去 ExcelJS；公式/定义名称/drawing 锚点级联已接；`exceljsBridge` 仅测试 |
 | P2 | ooxml-docx 并轨 + AI 改正文 | **完成** — AI 确认后写正文；正文 replace 走精准 run 级 XML；批注经 DocxReviewer |
-| P3 | ooxml-pptx | **完成** — 适配器 + AI inspect/apply（含全页/全稿替换）+ Agent 入口；预览写回经磁盘提交后刷新 |
+| P3 | ooxml-pptx | **完成** — 适配器 + AI inspect（含 shapeId）/apply（全页/全稿替换）+ 原生 pptx 提案 UI；预览写回经磁盘提交后刷新 |
 | P4–P6 | 宿主同步、测试加固、验收 | **完成** — sample 夹具 + DocumentService 保真 harness；EXTERNAL_MODIFIED / 预览刷新路径已具备 |
 
 ### P1 细项

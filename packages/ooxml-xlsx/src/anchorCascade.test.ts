@@ -33,13 +33,17 @@ describe('anchorCascade', () => {
     expect(shifted).toContain('<xdr:row>10</xdr:row>');
   });
 
-  it('shifts defined name A1 refs', () => {
+  it('shifts defined name A1 refs only for the target sheet', () => {
     const workbook = `<?xml version="1.0"?><workbook><definedNames>
       <definedName name="Sales">Preview!$B$2:$B$10</definedName>
       <definedName name="Total">Preview!B5</definedName>
+      <definedName name="Other">Other!$A$1:$A$3</definedName>
+      <definedName name="Local" localSheetId="0">$C$2</definedName>
     </definedNames></workbook>`;
-    const next = shiftDefinedNamesXml(workbook, 2, 0, 2);
+    const next = shiftDefinedNamesXml(workbook, 'Preview', 0, 2, 0, 2);
     expect(next).toContain('Preview!$B$4:$B$12');
     expect(next).toContain('Preview!B7');
+    expect(next).toContain('Other!$A$1:$A$3');
+    expect(next).toContain('localSheetId="0">$C$4</definedName>');
   });
 });

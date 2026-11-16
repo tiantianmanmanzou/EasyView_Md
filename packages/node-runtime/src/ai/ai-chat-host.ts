@@ -194,10 +194,10 @@ export class AiChatHost {
             requestId,
             proposalId: proposal.id,
             fileName: proposal.fileName,
-            kind: 'xlsx',
+            kind: 'pptx',
             changes: proposal.diff.changes.map((change) => ({
               sheet: `slide ${change.slideIndex}`,
-              ref: change.shapeName,
+              ref: `#${change.shapeId} ${change.shapeName}`,
               before: change.before,
               after: change.after,
             })),

@@ -54,7 +54,7 @@ type OfficeEditStatus = 'pending' | 'applying' | 'applied' | 'rejected' | 'undoi
 interface OfficeEditState {
   proposalId: string;
   fileName: string;
-  kind: 'xlsx' | 'docx';
+  kind: 'xlsx' | 'docx' | 'pptx';
   changes: AiOfficeCellChange[];
   total: number;
   structural: string[];
@@ -2100,7 +2100,7 @@ export function createAiChatPanel(deps: AiChatPanelDeps): AiChatPanel {
           deps.postMessage({ type: 'aiChat.officeDecision', requestId: message.requestId, proposalId: message.proposalId, accepted: false });
           return true;
         }
-        const kind = message.kind === 'docx' ? 'docx' : 'xlsx';
+        const kind = message.kind === 'docx' ? 'docx' : message.kind === 'pptx' ? 'pptx' : 'xlsx';
         const docxChanges = message.docxChanges ?? [];
         target.officeEdits = [...(target.officeEdits ?? []), {
           proposalId: message.proposalId,

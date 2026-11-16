@@ -214,7 +214,7 @@ export type HostToEditorMessage =
       proposalId: string;
       fileName: string;
       /** Defaults to xlsx when omitted (older hosts). */
-      kind?: 'xlsx' | 'docx';
+      kind?: 'xlsx' | 'docx' | 'pptx';
       changes: AiOfficeCellChange[];
       total: number;
       structural: string[];

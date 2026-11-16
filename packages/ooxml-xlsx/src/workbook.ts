@@ -256,7 +256,7 @@ export class XlsxWorkbook {
 
     if (this.pkg.hasPart('xl/workbook.xml')) {
       const workbookXml = await this.pkg.readPartText('xl/workbook.xml');
-      const next = shiftDefinedNamesXml(workbookXml, at, deleteCount, insertCount);
+      const next = shiftDefinedNamesXml(workbookXml, sheetName, index, at, deleteCount, insertCount);
       if (next !== workbookXml) {
         this.pkg.writePartText('xl/workbook.xml', next);
         this.dirtyExtraParts.add('xl/workbook.xml');

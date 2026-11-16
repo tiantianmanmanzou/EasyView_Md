@@ -191,11 +191,13 @@ export async function inspectPptxFile(
   const summary = await deck.summarize(limit);
   const lines: string[] = [];
   for (const slide of summary.slides) {
-    const texts = slide.shapes
-      .map((shape) => shape.text.trim())
-      .filter(Boolean)
-      .slice(0, 8);
-    lines.push(`[${slide.index}] ${texts.join(' | ') || '(empty)'}`);
+    const shapes = slide.shapes.slice(0, 12).map((shape) => {
+      const label = shape.name?.trim() || `shape ${shape.shapeId}`;
+      const text = shape.text.trim().replace(/\s+/g, ' ');
+      const clipped = text.length > 80 ? `${text.slice(0, 80)}…` : text;
+      return `#${shape.shapeId} ${label}: ${clipped || '(empty)'}`;
+    });
+    lines.push(`[${slide.index}] ${shapes.join(' | ') || '(empty)'}`);
   }
   return {
     fileName: path.basename(filePath),

@@ -59,9 +59,38 @@ export function dropAnchorsInDeletedRows(
   );
 }
 
-/** Rewrite definedName bodies in workbook.xml for A1 row shifts. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** True when a defined name body targets the given sheet (or has no sheet qualifier). */
+export function definedNameTargetsSheet(
+  body: string,
+  sheetName: string,
+  localSheetId: number | undefined,
+  sheetIndex: number,
+): boolean {
+  if (localSheetId !== undefined && localSheetId === sheetIndex) return true;
+  const quoted = `'${sheetName.replace(/'/g, "''")}'`;
+  const bare = sheetName;
+  const pattern = new RegExp(
+    `(?:^|[^A-Za-z0-9_])(?:${escapeRegExp(quoted)}|${escapeRegExp(bare)})!`,
+    'i',
+  );
+  if (pattern.test(body)) return true;
+  // Workbook-scoped name with no sheet prefix: only touch if it looks like a plain A1 range.
+  if (localSheetId === undefined && !/[!]/.test(body) && /[A-Z]+\d+/i.test(body)) return false;
+  return false;
+}
+
+/**
+ * Rewrite definedName bodies in workbook.xml for A1 row shifts on one sheet.
+ * `sheetIndex` is 0-based and matches localSheetId when present.
+ */
 export function shiftDefinedNamesXml(
   workbookXml: string,
+  sheetName: string,
+  sheetIndex: number,
   at: number,
   deleteCount: number,
   insertCount: number,
@@ -70,7 +99,10 @@ export function shiftDefinedNamesXml(
   return workbookXml.replace(
     /<definedName\b([^>]*)>([\s\S]*?)<\/definedName>/g,
     (full, attrs: string, body: string) => {
-        // Named ranges follow sheet row inserts even for $absolute refs.
+      const localRaw = /\blocalSheetId="(\d+)"/.exec(attrs)?.[1];
+      const localSheetId = localRaw !== undefined ? Number(localRaw) : undefined;
+      if (!definedNameTargetsSheet(body, sheetName, localSheetId, sheetIndex)) return full;
+      // Named ranges follow sheet row inserts even for $absolute refs.
       const next = shiftFormulaRows(body, at, deleteCount, insertCount, { shiftAbsolute: true });
       if (next === body) return full;
       return `<definedName${attrs}>${next}</definedName>`;

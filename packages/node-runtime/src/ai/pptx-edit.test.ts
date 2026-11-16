@@ -52,7 +52,7 @@ describe('pptx-edit', () => {
     expect(inspection.fileName).toBe('sample.pptx');
     expect(inspection.fingerprint).toMatch(/^[a-f0-9]{16}$/);
     expect(inspection.slideCount).toBe(1);
-    expect(inspection.preview).toMatch(/^\[0\].*EasyView PowerPoint/);
+    expect(inspection.preview).toMatch(/^\[0\].*#\d+.*EasyView PowerPoint/);
   });
 
   it('plans replaceText, writes after commit, and undoes', async () => {

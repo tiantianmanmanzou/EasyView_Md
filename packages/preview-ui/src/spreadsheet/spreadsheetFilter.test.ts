@@ -46,11 +46,15 @@ describe('attachSpreadsheetFilter', () => {
 
 describe('patchExceptRowTotalHeight', () => {
   it('ignores hidden rows below the view when painting, but keeps them for the scrollbar sentinel', () => {
-    const data = {
+    const data: {
+      exceptRowSet: Set<number>;
+      rows: { getHeight: () => number };
+      exceptRowTotalHeight?: (sri: number, eri: number) => number;
+    } = {
       exceptRowSet: new Set([2, 5, 40, 50]),
       rows: { getHeight: () => 25 },
     };
-    patchExceptRowTotalHeight(data);
+    patchExceptRowTotalHeight(data as never);
     // View starting at row 3: only row 2 (above) counts — not 40/50 below.
     expect(data.exceptRowTotalHeight?.(3, 20)).toBe(25);
     // Scrollbar sentinel (0, -1): every hidden row.

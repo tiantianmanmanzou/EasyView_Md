@@ -40,7 +40,7 @@ for (const name of ['sample.docx', 'sample.xlsx']) {
       await tree.locator('.workspace-file-context-menu button', { hasText: 'Rename' }).click();
       const input = tree.locator('.workspace-rename-input');
       await expect(input).toBeFocused();
-      await page.keyboard.press('Meta+V');
+      await page.keyboard.press('ControlOrMeta+V');
       await expect(input).toHaveValue(`粘贴${extension}`);
 
       await expect(page.locator('.tab.active', { hasText: name })).toBeVisible({ timeout: 30_000 });

@@ -713,7 +713,7 @@ export class TableView extends ProsemirrorTableView {
     cloneTable.appendChild(tbody);
     overlay.replaceChildren(cloneTable);
     // Sticky overlay is pointer-events:none; filter buttons opt back in via CSS.
-    this.syncHeaderFilterButtons(node, cloneTable);
+    this.syncHeaderFilterButtons(this.node, cloneTable);
 
     // The normal corner grip belongs to the scrolling table controls and moves
     // out of view with the source first row. Mirror it into the fixed sticky

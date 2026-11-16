@@ -20,8 +20,8 @@ describe('patchSpreadsheetSelector', () => {
       hideInput: { val: vi.fn(() => ({ focus: vi.fn() })) },
       setAreaOffset() { /* replaced by patch */ },
     };
-    patchSpreadsheetSelector({ selector: { br } });
-    br.setAreaOffset({ left: 10, top: 20, width: 100, height: 25 });
+    patchSpreadsheetSelector({ selector: { br } } as never);
+    (br.setAreaOffset as (offset: Record<string, number>) => void)({ left: 10, top: 20, width: 100, height: 25 });
     expect(applied).toEqual([{ left: 10, top: 20, width: 100, height: 25 }]);
     expect(areaEl.css).toHaveBeenCalledWith('box-sizing', 'border-box');
     expect(areaEl.el.style.boxSizing).toBe('border-box');
@@ -34,9 +34,9 @@ describe('patchSpreadsheetSelector', () => {
       setAreaOffset: vi.fn(),
     };
     const sheet = { selector: { br } };
-    patchSpreadsheetSelector(sheet);
+    patchSpreadsheetSelector(sheet as never);
     const first = br.setAreaOffset;
-    patchSpreadsheetSelector(sheet);
+    patchSpreadsheetSelector(sheet as never);
     expect(br.setAreaOffset).toBe(first);
   });
 });

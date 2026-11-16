@@ -57,11 +57,11 @@ export function patchExceptRowTotalHeight(data: FilterData | null | undefined): 
 export function patchSpreadsheetFilterRender(spreadsheet: XsSpreadsheetLike | null | undefined): void {
   if (!spreadsheet) return;
   if (Array.isArray(spreadsheet.datas)) {
-    for (const data of spreadsheet.datas) patchExceptRowTotalHeight(data as FilterData);
+    for (const data of spreadsheet.datas) patchExceptRowTotalHeight(data as unknown as FilterData);
   }
-  if (spreadsheet.data) patchExceptRowTotalHeight(spreadsheet.data as FilterData);
+  if (spreadsheet.data) patchExceptRowTotalHeight(spreadsheet.data as unknown as FilterData);
   const sheetData = spreadsheet.sheet?.data;
-  if (sheetData) patchExceptRowTotalHeight(sheetData as FilterData);
+  if (sheetData) patchExceptRowTotalHeight(sheetData as unknown as FilterData);
 }
 
 /** Wire filter OK to drop sort and scroll to the first visible row. */

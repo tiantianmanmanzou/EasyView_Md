@@ -299,7 +299,8 @@ html, body, .preview-root, .preview-shell, .preview-content {
         });
         detachPaste = attachSpreadsheetPaste(spreadsheet, mountRef.current);
         detachFilter = attachSpreadsheetFilter(spreadsheet);
-        patchSpreadsheetSelector(spreadsheet.sheet);
+        // Runtime sheet carries freeze-pane selector parts beyond XsSpreadsheetLike.
+        patchSpreadsheetSelector(spreadsheet.sheet as any);
         spreadsheet.sheet?.selector?.resetAreaOffset?.();
 
         // Portal mount after formatting buttons (divider/visuals live on embedded DocumentChrome, like Word).

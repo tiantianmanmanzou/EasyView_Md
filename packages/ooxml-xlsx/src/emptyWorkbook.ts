@@ -2,12 +2,13 @@
 
 import JSZip from 'jszip';
 
-function sanitizeSheetName(name: string): string {
+export function sanitizeSheetName(name: string): string {
   const cleaned = name.replace(/[\\/?*[\]]/g, '_').slice(0, 31).trim();
   return cleaned || 'Sheet1';
 }
 
-const SHEET_BODY = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+/** Minimal empty worksheet part used when adding sheets. */
+export const EMPTY_SHEET_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>
   <sheetFormatPr defaultRowHeight="15"/>
@@ -87,7 +88,7 @@ export async function buildEmptyXlsxBytes(sheetNames: string[] = ['Sheet1']): Pr
   zip.file('xl/workbook.xml', workbook);
   zip.file('xl/_rels/workbook.xml.rels', workbookRels);
   for (let i = 0; i < unique.length; i += 1) {
-    zip.file(`xl/worksheets/sheet${i + 1}.xml`, SHEET_BODY);
+    zip.file(`xl/worksheets/sheet${i + 1}.xml`, EMPTY_SHEET_XML);
   }
   zip.file('xl/styles.xml', STYLES);
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });

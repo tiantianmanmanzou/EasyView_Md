@@ -119,6 +119,19 @@ export const xlsxSheetOpSchema = z.discriminatedUnion('op', [
     fillColor: z.string().regex(/^#?[0-9A-Fa-f]{6}$/).optional(),
     numFmt: z.string().min(1).max(100).optional(),
   }),
+  z.object({
+    op: z.literal('addSheet'),
+    name: sheetName,
+  }),
+  z.object({
+    op: z.literal('deleteSheet'),
+    sheet: sheetName,
+  }),
+  z.object({
+    op: z.literal('renameSheet'),
+    sheet: sheetName,
+    newName: sheetName,
+  }),
 ]);
 export const xlsxSheetOpsSchema = z.array(xlsxSheetOpSchema).min(1).max(XLSX_MAX_OPS);
 export type XlsxSheetOp = z.infer<typeof xlsxSheetOpSchema>;

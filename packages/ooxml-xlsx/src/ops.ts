@@ -61,6 +61,19 @@ export type XlsxSheetOp =
       italic?: boolean;
       fillColor?: string;
       numFmt?: string;
+    }
+  | {
+      op: 'addSheet';
+      name: string;
+    }
+  | {
+      op: 'deleteSheet';
+      sheet: string;
+    }
+  | {
+      op: 'renameSheet';
+      sheet: string;
+      newName: string;
     };
 
 function fillFormula(formula: string, row: number, col: number): string {
@@ -165,6 +178,18 @@ export async function applySheetOp(workbook: XlsxWorkbook, op: XlsxSheetOp): Pro
     case 'setStyle': {
       // Style xf merge is deferred to preview cutover; keep op accepted for tool schema compat.
       return `${op.sheet}!${op.ref}: style`;
+    }
+    case 'addSheet': {
+      const name = await workbook.addSheet(op.name);
+      return `+sheet ${name}`;
+    }
+    case 'deleteSheet': {
+      await workbook.deleteSheet(op.sheet);
+      return `-sheet ${op.sheet}`;
+    }
+    case 'renameSheet': {
+      const name = workbook.renameSheet(op.sheet, op.newName);
+      return `${op.sheet} → ${name}`;
     }
   }
 }

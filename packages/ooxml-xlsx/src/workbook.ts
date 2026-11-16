@@ -4,6 +4,7 @@
  */
 
 import type { OpcPackage } from '@easyview/ooxml-core/opc';
+import { EMPTY_SHEET_XML, sanitizeSheetName } from './emptyWorkbook';
 import { cellRef, columnLetter, parseCellRef } from './refs';
 import { parseSharedStrings } from './sharedStrings';
 import {
@@ -24,6 +25,12 @@ const decode = (text: string) =>
       ? String.fromCodePoint(parseInt(hex || dec, hex ? 16 : 10))
       : ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[named as string] ?? ''),
   );
+const encode = (text: string) =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 export interface SheetInfo {
   id: string;
@@ -42,6 +49,7 @@ export class XlsxWorkbook {
   private sharedStrings: string[] | null = null;
   private readonly loaded = new Map<number, LoadedSheet>();
   private formulasTouched = false;
+  private structureDirty = false;
   private constructor(
     readonly pkg: OpcPackage,
     readonly sheets: SheetInfo[],
@@ -206,7 +214,73 @@ export class XlsxWorkbook {
     return max;
   }
 
-  /** Write dirty worksheets back into the OPC package; returns dirty part names. */
+  /** Rename a worksheet in workbook.xml (path unchanged). */
+  renameSheet(oldName: string, newName: string): string {
+    const index = this.sheetIndex(oldName);
+    const next = this.uniqueSheetName(newName);
+    this.sheets[index] = { ...this.sheets[index], name: next };
+    this.structureDirty = true;
+    return next;
+  }
+
+  /** Append an empty worksheet; returns the final unique name. */
+  async addSheet(name: string): Promise<string> {
+    const finalName = this.uniqueSheetName(name);
+    const path = this.nextWorksheetPath();
+    const relationshipId = await this.nextRelationshipId();
+    const sheetId = String(Math.max(0, ...this.sheets.map((sheet) => Number(sheet.id) || 0)) + 1);
+    this.pkg.writePartText(path, EMPTY_SHEET_XML);
+    this.sheets.push({ id: sheetId, name: finalName, path, relationshipId });
+    this.structureDirty = true;
+    return finalName;
+  }
+
+  /** Delete a worksheet (refuses to remove the last sheet). */
+  async deleteSheet(name: string): Promise<void> {
+    if (this.sheets.length <= 1) throw new Error('Cannot delete the last worksheet');
+    const index = this.sheetIndex(name);
+    const [removed] = this.sheets.splice(index, 1);
+    this.pkg.deletePart(removed.path);
+    // Sheet indices shifted; drop cached loads to avoid stale index mapping.
+    this.loaded.clear();
+    this.structureDirty = true;
+  }
+
+  private uniqueSheetName(name: string): string {
+    const base = sanitizeSheetName(name);
+    const taken = new Set(this.sheets.map((sheet) => sheet.name.toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
+    let n = 1;
+    while (true) {
+      const suffix = `_${n++}`;
+      const candidate = `${base.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+  }
+
+  private nextWorksheetPath(): string {
+    let n = this.sheets.length + 1;
+    while (this.pkg.hasPart(`xl/worksheets/sheet${n}.xml`) || this.sheets.some((sheet) => sheet.path === `xl/worksheets/sheet${n}.xml`)) {
+      n += 1;
+    }
+    return `xl/worksheets/sheet${n}.xml`;
+  }
+
+  private async nextRelationshipId(): Promise<string> {
+    const used = new Set(this.sheets.map((sheet) => sheet.relationshipId));
+    if (this.pkg.hasPart('xl/_rels/workbook.xml.rels')) {
+      const relsXml = await this.pkg.readPartText('xl/_rels/workbook.xml.rels');
+      for (const rel of tags(relsXml, 'Relationship')) {
+        const id = attr(rel, 'Id');
+        if (id) used.add(id);
+      }
+    }
+    let n = 1;
+    while (used.has(`rId${n}`)) n += 1;
+    return `rId${n}`;
+  }
+
+  /** Write dirty worksheets / workbook structure back into the OPC package. */
   async flush(): Promise<string[]> {
     const dirty: string[] = [];
     for (const [index, sheet] of this.loaded) {
@@ -218,9 +292,82 @@ export class XlsxWorkbook {
       sheet.dirty = false;
       dirty.push(info.path);
     }
-    if (dirty.length && this.formulasTouched && this.pkg.hasPart('xl/workbook.xml')) {
+    if (this.structureDirty) {
+      dirty.push(...(await this.flushWorkbookStructure()));
+      this.structureDirty = false;
+    } else if (dirty.length && this.formulasTouched && this.pkg.hasPart('xl/workbook.xml')) {
       const touched = await this.ensureFullCalcOnLoad();
       if (touched) dirty.push('xl/workbook.xml');
+    }
+    return dirty;
+  }
+
+  private async flushWorkbookStructure(): Promise<string[]> {
+    const dirty: string[] = [];
+    const workbookXml = await this.pkg.readPartText('xl/workbook.xml');
+    const sheetElements = this.sheets
+      .map(
+        (sheet) =>
+          `<sheet name="${encode(sheet.name)}" sheetId="${sheet.id}" r:id="${sheet.relationshipId}"/>`,
+      )
+      .join('');
+    let nextWorkbook = workbookXml.replace(
+      /<sheets\b[^>]*>[\s\S]*?<\/sheets>/,
+      `<sheets>${sheetElements}</sheets>`,
+    );
+    if (this.formulasTouched && !/fullCalcOnLoad="1"/.test(nextWorkbook)) {
+      if (/<calcPr\b[^>]*\/>/.test(nextWorkbook)) {
+        nextWorkbook = nextWorkbook.replace(/<calcPr\b([^>]*)\/>/, (_full, attrs: string) => {
+          if (/fullCalcOnLoad=/.test(attrs)) {
+            return `<calcPr${attrs.replace(/fullCalcOnLoad="[^"]*"/, 'fullCalcOnLoad="1"')}/>`;
+          }
+          return `<calcPr${attrs} fullCalcOnLoad="1"/>`;
+        });
+      } else if (/<calcPr\b/.test(nextWorkbook)) {
+        nextWorkbook = nextWorkbook.replace(/<calcPr\b/, '<calcPr fullCalcOnLoad="1" ');
+      } else {
+        nextWorkbook = nextWorkbook.replace('</workbook>', '<calcPr fullCalcOnLoad="1"/></workbook>');
+      }
+    }
+    this.pkg.writePartText('xl/workbook.xml', nextWorkbook);
+    dirty.push('xl/workbook.xml');
+
+    const relsPath = 'xl/_rels/workbook.xml.rels';
+    const relsXml = await this.pkg.readPartText(relsPath);
+    const otherRels = tags(relsXml, 'Relationship').filter(
+      (rel) => !/Type="[^"]*\/worksheet"/.test(rel),
+    );
+    const sheetRels = this.sheets.map((sheet) => {
+      const target = sheet.path.startsWith('xl/') ? sheet.path.slice('xl/'.length) : sheet.path;
+      return `<Relationship Id="${sheet.relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${target}"/>`;
+    });
+    this.pkg.writePartText(
+      relsPath,
+      relsXml.replace(
+        /<Relationships\b[^>]*>[\s\S]*?<\/Relationships>/,
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${[...sheetRels, ...otherRels].join('')}</Relationships>`,
+      ),
+    );
+    dirty.push(relsPath);
+
+    const contentTypesPath = '[Content_Types].xml';
+    if (this.pkg.hasPart(contentTypesPath)) {
+      const typesXml = await this.pkg.readPartText(contentTypesPath);
+      const withoutSheets = typesXml.replace(
+        /<Override\b[^>]*PartName="\/xl\/worksheets\/[^"]+"[^>]*\/>/g,
+        '',
+      );
+      const overrides = this.sheets
+        .map(
+          (sheet) =>
+            `<Override PartName="/${sheet.path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+        )
+        .join('');
+      const nextTypes = withoutSheets.includes('</Types>')
+        ? withoutSheets.replace('</Types>', `${overrides}</Types>`)
+        : `${withoutSheets}${overrides}`;
+      this.pkg.writePartText(contentTypesPath, nextTypes);
+      dirty.push(contentTypesPath);
     }
     return dirty;
   }

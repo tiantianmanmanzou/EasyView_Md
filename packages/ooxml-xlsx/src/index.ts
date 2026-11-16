@@ -1,5 +1,5 @@
 export { createXlsxAdapter, getXlsxWorkbook } from './adapter';
-export { buildEmptyXlsxBytes } from './emptyWorkbook';
+export { buildEmptyXlsxBytes, EMPTY_SHEET_XML, sanitizeSheetName } from './emptyWorkbook';
 export { buildXlsxFromTable, type TableExportPayload, type TableExportCell } from './tableExport';
 export { applySheetOp, rangeOpCells, type XlsxSheetOp } from './ops';
 export {

@@ -53,4 +53,35 @@ describe('XlsxWorkbook', () => {
     const cell = (await check.query.read({ key: 'Preview!A2' })) as { value: string };
     expect(cell.value).toBe('Gamma');
   });
+
+  it('adds, renames, and deletes worksheets while keeping styles intact', async () => {
+    const bytes = await readFile(sample);
+    const pkg = await OpcPackage.open(bytes);
+    const stylesBefore = await pkg.readPart('xl/styles.xml');
+    const workbook = await XlsxWorkbook.open(pkg);
+
+    const added = await workbook.addSheet('Extra');
+    expect(added).toBe('Extra');
+    expect(workbook.sheets.map((sheet) => sheet.name)).toEqual(['Preview', 'Extra']);
+    await workbook.setCell('Extra', 'A1', 'hello');
+    const renamed = workbook.renameSheet('Extra', 'More');
+    expect(renamed).toBe('More');
+    expect(await workbook.getCell('More', 'A1')).toBe('hello');
+
+    const dirty = await workbook.flush();
+    expect(dirty).toEqual(expect.arrayContaining(['xl/workbook.xml', 'xl/_rels/workbook.xml.rels']));
+
+    const mid = await pkg.save();
+    const midPkg = await OpcPackage.open(mid);
+    expect(Buffer.compare(Buffer.from(stylesBefore), Buffer.from(await midPkg.readPart('xl/styles.xml')))).toBe(0);
+    const midBook = await XlsxWorkbook.open(midPkg);
+    expect(midBook.sheets.map((sheet) => sheet.name)).toEqual(['Preview', 'More']);
+    expect(await midBook.getCell('More', 'A1')).toBe('hello');
+
+    await midBook.deleteSheet('More');
+    await midBook.flush();
+    const end = await XlsxWorkbook.open(await OpcPackage.open(await midPkg.save()));
+    expect(end.sheets.map((sheet) => sheet.name)).toEqual(['Preview']);
+    await expect(end.deleteSheet('Preview')).rejects.toThrow(/last worksheet/i);
+  });
 });

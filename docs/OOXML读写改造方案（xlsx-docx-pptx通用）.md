@@ -20,7 +20,7 @@
 | P0 | OPC + engine.apply + ops/rev/IO | **完成** |
 | P1 | ooxml-xlsx 去 ExcelJS | **进行中** — 适配器 + AI + export + 预览样式保存已切 ooxml；预览 decode/load 仍用 ExcelJS |
 | P2 | ooxml-docx 并轨 + AI 改正文 | **进行中** — AI 确认后写正文；`ooxml-docx` 适配器已接入；精准 run 级 XML 写回待续 |
-| P3 | ooxml-pptx | 待开始 |
+| P3 | ooxml-pptx | **进行中** — 幻灯片/形状文本 query + 精准 XML replace 已通；AI/预览桥接待接 |
 | P4–P6 | 宿主同步、测试加固、验收 | 待开始 |
 
 ### P1 细项

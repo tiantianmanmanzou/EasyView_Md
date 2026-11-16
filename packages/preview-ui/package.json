@@ -36,7 +36,6 @@
     "@file-viewer/react-full": "^3.1.1",
     "@lezer/highlight": "^1.2.5",
     "dompurify": "^3.3.2",
-    "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
     "prosemirror-commands": "^1.7.2",
     "prosemirror-dropcursor": "^1.8.3",
@@ -54,6 +53,7 @@
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "exceljs": "^4.4.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   }

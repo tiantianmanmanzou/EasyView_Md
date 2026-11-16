@@ -4,6 +4,7 @@
 
 import { parseCellRef, parseSheetCells, parseSharedStrings } from '@easyview/ooxml-xlsx';
 import type { XsCell, XsCellStyle, XsSheetData } from './xSpreadsheetTypes';
+import { formatExcelDate } from './excelDateFormat';
 import { excelColumnWidthToPx, excelRowPointsToPx } from './xSpreadsheetBridge';
 
 const DEFAULT_ROWS = 100;
@@ -122,20 +123,54 @@ function alignmentToXs(xfXml: string): Partial<XsCellStyle> {
   return style;
 }
 
+/** Built-in ids used for display; 14/22 match ExcelJS locale codes that formatExcelDate localizes. */
+const BUILTIN_NUM_FMT: Record<number, string> = {
+  1: '0',
+  2: '0.00',
+  9: '0%',
+  10: '0.00%',
+  14: 'mm-dd-yy',
+  22: 'm/d/yy h:mm',
+};
+
+function resolveNumFmtCode(numFmtId: number, numFmts: Map<number, string>): string | undefined {
+  if (!numFmtId) return undefined;
+  return numFmts.get(numFmtId) ?? BUILTIN_NUM_FMT[numFmtId];
+}
+
 function numFmtToXs(numFmtId: number, numFmts: Map<number, string>): Partial<XsCellStyle> {
-  if (!numFmtId) return {};
-  const code =
-    numFmts.get(numFmtId) ??
-    ({ 1: '0', 2: '0.00', 9: '0%', 10: '0.00%', 14: 'yyyy-mm-dd', 22: 'yyyy-mm-dd hh:mm:ss' } as Record<
-      number,
-      string
-    >)[numFmtId];
+  const code = resolveNumFmtCode(numFmtId, numFmts);
   if (!code || code === 'General') return {};
-  const format = Object.entries(XS_NUMBER_FORMATS).find(([, value]) => value === code)?.[0];
+  // Map known display codes onto x-spreadsheet format keys when possible.
+  const normalized =
+    code === 'mm-dd-yy' ? 'yyyy-mm-dd' : code === 'm/d/yy h:mm' ? 'yyyy-mm-dd hh:mm:ss' : code;
+  const format = Object.entries(XS_NUMBER_FORMATS).find(([, value]) => value === normalized)?.[0];
   return format ? { format } : {};
 }
 
-function buildStyleTable(stylesXml: string): XsCellStyle[] {
+function looksLikeDateFormat(code: string | undefined): boolean {
+  if (!code || code === 'General') return false;
+  return /[ymdhs]|上午|下午|am\/pm|aaaa/i.test(code);
+}
+
+/** Excel serial (days since 1899-12-30) → UTC Date for formatExcelDate. */
+function excelSerialToUtcDate(serial: number): Date {
+  const ms = Math.round((serial - 25569) * 86400 * 1000);
+  return new Date(ms);
+}
+
+function formatCellDisplay(
+  value: unknown,
+  numFmtCode: string | undefined,
+): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' && Number.isFinite(value) && looksLikeDateFormat(numFmtCode)) {
+    return formatExcelDate(excelSerialToUtcDate(value), numFmtCode);
+  }
+  return String(value);
+}
+
+function buildStyleTable(stylesXml: string): { styles: XsCellStyle[]; numFmtCodes: Array<string | undefined> } {
   const fonts = tags(section(stylesXml, 'fonts'), 'font');
   const fills = tags(section(stylesXml, 'fills'), 'fill');
   const borders = tags(section(stylesXml, 'borders'), 'border');
@@ -144,20 +179,23 @@ function buildStyleTable(stylesXml: string): XsCellStyle[] {
     numFmts.set(Number(attr(entry, 'numFmtId')), decode(attr(entry, 'formatCode')));
   }
   const xfs = tags(section(stylesXml, 'cellXfs'), 'xf');
-  return xfs.map((xf) => {
+  const styles: XsCellStyle[] = [];
+  const numFmtCodes: Array<string | undefined> = [];
+  for (const xf of xfs) {
     const fontId = Number(attr(xf, 'fontId') || 0);
     const fillId = Number(attr(xf, 'fillId') || 0);
     const borderId = Number(attr(xf, 'borderId') || 0);
     const numFmtId = Number(attr(xf, 'numFmtId') || 0);
-    const style: XsCellStyle = {
+    styles.push({
       ...fontToXs(fonts[fontId] ?? ''),
       ...fillToXs(fills[fillId] ?? ''),
       ...borderToXs(borders[borderId] ?? ''),
       ...alignmentToXs(xf),
       ...numFmtToXs(numFmtId, numFmts),
-    };
-    return style;
-  });
+    });
+    numFmtCodes.push(resolveNumFmtCode(numFmtId, numFmts));
+  }
+  return { styles: styles, numFmtCodes };
 }
 
 function styleKey(style: XsCellStyle): string | null {
@@ -173,7 +211,9 @@ export function sheetXmlToXsSheet(
 ): XsSheetData {
   const shared = sharedStringsXml ? parseSharedStrings(sharedStringsXml) : [];
   const cells = parseSheetCells(sheetXml, shared);
-  const styleTable = stylesXml ? buildStyleTable(stylesXml) : [];
+  const built = stylesXml ? buildStyleTable(stylesXml) : { styles: [] as XsCellStyle[], numFmtCodes: [] as Array<string | undefined> };
+  const styleTable = built.styles;
+  const numFmtCodes = built.numFmtCodes;
   const styles: XsCellStyle[] = [];
   const styleIndex = new Map<string, number>();
 
@@ -209,16 +249,23 @@ export function sheetXmlToXsSheet(
     rows.len = Math.max(rows.len, row);
     cols.len = Math.max(cols.len, col);
     // Prefer cached formula result for display (matches ExcelJS cellToText).
+    const numFmtCode =
+      cell.style !== undefined && cell.style >= 0 ? numFmtCodes[cell.style] : undefined;
     let text = '';
     if (cell.formula) {
-      text =
-        cell.cached !== undefined && cell.cached !== ''
-          ? cell.cached
-          : `=${cell.formula}`;
+      if (cell.cached !== undefined && cell.cached !== '') {
+        const cachedNum = Number(cell.cached);
+        text =
+          Number.isFinite(cachedNum) && cell.cached.trim() !== ''
+            ? formatCellDisplay(cachedNum, numFmtCode)
+            : cell.cached;
+      } else {
+        text = `=${cell.formula}`;
+      }
     } else if (cell.value === null || cell.value === undefined) {
       text = '';
     } else {
-      text = String(cell.value);
+      text = formatCellDisplay(cell.value, numFmtCode);
     }
 
     let style: number | undefined;

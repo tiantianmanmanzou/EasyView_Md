@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import ExcelJS from 'exceljs';
 import { LazyWorkbook } from './lazyWorkbook';
-import { worksheetToXsSheet } from './xSpreadsheetBridge';
+import { worksheetToXsSheet } from './exceljsBridge';
 
 describe('ooxmlSheetToXs parity', () => {
   it('matches ExcelJS defaultRowPx and cell text for the e2e fixture grid', async () => {

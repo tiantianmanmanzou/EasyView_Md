@@ -4,9 +4,9 @@ import {
   excelColumnWidthToPx,
   excelRowPointsToPx,
   workbookBytesToXsSheets,
-  worksheetToXsSheet,
   xsSheetsToWorkbookBytes,
 } from './xSpreadsheetBridge';
+import { worksheetToXsSheet } from './exceljsBridge';
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer;

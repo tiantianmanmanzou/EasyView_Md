@@ -58,6 +58,14 @@ jobs:
         run: echo "version=$(node -p "require('./apps/desktop/package.json').version")" >> "$GITHUB_OUTPUT"
       - if: runner.os == 'macOS'
         run: npm run make:dmg --workspace @easyview/desktop
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: EasyView_Md-macOS-dmg
+          path: apps/desktop/out/make/dmg/**/*.dmg
+          if-no-files-found: error
+          retention-days: 14
       - name: Install, launch and remove macOS DMG
         if: runner.os == 'macOS'
         env:

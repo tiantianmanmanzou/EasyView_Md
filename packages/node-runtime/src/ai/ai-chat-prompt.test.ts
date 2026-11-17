@@ -90,4 +90,13 @@ describe('buildAiChatMessages', () => {
     expect(system).toContain('replace_text');
     expect(system).not.toContain('apply_patch');
   });
+  it('pptx agent mode uses slide-edit instructions instead of text patch rules', () => {
+    const messages = buildAiChatMessages({ systemPrompt: '', mode: 'agent', history: [], userMessage: '改标题', attachments: [], documentFileName: 'deck.pptx', documentKind: 'pptx' });
+    const system = messages[0].content as string;
+    expect(system).toContain('inspect_presentation');
+    expect(system).toContain('apply_slide_ops');
+    expect(system).toContain('deck.pptx');
+    expect(system).toContain('replaceText');
+    expect(system).not.toContain('apply_patch');
+  });
 });

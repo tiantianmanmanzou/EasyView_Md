@@ -38,6 +38,30 @@ describe('EasyView table style metadata', () => {
     });
   });
 
+  it('persists and restores column filters for AI/reload auto-filter', () => {
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.table.create(
+        { filters: [{ col: 0, selected: ['a'] }] },
+        [
+          schema.nodes.table_row.create(null, [cell('a'), cell('b')]),
+          schema.nodes.table_row.create(null, [cell('a'), cell('c')]),
+          schema.nodes.table_row.create(null, [cell('x'), cell('y')]),
+        ],
+      ),
+    ]);
+
+    const meta = collectEasyViewTableMeta(doc);
+    expect(meta?.tables[0].filters).toEqual([{ col: 0, selected: ['a'] }]);
+
+    const plain = docWithTable([
+      { cells: [cell('a'), cell('b')] },
+      { cells: [cell('a'), cell('c')] },
+      { cells: [cell('x'), cell('y')] },
+    ]);
+    const restored = applyEasyViewTableMeta(plain, meta);
+    expect(restored.firstChild?.attrs.filters).toEqual([{ col: 0, selected: ['a'] }]);
+  });
+
   it('restores row heights together with column widths', () => {
     const doc = docWithTable([
       { cells: [cell('a'), cell('b')] },

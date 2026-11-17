@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cssInjectPlugin } from '../../packages/preview-ui/esbuild-css-inject.mjs';
 import { spreadsheetLifecyclePlugin } from '../../packages/preview-ui/esbuild-spreadsheet.mjs';
+import { copyDocxLicenses } from '../../tooling/build/copy-docx-licenses.mjs';
 
 const execFileAsync = promisify(execFile);
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -21,6 +22,7 @@ await rm(distDir, { recursive: true, force: true });
 await mkdir(distDir, { recursive: true });
 await mkdir(previewDir, { recursive: true });
 await mkdir(metafileDir, { recursive: true });
+await copyDocxLicenses(workspaceDir, distDir);
 
 async function buildBundle(name, options) {
   const result = await esbuild.build({ ...options, metafile: production });

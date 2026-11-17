@@ -9,6 +9,7 @@ import {
   type PreviewDescriptor,
   type PreviewTextResult,
 } from '@easyview/contracts';
+import { extractArchive } from '@easyview/node-runtime';
 import { isDesktopOnlyPreviewRoute, isPhase1PreviewRoute, PHASE1_FILENAME_PATTERNS } from '@easyview/preview-ui/phase1';
 import {
   productThemeBootstrapScript,
@@ -20,6 +21,7 @@ import {
 import { resolveHtmlPreviewRoot, startHtmlPreviewServer, type HtmlPreviewServer } from './htmlPreviewServer';
 import { getLocale } from '@easyview/contracts/i18n';
 import { tPreview } from './preview.i18n';
+import { FilePreviewDocument } from './filePreviewDocument';
 
 const TEXT_READ_LIMIT = 4 * 1024 * 1024;
 const VIEW_TYPE = 'easyviewMd.filePreview';
@@ -28,17 +30,15 @@ const KEEP_ALIVE_ROUTES: ReadonlySet<string> = new Set(['word', 'spreadsheet', '
 const EXTERNAL_CHANGE_DEBOUNCE_MS = 150;
 const RELEASED_HTML = '<!DOCTYPE html><html><body></body></html>';
 
-class FilePreviewDocument implements vscode.CustomDocument {
-  constructor(readonly uri: vscode.Uri) {}
-  dispose(): void {}
-}
-
-export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<FilePreviewDocument> {
+export class FilePreviewProvider implements vscode.CustomEditorProvider<FilePreviewDocument> {
   static readonly viewType = VIEW_TYPE;
   private static readonly activePanels = new Set<vscode.WebviewPanel>();
   private static lastHtmlReady: { title: string; text: string } | null = null;
   private static lastHtmlContentUrl: string | null = null;
   static readonly filenamePatterns = PHASE1_FILENAME_PATTERNS;
+
+  private readonly _onDidChangeCustomDocument = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<FilePreviewDocument>>();
+  readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event;
 
   static getHtmlPreviewState(): {
     title: string;
@@ -72,9 +72,10 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
   }
 
   static register(context: vscode.ExtensionContext): vscode.Disposable {
+    const provider = new FilePreviewProvider(context);
     return vscode.window.registerCustomEditorProvider(
       VIEW_TYPE,
-      new FilePreviewProvider(context),
+      provider,
       {
         webviewOptions: { retainContextWhenHidden: true },
         supportsMultipleEditorsPerDocument: false,
@@ -89,7 +90,48 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     _openContext: vscode.CustomDocumentOpenContext,
     _token: vscode.CancellationToken,
   ): Promise<FilePreviewDocument> {
-    return new FilePreviewDocument(uri);
+    const document = new FilePreviewDocument(uri);
+    document.onDidChangeCustomDocument((event) => this._onDidChangeCustomDocument.fire(event));
+    return document;
+  }
+
+  async saveCustomDocument(
+    document: FilePreviewDocument,
+    cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    await document.saveFromHost(cancellation);
+  }
+
+  async saveCustomDocumentAs(
+    document: FilePreviewDocument,
+    destination: vscode.Uri,
+    cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    await document.saveFromHost(cancellation);
+    const bytes = await vscode.workspace.fs.readFile(document.uri);
+    if (cancellation.isCancellationRequested) return;
+    await vscode.workspace.fs.writeFile(destination, bytes);
+  }
+
+  async revertCustomDocument(
+    document: FilePreviewDocument,
+    _cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    await document.revert();
+  }
+
+  async backupCustomDocument(
+    document: FilePreviewDocument,
+    context: vscode.CustomDocumentBackupContext,
+    cancellation: vscode.CancellationToken,
+  ): Promise<vscode.CustomDocumentBackup> {
+    await document.saveFromHost(cancellation);
+    return {
+      id: context.destination.toString(),
+      delete: async () => {
+        try { await vscode.workspace.fs.delete(context.destination); } catch { /* ignore */ }
+      },
+    };
   }
 
   async resolveCustomEditor(
@@ -100,6 +142,7 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     FilePreviewProvider.activePanels.add(webviewPanel);
     FilePreviewProvider.lastHtmlReady = null;
     FilePreviewProvider.lastHtmlContentUrl = null;
+    document.attachPanel(webviewPanel);
     webviewPanel.onDidDispose(() => FilePreviewProvider.activePanels.delete(webviewPanel));
     const fileName = path.basename(document.uri.fsPath || document.uri.path);
     const route = resolvePreviewRoute(fileName);
@@ -205,6 +248,7 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
       );
     };
     render();
+    document.setReloader(render);
 
     const viewStateSub = webviewPanel.onDidChangeViewState(() => {
       if (KEEP_ALIVE_ROUTES.has(route.route)) return;
@@ -253,6 +297,18 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     const themePanelSub = registerPreviewThemePanel(webviewPanel);
     const messageSub = webviewPanel.webview.onDidReceiveMessage(async (message) => {
       if (!message || typeof message !== 'object') return;
+      if (message.type === 'setDirty' && typeof message.dirty === 'boolean') {
+        document.notifyDirty(message.dirty);
+        return;
+      }
+      if (message.type === 'requestSave') {
+        await vscode.workspace.save(document.uri);
+        return;
+      }
+      if (message.type === 'hostSaveResult' && typeof message.id === 'string') {
+        document.completeSave(message.id, message.ok === true, typeof message.message === 'string' ? message.message : undefined);
+        return;
+      }
       if (message.type === 'readText' && typeof message.id === 'string') {
         try {
           const result = await readPreviewText(document.uri, route.maxSourceBytes);
@@ -263,6 +319,21 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
             id: message.id,
             ok: false,
             message: error instanceof Error ? error.message : tPreview('readTextFailed'),
+          });
+        }
+        return;
+      }
+      if (message.type === 'extractArchive' && typeof message.id === 'string') {
+        try {
+          if (document.uri.scheme !== 'file') throw new Error(tPreview('extractLocalOnly'));
+          const target = await extractArchive(document.uri.fsPath);
+          await webviewPanel.webview.postMessage({ type: 'extractArchiveResult', id: message.id, ok: true, value: path.basename(target) });
+        } catch (error) {
+          await webviewPanel.webview.postMessage({
+            type: 'extractArchiveResult',
+            id: message.id,
+            ok: false,
+            message: error instanceof Error ? error.message : tPreview('extractFailed'),
           });
         }
         return;
@@ -319,6 +390,7 @@ export class FilePreviewProvider implements vscode.CustomReadonlyEditorProvider<
     });
 
     webviewPanel.onDidDispose(() => {
+      document.setReloader(undefined);
       if (externalChangeTimer) clearTimeout(externalChangeTimer);
       htmlServer?.dispose();
       themePanelSub.dispose();

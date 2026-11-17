@@ -145,3 +145,265 @@ describe('AiChatHost office (xlsx) agent', () => {
     expect(await read()).toBe(100);
   });
 });
+
+describe('AiChatHost office (docx) agent', () => {
+  let dir = '';
+  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); });
+
+  it('inspect → apply_docx_ops → user accept-all → undo', async () => {
+    const { copyFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const { DocxReviewer } = await import('@easyview/docx-agents');
+    const { inspectDocxFile } = await import('./docx-edit');
+
+    const load = async (target: string) => {
+      const bytes = await readFile(target);
+      return DocxReviewer.fromBuffer(
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+        'Test',
+      );
+    };
+
+    dir = await mkdtemp(path.join(os.tmpdir(), 'easyview-host-docx-'));
+    const file = path.join(dir, 'doc.docx');
+    const fixture = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../docx-core/test-fixtures/styled-content.docx',
+    );
+    await copyFile(fixture, file);
+    const { fingerprint } = await inspectDocxFile(file);
+    const phrase = (await load(file))
+      .getContentAsText({ toIndex: 0, includeTrackedChanges: false, includeCommentAnchors: false })
+      .replace(/^\[\d+\]\s*/, '')
+      .slice(0, 6);
+    expect(phrase.length).toBeGreaterThan(0);
+
+    const posted: HostToEditorMessage[] = [];
+    const bodies: any[] = [];
+    let call = 0;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      call += 1;
+      if (call === 1) {
+        return sse([
+          chunk({
+            role: 'assistant',
+            tool_calls: [{
+              index: 0,
+              id: 'call1',
+              type: 'function',
+              function: {
+                name: 'apply_docx_ops',
+                arguments: JSON.stringify({
+                  fingerprint,
+                  ops: [
+                    { op: 'replace_text', paragraphIndex: 0, search: phrase, replaceWith: `${phrase}OK` },
+                    { op: 'add_comment', paragraphIndex: 0, text: '请核对' },
+                  ],
+                }),
+              },
+            }],
+          }),
+          chunk({}, 'tool_calls'),
+        ]);
+      }
+      return sse([chunk({ role: 'assistant', content: '已提交修订' }), chunk({}, 'stop')]);
+    }) as typeof fetch;
+
+    const host = new AiChatHost({
+      settingsFilePath: path.join(dir, 'settings.json'),
+      secretStore: {
+        getApiKey: async () => 'k',
+        setApiKey: async () => undefined,
+        getWebSearchApiKey: async () => null,
+        setWebSearchApiKey: async () => undefined,
+      },
+      postMessage: (message) => posted.push(message),
+      getToolContext: () => ({ workspaceRootPath: dir }),
+      fetchImpl,
+      officeEdits: {},
+    });
+
+    const waitFor = async (predicate: () => boolean) => {
+      for (let i = 0; i < 300 && !predicate(); i += 1) await new Promise((r) => setTimeout(r, 10));
+      expect(predicate()).toBe(true);
+    };
+
+    const before = await readFile(file);
+    await host.handle({
+      type: 'aiChat.send',
+      requestId: 'r1',
+      mode: 'agent',
+      model: 'm',
+      userMessage: '改第一段并加批注',
+      attachments: [],
+      history: [],
+      documentFilePath: 'doc.docx',
+      documentFileName: 'doc.docx',
+    });
+    await waitFor(() => posted.some((m) => m.type === 'aiChat.officeProposal'));
+    const proposal = posted.find((m) => m.type === 'aiChat.officeProposal') as Extract<
+      HostToEditorMessage,
+      { type: 'aiChat.officeProposal' }
+    >;
+    expect(proposal.kind).toBe('docx');
+    expect(proposal.docxChanges?.length).toBe(1);
+    expect(proposal.docxComments?.length).toBe(1);
+    const toolNames = bodies[0].tools.map((t: any) => t.function.name);
+    expect(toolNames).toEqual(expect.arrayContaining(['inspect_document', 'apply_docx_ops']));
+    expect(toolNames).not.toContain('apply_patch');
+    expect(bodies[0].messages[0].content).toContain('inspect_document');
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+
+    await host.handle({
+      type: 'aiChat.officeDecision',
+      requestId: 'r1',
+      proposalId: proposal.proposalId,
+      accepted: true,
+      resolution: 'accept-all',
+      itemDecisions: [{ index: 0, accept: true }],
+    });
+    await waitFor(() => posted.some((m) => m.type === 'aiChat.done' && m.requestId === 'r1'));
+    const committed = posted.find((m) => m.type === 'aiChat.officeCommitted') as Extract<
+      HostToEditorMessage,
+      { type: 'aiChat.officeCommitted' }
+    >;
+    expect(committed.filePath).toBe(file);
+
+    const after = await load(file);
+    expect(after.getChanges()).toHaveLength(0);
+    expect(after.getContentAsText({ toIndex: 0 })).toContain(`${phrase}OK`);
+    expect(after.getComments()).toHaveLength(1);
+
+    await host.handle({ type: 'aiChat.officeUndo', requestId: 'u1', commitId: committed.commitId });
+    expect(posted.find((m) => m.type === 'aiChat.officeUndone')).toMatchObject({
+      commitId: committed.commitId,
+      filePath: file,
+    });
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+  });
+});
+
+describe('AiChatHost office (pptx) agent', () => {
+  let dir = '';
+  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); });
+
+  it('inspect → apply_slide_ops → user Apply → undo', async () => {
+    const { copyFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const { OpcPackage } = await import('@easyview/ooxml-core/opc');
+    const { PptxPresentation } = await import('@easyview/ooxml-pptx');
+    const { inspectPptxFile } = await import('./pptx-edit');
+
+    const slideText = async (target: string) => {
+      const bytes = await readFile(target);
+      const pkg = await OpcPackage.open(bytes);
+      const deck = await PptxPresentation.open(pkg);
+      return (await deck.listShapes(0)).map((shape) => shape.text).join('\n');
+    };
+
+    dir = await mkdtemp(path.join(os.tmpdir(), 'easyview-host-pptx-'));
+    const file = path.join(dir, 'deck.pptx');
+    const fixture = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../../tests/fixtures/preview/sample.pptx',
+    );
+    await copyFile(fixture, file);
+    const { fingerprint } = await inspectPptxFile(file);
+
+    const posted: HostToEditorMessage[] = [];
+    const bodies: any[] = [];
+    let call = 0;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      call += 1;
+      if (call === 1) {
+        return sse([
+          chunk({
+            role: 'assistant',
+            tool_calls: [{
+              index: 0,
+              id: 'call1',
+              type: 'function',
+              function: {
+                name: 'apply_slide_ops',
+                arguments: JSON.stringify({
+                  fingerprint,
+                  ops: [{ op: 'replaceText', slideIndex: 0, search: 'PPTX fixture', replaceWith: 'PPTX host-edited' }],
+                }),
+              },
+            }],
+          }),
+          chunk({}, 'tool_calls'),
+        ]);
+      }
+      return sse([chunk({ role: 'assistant', content: '已替换幻灯片文字' }), chunk({}, 'stop')]);
+    }) as typeof fetch;
+
+    const host = new AiChatHost({
+      settingsFilePath: path.join(dir, 'settings.json'),
+      secretStore: {
+        getApiKey: async () => 'k',
+        setApiKey: async () => undefined,
+        getWebSearchApiKey: async () => null,
+        setWebSearchApiKey: async () => undefined,
+      },
+      postMessage: (message) => posted.push(message),
+      getToolContext: () => ({ workspaceRootPath: dir }),
+      fetchImpl,
+      officeEdits: {},
+    });
+
+    const waitFor = async (predicate: () => boolean) => {
+      for (let i = 0; i < 300 && !predicate(); i += 1) await new Promise((r) => setTimeout(r, 10));
+      expect(predicate()).toBe(true);
+    };
+
+    const before = await readFile(file);
+    await host.handle({
+      type: 'aiChat.send',
+      requestId: 'r1',
+      mode: 'agent',
+      model: 'm',
+      userMessage: '把 PPTX fixture 改成 PPTX host-edited',
+      attachments: [],
+      history: [],
+      documentFilePath: 'deck.pptx',
+      documentFileName: 'deck.pptx',
+    });
+    await waitFor(() => posted.some((m) => m.type === 'aiChat.officeProposal'));
+    const proposal = posted.find((m) => m.type === 'aiChat.officeProposal') as Extract<
+      HostToEditorMessage,
+      { type: 'aiChat.officeProposal' }
+    >;
+    expect(proposal.kind).toBe('pptx');
+    expect(proposal.changes.some((change) => change.after.includes('PPTX host-edited'))).toBe(true);
+    const toolNames = bodies[0].tools.map((t: any) => t.function.name);
+    expect(toolNames).toEqual(expect.arrayContaining(['inspect_presentation', 'apply_slide_ops']));
+    expect(toolNames).not.toContain('apply_patch');
+    expect(bodies[0].messages[0].content).toContain('inspect_presentation');
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+
+    await host.handle({
+      type: 'aiChat.officeDecision',
+      requestId: 'r1',
+      proposalId: proposal.proposalId,
+      accepted: true,
+    });
+    await waitFor(() => posted.some((m) => m.type === 'aiChat.done' && m.requestId === 'r1'));
+    const committed = posted.find((m) => m.type === 'aiChat.officeCommitted') as Extract<
+      HostToEditorMessage,
+      { type: 'aiChat.officeCommitted' }
+    >;
+    expect(committed.filePath).toBe(file);
+    expect(await slideText(file)).toContain('PPTX host-edited');
+    expect(await slideText(file)).not.toContain('PPTX fixture');
+
+    await host.handle({ type: 'aiChat.officeUndo', requestId: 'u1', commitId: committed.commitId });
+    expect(posted.find((m) => m.type === 'aiChat.officeUndone')).toMatchObject({
+      commitId: committed.commitId,
+      filePath: file,
+    });
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+  });
+});

@@ -1,0 +1,13 @@
+{
+  "format": "xlsx",
+  "fixture": "sample/xlsx/sample.xlsx",
+  "ops": [
+    {
+      "source": "ai",
+      "target": { "key": "sheet:0" },
+      "op": "setCell",
+      "args": { "sheet": "Sheet1", "ref": "A1", "value": "harness" }
+    }
+  ],
+  "expectUntouchedParts": ["xl/styles.xml", "[Content_Types].xml"]
+}

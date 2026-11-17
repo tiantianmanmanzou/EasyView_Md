@@ -125,6 +125,26 @@ describe('workspace explorer startup', () => {
     }
   });
 
+  it('refuses to extract archives outside the workspace and reports it to the tree', async () => {
+    const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
+    const events: unknown[] = [];
+    const provider = mock.provider as unknown as {
+      resolveWebviewView(view: unknown, context: unknown, token: unknown): void;
+      dispatchRequest(message: unknown): Promise<void>;
+    };
+    try {
+      provider.resolveWebviewView({
+        visible: true,
+        webview: { options: {}, asWebviewUri: (uri: unknown) => uri, onDidReceiveMessage: () => ({ dispose() {} }), postMessage: async (event: unknown) => { events.push(event); return true; }, html: '' },
+        onDidChangeVisibility: () => ({ dispose() {} }), onDidDispose: () => ({ dispose() {} }),
+      }, {}, {});
+      await provider.dispatchRequest({ type: 'extractArchive', requestId: 'x1', relativePath: '../outside.zip' });
+      expect(events).toContainEqual({ type: 'opResult', requestId: 'x1', ok: false, message: '只能解压工作区内的本地压缩包。' });
+    } finally {
+      subscription.dispose();
+    }
+  });
+
   it('receives a ready message emitted during HTML assignment and bootstraps the root', async () => {
     const subscription = registerWorkspaceExplorer({ extensionUri: { path: '/extension' }, globalStorageUri: { fsPath: '/tmp/easyview-timeline-test-storage' }, workspaceState: memento() } as never);
     const events: Array<{ type: string; rootName?: string }> = [];

@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { Document, Packer, Paragraph } from 'docx';
-import ExcelJS from 'exceljs';
+import { buildEmptyXlsxBytes } from '@easyview/ooxml-xlsx';
 
 /** Extensions that must be created as valid OOXML packages (empty bytes fail JSZip/parse). */
 const DOCX_SEED_EXTENSIONS = new Set(['.docx', '.dotx']);
@@ -17,11 +17,7 @@ async function buildEmptyDocxSeed(): Promise<Buffer> {
 }
 
 async function buildEmptyXlsxSeed(): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('Sheet1');
-  // Touch A1 so ExcelJS materializes column metadata (otherwise columns is null).
-  sheet.getCell('A1').value = '';
-  return Buffer.from(await workbook.xlsx.writeBuffer());
+  return Buffer.from(await buildEmptyXlsxBytes());
 }
 
 /**

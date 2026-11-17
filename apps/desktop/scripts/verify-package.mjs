@@ -56,6 +56,14 @@ const requiredAsarFiles = [
   '/dist/renderer/fonts/NotoSansSymbols2-Regular.ttf',
   '/dist/renderer/fonts/Inter.var.woff2',
   '/dist/renderer/fonts/Inter-italic.var.woff2',
+  '/dist/licenses/docx-core/LICENSE',
+  '/dist/licenses/docx-core/NOTICE',
+  '/dist/licenses/docx-react/LICENSE',
+  '/dist/licenses/docx-react/NOTICE',
+  '/dist/licenses/docx-i18n/LICENSE',
+  '/dist/licenses/docx-i18n/NOTICE',
+  '/dist/licenses/docx-agents/LICENSE',
+  '/dist/licenses/docx-agents/NOTICE',
 ];
 
 await access(asarPath);

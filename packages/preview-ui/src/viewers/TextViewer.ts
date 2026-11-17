@@ -14,6 +14,8 @@ import { searchKeymap, openSearchPanel, highlightSelectionMatches } from '@codem
 import { tags } from '@lezer/highlight';
 import { tPreview } from '../preview.i18n';
 import { BasicPreviewShell } from '../BasicPreviewShell';
+import type { PreviewHost } from '../types';
+import { usePreviewUnsaved } from './usePreviewUnsaved';
 import { h, Loading, ViewerError, type ViewerProps } from './shared';
 import { languageExtensionForFile } from './textLanguage';
 import {
@@ -30,6 +32,7 @@ import {
 export interface TextViewerProps extends ViewerProps {
   readText(sessionId: string): Promise<PreviewTextResult>;
   writeBytes?(sessionId: string, bytes: Uint8Array): Promise<PreviewWriteResult>;
+  host?: PreviewHost;
 }
 
 type ViewMode = 'code' | 'tree';
@@ -118,7 +121,7 @@ function ChromeIcon(path: string): React.ReactElement {
   );
 }
 
-export function TextViewer({ descriptor, readText, writeBytes }: TextViewerProps): React.ReactElement {
+export function TextViewer({ descriptor, readText, writeBytes, host }: TextViewerProps): React.ReactElement {
   const visualKind = React.useMemo(() => detectTextVisualKind(descriptor.fileName), [descriptor.fileName]);
   const canVisual = visualKind !== null;
 
@@ -142,6 +145,9 @@ export function TextViewer({ descriptor, readText, writeBytes }: TextViewerProps
   writeBytesRef.current = writeBytes;
   const sessionIdRef = React.useRef(descriptor.sessionId);
   sessionIdRef.current = descriptor.sessionId;
+  const previewHostRef = React.useRef(host);
+  previewHostRef.current = host;
+  const runSaveRef = React.useRef<() => void>(() => {});
 
   React.useEffect(() => {
     let disposed = false;
@@ -182,10 +188,19 @@ export function TextViewer({ descriptor, readText, writeBytes }: TextViewerProps
       setSaveMessage(tPreview('common.savedSize', { size: (result.size / 1024).toFixed(1) }));
     } catch (reason) {
       setSaveMessage(reason instanceof Error ? reason.message : tPreview('common.saveFailed'));
+      throw reason;
     } finally {
       setSaving(false);
     }
   }, [saving]);
+
+  usePreviewUnsaved(host, dirty, performSave);
+
+  const runSave = React.useCallback(() => {
+    if (host?.requestHostSave) host.requestHostSave();
+    else void performSave();
+  }, [host, performSave]);
+  runSaveRef.current = runSave;
 
   React.useEffect(() => {
     if (content === null || viewMode !== 'code') {
@@ -220,7 +235,7 @@ export function TextViewer({ descriptor, readText, writeBytes }: TextViewerProps
         {
           key: 'Mod-s',
           run: () => {
-            void performSave();
+            runSaveRef.current();
             return true;
           },
         },
@@ -303,7 +318,7 @@ export function TextViewer({ descriptor, readText, writeBytes }: TextViewerProps
           disabled: saving || !dirty,
           onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
             event.stopPropagation();
-            void performSave();
+            runSave();
           },
         }, saving ? '…' : ChromeIcon(SAVE_ICON_PATH))
       : null,

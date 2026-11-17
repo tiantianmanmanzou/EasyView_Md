@@ -2,6 +2,7 @@ import type { TimelineComparison } from '@easyview/contracts';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  DesktopBrowserTab,
   DesktopEditorGroupLayout,
   DesktopEditorGroupSnapshot,
   DesktopEditorTab,
@@ -67,13 +68,13 @@ export class DesktopTabRegistry {
   }
 
   persisted(): PersistedDesktopTab[] {
-    return this.activeGroup().tabs.filter((tab) => tab.kind !== 'history').map(toPersisted);
+    return this.activeGroup().tabs.filter(isPersistedTab).map(toPersisted);
   }
 
   persistedGroups(): Array<{ id: string; openTabs: PersistedDesktopTab[]; activeTabId: string | null }> {
     return [...this.groups.values()].map((group) => ({
       id: group.id,
-      openTabs: group.tabs.filter((tab) => tab.kind !== 'history').map(toPersisted),
+      openTabs: group.tabs.filter(isPersistedTab).map(toPersisted),
       activeTabId: group.activeTabId,
     }));
   }
@@ -160,11 +161,88 @@ export class DesktopTabRegistry {
       this.activate(existing.id);
       return cloneTab(existing);
     }
-    const tab: DesktopPreviewTab = { id, kind: 'preview', relativePath, fileName, route };
+    const tab: DesktopPreviewTab = { id, kind: 'preview', relativePath, fileName, route, dirty: false };
     group.tabs.push(tab);
     group.activeTabId = tab.id;
     this.activeGroupId = group.id;
     return cloneTab(tab);
+  }
+
+  openBrowser(input: {
+    id?: string;
+    url: string;
+    fileName: string;
+    title?: string;
+    relativePath?: string;
+    groupId?: string;
+  }): DesktopBrowserTab {
+    const group = this.requireGroup(input.groupId ?? this.activeGroupId);
+    if (input.url !== 'about:blank') {
+      const existing = this.findBrowser(input.url, input.relativePath, group.id);
+      if (existing && this.groupIdForTab(existing.id) === group.id) {
+        this.activate(existing.id);
+        return cloneTab(existing);
+      }
+    }
+    const tab: DesktopBrowserTab = {
+      id: input.id ?? randomUUID(),
+      kind: 'browser',
+      url: input.url,
+      title: input.title ?? input.fileName,
+      fileName: input.fileName,
+      loading: input.url !== 'about:blank',
+      canGoBack: false,
+      canGoForward: false,
+      ...(input.relativePath ? { relativePath: input.relativePath } : {}),
+    };
+    group.tabs.push(tab);
+    group.activeTabId = tab.id;
+    this.activeGroupId = group.id;
+    return cloneTab(tab);
+  }
+
+  findBrowser(url: string, relativePath?: string, groupId?: string): DesktopBrowserTab | null {
+    const groups = groupId ? [this.groups.get(groupId)].filter((group): group is EditorGroupState => !!group) : [...this.groups.values()];
+    for (const group of groups) {
+      const tab = group.tabs.find((candidate) => candidate.kind === 'browser' && (
+        relativePath ? candidate.relativePath !== undefined && previewKey(candidate.relativePath) === previewKey(relativePath) : candidate.url === url
+      ));
+      if (tab?.kind === 'browser') return cloneTab(tab);
+    }
+    return null;
+  }
+
+  updateBrowser(tabId: string, patch: Partial<Pick<DesktopBrowserTab, 'url' | 'title' | 'fileName' | 'loading' | 'canGoBack' | 'canGoForward'>>): { labelChanged: boolean } | null {
+    for (const group of this.groups.values()) {
+      const tab = group.tabs.find((candidate) => candidate.id === tabId);
+      if (tab?.kind !== 'browser') continue;
+      const before = `${tab.fileName}\0${tab.url}`;
+      if (patch.url !== undefined) tab.url = patch.url;
+      if (patch.title !== undefined) tab.title = patch.title;
+      if (patch.fileName !== undefined) tab.fileName = patch.fileName;
+      if (patch.loading !== undefined) tab.loading = patch.loading;
+      if (patch.canGoBack !== undefined) tab.canGoBack = patch.canGoBack;
+      if (patch.canGoForward !== undefined) tab.canGoForward = patch.canGoForward;
+      return { labelChanged: `${tab.fileName}\0${tab.url}` !== before };
+    }
+    return null;
+  }
+
+  /** Returns the ids of browser tabs whose workspace file was renamed. */
+  renameBrowser(oldRelativePath: string, nextRelativePath: string, fileName: string, url: string): string[] {
+    const oldKey = previewKey(oldRelativePath);
+    const ids: string[] = [];
+    for (const group of this.groups.values()) {
+      for (const tab of group.tabs) {
+        if (tab.kind !== 'browser' || !tab.relativePath || previewKey(tab.relativePath) !== oldKey) continue;
+        tab.relativePath = nextRelativePath;
+        tab.fileName = fileName;
+        tab.title = fileName;
+        tab.url = url;
+        ids.push(tab.id);
+      }
+    }
+    return ids;
   }
 
   openHistory(comparison: TimelineComparison): DesktopTab {
@@ -196,6 +274,34 @@ export class DesktopTabRegistry {
         if (tab.kind === 'editor' && tab.documentKey === selected.documentKey) tab.dirty = dirty;
       }
     }
+  }
+
+  setPreviewDirty(relativePath: string, dirty: boolean): void {
+    const key = previewKey(relativePath);
+    for (const group of this.groups.values()) {
+      for (const tab of group.tabs) {
+        if (tab.kind === 'preview' && previewKey(tab.relativePath) === key) tab.dirty = dirty;
+      }
+    }
+  }
+
+  dirtyPreviewTabs(): DesktopPreviewTab[] {
+    const seen = new Set<string>();
+    const dirty: DesktopPreviewTab[] = [];
+    for (const group of this.groups.values()) {
+      for (const tab of group.tabs) {
+        if (tab.kind !== 'preview' || !tab.dirty) continue;
+        const key = previewKey(tab.relativePath);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        dirty.push(tab);
+      }
+    }
+    return dirty;
+  }
+
+  hasDirtyPreviews(): boolean {
+    return this.dirtyPreviewTabs().length > 0;
   }
 
   setEditorDocumentId(tabId: string, documentId: string): void {
@@ -322,6 +428,11 @@ export class DesktopTabRegistry {
     return null;
   }
 
+  private groupIdForTab(tabId: string): string | null {
+    for (const group of this.groups.values()) if (group.tabs.some((tab) => tab.id === tabId)) return group.id;
+    return null;
+  }
+
   private findEditorByDocumentKey(documentKey: string): DesktopEditorTab | null {
     for (const group of this.groups.values()) {
       const tab = group.tabs.find((candidate) => candidate.kind === 'editor' && candidate.documentKey === documentKey);
@@ -359,11 +470,17 @@ function cloneLayout(layout: DesktopEditorGroupLayout): DesktopEditorGroupLayout
     ? { ...layout }
     : { kind: 'split', orientation: layout.orientation, first: cloneLayout(layout.first), second: cloneLayout(layout.second) };
 }
-function toPersisted(tab: DesktopTab): PersistedDesktopTab {
-  const pinned = tab.pinned ? { pinned: true } : {};
-  return tab.kind === 'editor'
-    ? { id: tab.id, kind: 'editor', filePath: tab.filePath, ...pinned }
-    : { id: tab.id, kind: 'preview', relativePath: tab.relativePath, ...pinned };
+function isPersistedTab(tab: DesktopTab): tab is Exclude<DesktopTab, { kind: 'history' }> {
+  return tab.kind !== 'history';
+}
+
+function toPersisted(tab: Exclude<DesktopTab, { kind: 'history' }>): PersistedDesktopTab {
+  const pinned = tab.pinned ? { pinned: true as const } : {};
+  if (tab.kind === 'editor') return { id: tab.id, kind: 'editor', filePath: tab.filePath, ...pinned };
+  if (tab.kind === 'browser') {
+    return { id: tab.id, kind: 'browser', url: tab.url, ...(tab.relativePath ? { relativePath: tab.relativePath } : {}), ...pinned };
+  }
+  return { id: tab.id, kind: 'preview', relativePath: tab.relativePath, ...pinned };
 }
 function insertSplit(layout: DesktopEditorGroupLayout, sourceId: string, newId: string, direction: DesktopSplitDirection): DesktopEditorGroupLayout {
   if (layout.kind === 'group') {

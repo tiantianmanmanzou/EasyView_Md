@@ -51,6 +51,7 @@ import {
   isMarkdownPath,
   previewSessions,
   publishMenuCommand,
+  sendToWindow,
   setActiveTerminalSessionId,
   setActiveWindowContext,
   setClosing,
@@ -64,15 +65,17 @@ import {
 } from '../host/desktopRuntime';
 import type { DesktopWindowContext } from '../host/windowContext';
 import { createDesktopWindowContext } from '../host/windowContext';
-import { DESKTOP_ACCENTS, DESKTOP_APPEARANCE_MODES, DESKTOP_LOCALE_ARGUMENT_PREFIX as LOCALE_ARGUMENT_PREFIX, DESKTOP_OPENED_FILE_AT_LAUNCH_ARGUMENT, DESKTOP_THEME_DEPTH_STEPS, DESKTOP_TAB_CLOSE_SHORTCUT } from '../../../contracts';
-import type { DesktopAccent, DesktopAppearanceMode, DesktopMenuCommand, DesktopThemeDepthStep } from '../../../contracts';
+import { DESKTOP_ACCENTS, DESKTOP_APPEARANCE_MODES, DESKTOP_DOCUMENT_FONTS, DESKTOP_LOCALE_ARGUMENT_PREFIX as LOCALE_ARGUMENT_PREFIX, DESKTOP_OPENED_FILE_AT_LAUNCH_ARGUMENT, DESKTOP_THEME_DEPTH_STEPS, DESKTOP_TAB_CLOSE_SHORTCUT } from '../../../contracts';
+import type { DesktopAccent, DesktopAppearanceMode, DesktopDocumentFont, DesktopMenuCommand, DesktopThemeDepthStep } from '../../../contracts';
 import { getLocale, type LocalePreference } from '@easyview/contracts';
 import { getSelectedLanguagePreference, saveLanguagePreference } from '../settings/languageSettings';
 import { tMenu } from './windowService.i18n';
+import { disposeBrowserViews } from '../browser/browserWorkflow';
 
 const appearanceModeLabel = (mode: DesktopAppearanceMode) => tMenu(`appearance.${mode}`);
 const themeDepthLabel = (step: DesktopThemeDepthStep) => tMenu(`depth.${step}`);
 const accentLabel = (accent: DesktopAccent) => tMenu(`accent.${accent}`);
+const documentFontLabel = (font: DesktopDocumentFont) => tMenu(`font.${font}`);
 const LANGUAGE_OPTIONS: readonly LocalePreference[] = ['system', 'zh-CN', 'en'];
 // Language names stay in their own language so users can always find their way back.
 const languageLabel = (preference: LocalePreference) =>
@@ -122,12 +125,28 @@ export function argvRequestsNewWindow(argv: string[]): boolean {
   return argv.includes(NEW_WINDOW_FLAG);
 }
 
+const TITLE_ROW_HEIGHT = 32;
+const TRAFFIC_LIGHT_X = 12;
+const TRAFFIC_LIGHT_HEIGHT = 16;
+
 export function applyWindowZoomLevel(level: number): void {
   const next = Math.max(WINDOW_ZOOM_LEVEL_MIN, Math.min(WINDOW_ZOOM_LEVEL_MAX, Math.round(level)));
   getAppStateStore().setZoomLevel(next);
   const target = getMainWindow();
   if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
   target.webContents.setZoomLevel(next);
+  syncWindowChromeToZoom(target, next);
+  sendToWindow('app.zoomChanged', target.webContents.getZoomFactor());
+}
+
+/** The renderer's 32px title row scales with page zoom; keep the native window controls centered in it. */
+function syncWindowChromeToZoom(target: BrowserWindow, zoomLevel: number): void {
+  const height = Math.round(TITLE_ROW_HEIGHT * Math.pow(1.2, zoomLevel));
+  if (process.platform === 'darwin') {
+    target.setWindowButtonPosition({ x: TRAFFIC_LIGHT_X, y: Math.max(0, Math.round((height - TRAFFIC_LIGHT_HEIGHT) / 2)) });
+  } else {
+    target.setTitleBarOverlay({ height });
+  }
 }
 
 export function zoomWindowBy(delta: number): void {
@@ -366,6 +385,10 @@ export function createMenu(): void {
           submenu: DESKTOP_ACCENTS.map((accent) => appearanceItem(`appearance-accent-${accent}`, accentLabel(accent), `setAccent:${accent}`, menuState.accent === accent)),
         },
         {
+          label: tMenu('view.documentFont'),
+          submenu: DESKTOP_DOCUMENT_FONTS.map((font) => appearanceItem(`appearance-font-${font}`, documentFontLabel(font), `setDocumentFont:${font}`, menuState.documentFont === font)),
+        },
+        {
           label: tMenu('view.language'),
           submenu: LANGUAGE_OPTIONS.map((preference) => ({
             id: `language-${preference}`,
@@ -382,6 +405,16 @@ export function createMenu(): void {
         { label: tMenu('view.zoomIn'), accelerator: 'CmdOrCtrl+Plus', visible: false, acceleratorWorksWhenHidden: true, click: inContext(() => zoomWindowBy(1)) },
         { label: tMenu('view.zoomOut'), accelerator: 'CmdOrCtrl+-', click: inContext(() => zoomWindowBy(-1)) },
         { label: tMenu('view.resetZoom'), accelerator: 'CmdOrCtrl+0', click: inContext(() => resetWindowZoom()) },
+        { type: 'separator' },
+        command(tMenu('view.openBrowser'), 'openBrowser', { id: 'view-open-browser', accelerator: 'CmdOrCtrl+Shift+B', enabled: true }),
+        {
+          id: 'view-command-palette',
+          label: tMenu('view.commandPalette'),
+          accelerator: 'CmdOrCtrl+Shift+P',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: inContext(() => publishMenuCommand('openCommandPalette')),
+        },
       ],
     },
     {
@@ -453,8 +486,8 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
     // Native window controls share the renderer's top tab row.
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin'
-      ? { trafficLightPosition: { x: 12, y: 8 } }
-      : { titleBarOverlay: { height: 32, color: nativeTheme.shouldUseDarkColors ? '#272727' : '#f3f3f3', symbolColor: nativeTheme.shouldUseDarkColors ? '#cccccc' : '#333333' } }),
+      ? { trafficLightPosition: { x: TRAFFIC_LIGHT_X, y: (TITLE_ROW_HEIGHT - TRAFFIC_LIGHT_HEIGHT) / 2 } }
+      : { titleBarOverlay: { height: TITLE_ROW_HEIGHT, color: nativeTheme.shouldUseDarkColors ? '#272727' : '#f3f3f3', symbolColor: nativeTheme.shouldUseDarkColors ? '#cccccc' : '#333333' } }),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
@@ -474,7 +507,8 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
 
   const webContentsId = window.webContents.id;
   windowSessions.register(window.webContents, context);
-  applyWindowZoomLevel(getAppStateStore().getZoomLevel());
+  // Page zoom is keyed by URL, so it can only be applied once this window's own URL has loaded.
+  window.webContents.on('did-finish-load', () => runInWindowContext(context, () => applyWindowZoomLevel(getAppStateStore().getZoomLevel())));
   updateWindowTitle();
   for (const session of documentSessions.values()) void watchDocumentSession(session);
   // The renderer's <title> would otherwise replace the file/folder title the Dock and Window menu list.
@@ -513,8 +547,22 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
   window.webContents.on('will-navigate', (event, url) => {
     if (!isCurrentRendererUrl(url)) event.preventDefault();
   });
+  // Text fields without a page-provided menu (tree rename, search boxes) get the standard edit menu.
+  window.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+    const { editFlags } = params;
+    Menu.buildFromTemplate([
+      { role: 'undo', label: tMenu('edit.undo'), enabled: editFlags.canUndo },
+      { role: 'redo', label: tMenu('edit.redo'), enabled: editFlags.canRedo },
+      { type: 'separator' },
+      { role: 'cut', label: tMenu('edit.cut'), enabled: editFlags.canCut },
+      { role: 'copy', label: tMenu('edit.copy'), enabled: editFlags.canCopy },
+      { role: 'paste', label: tMenu('edit.paste'), enabled: editFlags.canPaste },
+      { role: 'selectAll', label: tMenu('edit.selectAll'), enabled: editFlags.canSelectAll },
+    ]).popup({ window });
+  });
   window.on('close', (event) => runInWindowContext(context, () => {
-    if (isWindowClosing() || !documentSessions.hasDirty()) return;
+    if (isWindowClosing() || (!documentSessions.hasDirty() && !tabRegistry.hasDirtyPreviews())) return;
     event.preventDefault();
     void confirmCloseAll().then((canClose) => {
       if (canClose) {
@@ -530,6 +578,7 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
     void Promise.all([...documentSessions.values()].map((session) => stopWatcher(session)));
     getTerminalService()?.disposeAll();
     setTerminalService(undefined);
+    disposeBrowserViews();
     previewSessions.closeAll();
     setActiveTerminalSessionId(undefined);
     setMainWindow(undefined);
@@ -542,7 +591,8 @@ export function createWindow(context: DesktopWindowContext = getWindowContext())
     context.appStateStore?.dispose();
     context.workspaceCore.clear();
   }));
-  void window.loadFile(rendererHtmlPath());
+  // Chromium shares page zoom between pages with the same URL; a per-window query keeps each window's zoom independent.
+  void window.loadFile(rendererHtmlPath(), { query: { window: String(webContentsId) } });
   return window;
   });
 }

@@ -1,0 +1,29 @@
+{
+  "name": "@easyview/ooxml-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared OOXML package layer, precise XML update engine, and DocumentService for EasyView",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./opc": "./src/opc/index.ts",
+    "./xml": "./src/xml/index.ts",
+    "./ops": "./src/ops/index.ts",
+    "./io": "./src/io/index.ts"
+  },
+  "files": [
+    "src",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
+  }
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   adaptCellStyleForTheme,
   applyXSpreadsheetTheme,
+  fontSizeForCanvas,
   isThemeableBackground,
   isThemeableForeground,
   spreadsheetDefaultStyle,
@@ -12,6 +13,8 @@ describe('spreadsheetTheme', () => {
     expect(isThemeableBackground('#ffffff')).toBe(true);
     expect(isThemeableBackground('#fff')).toBe(true);
     expect(isThemeableBackground('#f4f5f8')).toBe(true);
+    expect(isThemeableBackground('#deebf7')).toBe(false);
+    expect(isThemeableBackground('#ddebf7')).toBe(false);
     expect(isThemeableBackground('#00b050')).toBe(false);
     expect(isThemeableBackground('#ffff00')).toBe(false);
     expect(isThemeableForeground('#000000')).toBe(true);
@@ -60,5 +63,23 @@ describe('spreadsheetTheme', () => {
     expect(drawCalls[0]?.fillStyle).toBe('#2d2d2d');
     expect(drawCalls[1]?.fillStyle).toBe('#d4d4d4');
     expect(drawCalls[1]?.strokeStyle).toBe('#3c3c3c');
+  });
+
+  it('draws unmapped point sizes as pixels and keeps the toolbar value in points', () => {
+    expect(fontSizeForCanvas(20)).toBeCloseTo(20 * 96 / 72);
+    expect(fontSizeForCanvas(10)).toBe(10);
+    const data = {
+      selector: { ri: 0, ci: 0 },
+      getCellStyleOrDefault: (_ri: number, _ci: number) => ({ font: { name: '宋体-简', size: 20, bold: true }, bgcolor: '#deebf7' }),
+      getSelectedCellStyle: () => ({ font: { name: '宋体-简', size: 20, bold: true }, bgcolor: '#deebf7' }),
+    };
+    applyXSpreadsheetTheme({ datas: [data], reRender: () => undefined }, 'light');
+    const drawn = data.getCellStyleOrDefault(0, 0);
+    expect(drawn.bgcolor).toBe('#deebf7');
+    expect((drawn.font as { size: number }).size).toBeCloseTo(20 * 96 / 72);
+    expect((drawn.font as { name: string }).name).toContain('Songti SC');
+    const selected = data.getSelectedCellStyle();
+    expect((selected.font as { size: number }).size).toBe(20);
+    expect((selected.font as { name: string }).name).toBe('宋体-简');
   });
 });

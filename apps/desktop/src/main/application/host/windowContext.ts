@@ -12,7 +12,7 @@ import { WorkspaceWatcher } from '../workspace/WorkspaceWatcher';
 import { ArchivePreviewService } from '../preview/ArchivePreviewService';
 import { JavaDecompileService } from '../preview/JavaDecompileService';
 import { PreviewSessionStore } from '../preview/PreviewSession';
-import type { DesktopMenuState } from '../../../contracts';
+import { DESKTOP_DEFAULT_DOCUMENT_FONT, type DesktopMenuState } from '../../../contracts';
 
 export interface DesktopWindowContext {
   readonly id: string;
@@ -61,6 +61,7 @@ export function createDesktopWindowContext(id: string, trash?: (absolutePath: st
       themeMode: 'light',
       themeDepth: 50,
       accent: 'default',
+      documentFont: DESKTOP_DEFAULT_DOCUMENT_FONT,
     },
   };
 }

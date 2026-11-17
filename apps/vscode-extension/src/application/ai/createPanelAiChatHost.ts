@@ -48,6 +48,8 @@ export function createPanelAiChatHost(
     },
     postMessage,
     getToolContext: () => ({ workspaceRootPath }),
+    // Enable Office Agent tools (.xlsx / .docx / .pptx) when the panel sends a document path.
+    officeEdits: {},
     pickImages: {
       pickImages: async () => {
         const selected = await vscode.window.showOpenDialog({

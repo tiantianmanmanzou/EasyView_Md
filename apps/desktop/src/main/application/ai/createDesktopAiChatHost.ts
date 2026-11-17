@@ -53,7 +53,7 @@ export function createDesktopAiChatHost(): AiChatHost {
     },
     postMessage: sendEditorMessage,
     getToolContext: () => ({ workspaceRootPath: workspaceCore.getRootPath() }),
-    // Agent mode on .xlsx preview tabs: proposals are confirmed in the chat panel, which also refreshes the preview.
+    // Agent mode on .xlsx / .docx / .pptx preview tabs: proposals are confirmed in the chat panel, which also refreshes the preview.
     officeEdits: {},
     pickImages: {
       pickImages: async () => {

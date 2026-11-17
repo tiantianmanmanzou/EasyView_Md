@@ -99,13 +99,14 @@ function loadViewer(
         if (!host.readText) throw new Error(tPreview('shell.readTextUnavailable'));
         return React.createElement(TextViewer, {
           descriptor,
+          host,
           readText: host.readText.bind(host),
           ...(host.writeBytes ? { writeBytes: host.writeBytes.bind(host) } : {}),
         });
       });
     case 'image':
-      return import('./viewers/ImageViewer').then(({ ImageViewer }) => (descriptor) =>
-        React.createElement(ImageViewer, { descriptor }));
+      return import('./viewers/ImageViewer').then(({ ImageViewer }) => (descriptor, host) =>
+        React.createElement(ImageViewer, { descriptor, host }));
     case 'svg':
       return import('./viewers/SvgViewer').then(({ SvgViewer }) => (descriptor, host) => {
         if (!host.readText) throw new Error(tPreview('shell.readTextUnavailable'));

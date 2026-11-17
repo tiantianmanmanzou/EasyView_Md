@@ -1,0 +1,13 @@
+{
+  "format": "pptx",
+  "fixture": "sample/pptx/sample.pptx",
+  "ops": [
+    {
+      "source": "ai",
+      "target": { "key": "slide:0" },
+      "op": "replaceText",
+      "args": { "op": "replaceText", "slideIndex": 0, "search": "PPTX fixture", "replaceWith": "PPTX harness" }
+    }
+  ],
+  "expectUntouchedParts": ["ppt/presentation.xml", "[Content_Types].xml"]
+}

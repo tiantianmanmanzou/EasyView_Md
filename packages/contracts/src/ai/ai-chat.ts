@@ -111,3 +111,29 @@ export interface AiOfficeCellChange {
   before: string | number | boolean | null;
   after: string | number | boolean | null;
 }
+
+/** One Word revision in an AI Office (docx) edit proposal. */
+export interface AiOfficeDocxChange {
+  index: number;
+  paragraphIndex: number;
+  search: string;
+  replaceWith: string;
+  before: string;
+  after: string;
+}
+
+/** One comment in an AI Office (docx) edit proposal. */
+export interface AiOfficeDocxComment {
+  paragraphIndex: number;
+  text: string;
+  search?: string;
+}
+
+/** How the user resolves a DOCX proposal when applying. */
+export type AiOfficeDocxResolution = 'tracked' | 'accept-all';
+
+/** Per-revision accept/reject chosen by the user (model must not decide). */
+export interface AiOfficeDocxItemDecision {
+  index: number;
+  accept: boolean;
+}

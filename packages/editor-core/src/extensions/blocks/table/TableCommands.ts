@@ -423,6 +423,26 @@ export function setFirstRowSticky(sticky: boolean): Command {
   };
 }
 
+/** Persist view filters on the table node (serialized into easyview:table-meta). */
+export function setTableFiltersAtPos(
+  tablePos: number,
+  filters: Array<{ col: number; selected: string[] }> | null,
+): Command {
+  return (state, dispatch) => {
+    const table = state.doc.nodeAt(tablePos);
+    if (!table || table.type.name !== 'table') return false;
+    if (dispatch) {
+      dispatch(
+        state.tr.setNodeMarkup(tablePos, undefined, {
+          ...table.attrs,
+          filters,
+        }),
+      );
+    }
+    return true;
+  };
+}
+
 export function setColumnAttr({
   index,
   alignment,

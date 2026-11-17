@@ -1,0 +1,20 @@
+{
+  "name": "@easyview/ooxml-xlsx",
+  "version": "0.1.0",
+  "private": true,
+  "description": "xlsx format adapter for EasyView OOXML core",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src", "tsconfig.json"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@easyview/ooxml-core": "0.1.0",
+    "jszip": "^3.10.1"
+  }
+}

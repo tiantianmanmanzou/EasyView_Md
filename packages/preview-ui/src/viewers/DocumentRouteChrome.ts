@@ -39,6 +39,25 @@ export function writeWordCommentsSidebarOpen(open: boolean): void {
   }
 }
 
+const WORD_SHOW_HIGHLIGHTS_STORAGE_KEY = 'easyview.preview.word.showHighlights';
+
+/** Word text highlights (w:highlight): default hidden; remember last user choice. */
+export function readWordShowHighlights(): boolean {
+  try {
+    return localStorage.getItem(WORD_SHOW_HIGHLIGHTS_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function writeWordShowHighlights(show: boolean): void {
+  try {
+    localStorage.setItem(WORD_SHOW_HIGHLIGHTS_STORAGE_KEY, show ? '1' : '0');
+  } catch {
+    // Ignore quota / private-mode failures.
+  }
+}
+
 function resolveThemeStorage(explicit?: PreviewThemeStorage): PreviewThemeStorage {
   return explicit ?? createLocalPreviewThemeStorage();
 }
@@ -125,8 +144,38 @@ export function DocumentExportIcon(): React.ReactElement {
   return h(ChromeIcon, { path: EXPORT_ICON_PATHS });
 }
 
+const EXTRACT_ICON_PATHS = ['M2.5 2.8h11v2.4h-11V2.8Z', 'M3.4 5.2v7.8h9.2V5.2', 'M8 6.8v4.4', 'M6.2 9.5 8 11.2l1.8-1.7'];
+
+export function ArchiveExtractIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: EXTRACT_ICON_PATHS });
+}
+
+export function ImageRotateLeftIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: ['M2 8a6 6 0 1 0 6-6 6.5 6.5 0 0 0-4.49 1.83L2 5.33', 'M2 2v3.33h3.33'] });
+}
+
+export function ImageRotateRightIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: ['M14 8a6 6 0 1 1-6-6 6.5 6.5 0 0 1 4.49 1.83L14 5.33', 'M14 2v3.33h-3.33'] });
+}
+
+export function ImageCropIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: ['M4 1.3v9.4a1.3 1.3 0 0 0 1.3 1.3h9.4', 'M12 14.7V5.3A1.3 1.3 0 0 0 10.7 4H1.3'] });
+}
+
+export function DocumentSaveIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: SAVE_ICON_PATH });
+}
+
+export function DocumentDiscardIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: ['M12 4 4 12', 'M4 4l8 8'] });
+}
+
 export function DocumentPrintIcon(): React.ReactElement {
   return h(ChromeIcon, { path: PRINT_ICON_PATHS });
+}
+
+export function DocumentHighlightIcon(): React.ReactElement {
+  return h(ChromeIcon, { path: ['M9.6 2.6 13.4 6.4 7.6 12.2H3.8V8.4L9.6 2.6Z', 'M7.8 4.4l3.8 3.8', 'M2.5 14h11'] });
 }
 
 export type DocumentChromeActionsProps = {

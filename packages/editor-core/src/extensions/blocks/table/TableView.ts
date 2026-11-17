@@ -23,6 +23,8 @@ import { TableSelectionController } from './controllers/TableSelectionController
 import { RowHeightController } from './controllers/RowHeightController';
 import { NestedTableScrollController } from './controllers/NestedTableScrollController';
 import { closeTableCellContentPopup, showTableCellContentPopup } from './TableCellContentPopup';
+import { closeTableFilterPopup, showTableFilterPopup } from './TableFilterPopup';
+import { columnFilterIsActive, readTableFilters, rowPassesFilters } from './tableFilterLogic';
 import type { EditorHostTransport } from '@easyview/contracts';
 import { tTable } from './table.i18n';
 
@@ -103,6 +105,8 @@ export class TableView extends ProsemirrorTableView {
         () => {
           this.syncWrappedColumnWidths();
           this.applyRowHeights(this.node);
+          this.applyRowFilterVisibility(this.node);
+          this.syncHeaderFilterButtons(this.node);
           this.updateClassList(this.node);
           this.syncStickyHeader(this.node);
           // ResizeObserver fires for ordinary content reflow as well as real
@@ -487,6 +491,8 @@ export class TableView extends ProsemirrorTableView {
             () => {
               this.syncWrappedColumnWidths();
               this.applyRowHeights(this.node, true);
+              this.applyRowFilterVisibility(this.node);
+              this.syncHeaderFilterButtons(this.node);
               this.updateControls(this.node);
               this.updateClassList(this.node);
               this.syncStickyHeader(this.node);
@@ -550,10 +556,111 @@ export class TableView extends ProsemirrorTableView {
 
       // Keep the remaining geometry/control synchronization deferred so table
       // width writes cannot feed back into ResizeObserver delivery.
+      this.applyRowFilterVisibility(node);
+      this.syncHeaderFilterButtons(node);
       this.syncStickyHeader(node);
       this.scheduleLayoutSync();
     }
     return result;
+  }
+
+  private resolveTablePos(): number | null {
+    const view = this.runtime.getEditorView();
+    if (!view || !this.table.isConnected) return null;
+    try {
+      const inside = view.posAtDOM(this.table, 0);
+      const $pos = view.state.doc.resolve(inside);
+      for (let depth = $pos.depth; depth > 0; depth -= 1) {
+        if ($pos.node(depth).type.name === 'table') return $pos.before(depth);
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private firstRowIsHeader(node: ProsemirrorNode): boolean {
+    const first = node.firstChild;
+    if (!first || first.childCount === 0) return false;
+    let allHeader = true;
+    first.forEach((cell) => {
+      if (cell.type.name !== 'table_header') allHeader = false;
+    });
+    return allHeader;
+  }
+
+  /** Hide data rows that fail persisted column filters; header row always stays. */
+  private applyRowFilterVisibility(node: ProsemirrorNode): void {
+    const filters = readTableFilters(node);
+    const rows = this.getDirectRows();
+    const rowCount = Math.min(rows.length, node.childCount);
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      const hidden = !rowPassesFilters(node, rowIndex, filters);
+      rows[rowIndex].classList.toggle('easyview-table-row-filtered-out', hidden);
+      rows[rowIndex].hidden = hidden;
+    }
+    for (let rowIndex = rowCount; rowIndex < rows.length; rowIndex += 1) {
+      rows[rowIndex].classList.remove('easyview-table-row-filtered-out');
+      rows[rowIndex].hidden = false;
+    }
+  }
+
+  private syncHeaderFilterButtons(node: ProsemirrorNode, root: HTMLElement = this.table): void {
+    const tableRoot = root instanceof HTMLTableElement ? root : this.table;
+    tableRoot.querySelectorAll('th > .easyview-table-filter-btn').forEach((el) => {
+      if (el.closest('table') === tableRoot) el.remove();
+    });
+
+    if (!this.firstRowIsHeader(node)) return;
+    const rows =
+      tableRoot === this.table
+        ? this.getDirectRows()
+        : Array.from(tableRoot.querySelectorAll('tr')).filter((row) => row.closest('table') === tableRoot);
+    const headerRow = rows[0];
+    if (!headerRow) return;
+
+    const map = TableMap.get(node);
+    let columnIndex = 0;
+    Array.from(headerRow.children).forEach((cell) => {
+      if (!(cell instanceof HTMLTableCellElement) || cell.tagName !== 'TH') return;
+      if (cell.closest('table') !== tableRoot) return;
+      const col = columnIndex;
+      const colspan = Math.max(1, cell.colSpan || 1);
+      columnIndex += colspan;
+      if (col >= map.width) return;
+
+      cell.classList.add('easyview-table-header-filterable');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'easyview-table-filter-btn';
+      button.contentEditable = 'false';
+      button.tabIndex = -1;
+      button.setAttribute('aria-label', tTable('filter.button'));
+      button.dataset.col = String(col);
+      if (columnFilterIsActive(node, col)) button.classList.add('is-active');
+      button.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5h13l-5 5.5V13l-3 1.5V8z"/></svg>';
+      button.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const view = this.runtime.getEditorView();
+        const tablePos = this.resolveTablePos();
+        const latest = tablePos !== null ? view?.state.doc.nodeAt(tablePos) : null;
+        if (!view || tablePos === null || !latest || latest.type.name !== 'table') return;
+        showTableFilterPopup({
+          anchor: button,
+          view,
+          tablePos,
+          table: latest,
+          col,
+        });
+      });
+      cell.appendChild(button);
+    });
   }
 
   /**
@@ -601,9 +708,12 @@ export class TableView extends ProsemirrorTableView {
     const tbody = document.createElement('tbody');
     const cloneRow = firstRow.cloneNode(true) as HTMLTableRowElement;
     this.copyStickyHeaderRowStyles(firstRow, cloneRow);
+    cloneRow.querySelectorAll('.easyview-table-filter-btn').forEach((el) => el.remove());
     tbody.appendChild(cloneRow);
     cloneTable.appendChild(tbody);
     overlay.replaceChildren(cloneTable);
+    // Sticky overlay is pointer-events:none; filter buttons opt back in via CSS.
+    this.syncHeaderFilterButtons(this.node, cloneTable);
 
     // The normal corner grip belongs to the scrolling table controls and moves
     // out of view with the source first row. Mirror it into the fixed sticky
@@ -924,9 +1034,11 @@ export class TableView extends ProsemirrorTableView {
     // Row grips and add buttons
     const rowGripLeft = tableLeftOffset - 16; // Align to the actual rendered table, not the wrapper padding.
 
+    const filters = readTableFilters(node);
     rows.forEach((row, rowIndex) => {
       const firstCell = row.querySelector(':scope > td, :scope > th');
       if (!firstCell) return;
+      if (!rowPassesFilters(node, rowIndex, filters)) return;
 
       const { top: rowTop, bottom: rowBottom } = this.getBoundedRowGeometry(row, tableRect);
       const rowHeight = Math.max(0, rowBottom - rowTop);
@@ -1945,6 +2057,33 @@ export class TableView extends ProsemirrorTableView {
   }
 
   override ignoreMutation(record: ViewMutationRecord): boolean {
+    if (record.target instanceof HTMLElement) {
+      if (
+        record.target.classList.contains('easyview-table-filter-btn') ||
+        record.target.closest('.easyview-table-filter-btn') ||
+        record.target.classList.contains('easyview-table-filter-popup') ||
+        record.target.closest('.easyview-table-filter-popup')
+      ) {
+        return true;
+      }
+      if (
+        record.type === 'attributes' &&
+        (record.attributeName === 'class' || record.attributeName === 'hidden') &&
+        record.target.matches('tr')
+      ) {
+        return true;
+      }
+      if (
+        record.type === 'childList' &&
+        record.target.matches('th') &&
+        [...record.addedNodes, ...record.removedNodes].some(
+          (node) => node instanceof HTMLElement && node.classList.contains('easyview-table-filter-btn'),
+        )
+      ) {
+        return true;
+      }
+    }
+
     // Row resizing is a visual preview until pointerup commits the row attr.
     // ProseMirror must not interpret these style/data changes as document edits
     // and rebuild the table halfway through the drag.
@@ -2385,6 +2524,7 @@ export class TableView extends ProsemirrorTableView {
     }
     this.rowViewportStyle?.remove();
     this.rowViewportStyle = null;
+    closeTableFilterPopup();
     window.removeEventListener('easyview-table-wrap-layout-change', this.handleTableWrapLayoutChange);
   }
 }

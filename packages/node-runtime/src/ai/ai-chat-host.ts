@@ -12,8 +12,14 @@ import { buildAiChatMessages } from './chatPrompt';
 import { OpenAiChatError, streamOpenAiChat } from './openai-chat-client';
 import { createAiAgentTools } from './agent-tools';
 import { tAi } from './ai.i18n';
-import { createOfficeAgentTools, officeDocumentKind, type OfficeEditDecision } from './office-tools';
-import { undoXlsxCommit, type XlsxCommitRecord, type XlsxDiff } from './xlsx-edit';
+import {
+  createOfficeAgentTools,
+  officeDocumentKind,
+  type OfficeCommitRecord,
+  type OfficeEditDecision,
+  type OfficeProposalView,
+} from './office-tools';
+import { undoOfficeCommit } from './docx-edit';
 import { OfficeBackupStore, describeOfficeBackup, type OfficeBackupRef } from './office-backups';
 
 export interface AiChatSecretStore {
@@ -39,12 +45,13 @@ export interface AiChatHostOptions {
   getToolContext?: () => Promise<AiChatToolContext> | AiChatToolContext;
   fetchImpl?: typeof fetch;
   /**
-   * Enables Agent mode for Office files (.xlsx). The host shows the proposal to
-   * the user; the decision comes back through `AiChatHost.resolveOfficeEdit`.
+   * Enables Agent mode for Office files (.xlsx / .docx). The host shows the
+   * proposal to the user; the decision comes back through
+   * `AiChatHost.resolveOfficeEdit`.
    */
   officeEdits?: {
     /** Overrides how a proposal is shown; defaults to posting `aiChat.officeProposal`. */
-    showProposal?(requestId: string, proposal: { id: string; fileName: string; diff: XlsxDiff }): void;
+    showProposal?(requestId: string, proposal: OfficeProposalView): void;
     /** App-data directory for backups of files outside Git; defaults to `ai-backups/` beside the settings file. */
     backupDirectory?: string;
     onCommitted?(requestId: string, commit: { id: string; filePath: string; backup: OfficeBackupRef }): void;
@@ -62,7 +69,7 @@ export class AiChatHost {
   private settingsLoaded = false;
   private readonly activeRequests = new Map<string, AbortController>();
   private readonly officeProposals = new Map<string, { requestId: string; resolve(decision: OfficeEditDecision): void }>();
-  private readonly officeCommits = new Map<string, XlsxCommitRecord>();
+  private readonly officeCommits = new Map<string, OfficeCommitRecord>();
   private officeBackups?: OfficeBackupStore;
 
   constructor(private readonly options: AiChatHostOptions) {}
@@ -100,7 +107,11 @@ export class AiChatHost {
         await this.pickImages(message.requestId);
         return;
       case 'aiChat.officeDecision':
-        this.resolveOfficeEdit(message.proposalId, message.accepted);
+        this.resolveOfficeEdit(message.proposalId, {
+          accepted: message.accepted,
+          resolution: message.resolution,
+          itemDecisions: message.itemDecisions,
+        });
         return;
       case 'aiChat.officeUndo':
         try {
@@ -117,24 +128,32 @@ export class AiChatHost {
   }
 
   /** Delivers the user's Apply / Reject decision for a pending Office proposal. */
-  resolveOfficeEdit(proposalId: string, accepted: boolean, reason?: string): boolean {
+  resolveOfficeEdit(
+    proposalId: string,
+    acceptedOrDecision: boolean | OfficeEditDecision,
+    reason?: string,
+  ): boolean {
     const pending = this.officeProposals.get(proposalId);
     if (!pending) return false;
-    pending.resolve({ accepted, reason });
+    const decision: OfficeEditDecision =
+      typeof acceptedOrDecision === 'boolean'
+        ? { accepted: acceptedOrDecision, reason }
+        : acceptedOrDecision;
+    pending.resolve(decision);
     return true;
   }
 
   /** Restores the backup taken before an applied Office edit. */
   async undoOfficeEdit(commitId: string): Promise<void> {
     const record = this.officeCommits.get(commitId);
-    if (!record) throw new Error(tAi('xlsx.undoStale'));
-    await undoXlsxCommit(record);
+    if (!record) throw new Error(tAi('docx.undoStale'));
+    await undoOfficeCommit(record);
     this.officeCommits.delete(commitId);
   }
 
   private confirmOfficeEdit(
     requestId: string,
-    proposal: { id: string; fileName: string; diff: XlsxDiff },
+    proposal: OfficeProposalView,
     signal: AbortSignal,
   ): Promise<OfficeEditDecision> {
     return new Promise((resolve) => {
@@ -150,7 +169,55 @@ export class AiChatHost {
       try {
         const office = this.options.officeEdits!;
         if (office.showProposal) office.showProposal(requestId, proposal);
-        else this.options.postMessage({ type: 'aiChat.officeProposal', requestId, proposalId: proposal.id, fileName: proposal.fileName, changes: proposal.diff.changes, total: proposal.diff.total, structural: proposal.diff.structural, truncated: proposal.diff.truncated });
+        else if (proposal.kind === 'docx') {
+          this.options.postMessage({
+            type: 'aiChat.officeProposal',
+            requestId,
+            proposalId: proposal.id,
+            fileName: proposal.fileName,
+            kind: 'docx',
+            changes: proposal.diff.changes.map((change) => ({
+              sheet: `¶${change.paragraphIndex}`,
+              ref: change.search || '∅',
+              before: change.before,
+              after: change.after,
+            })),
+            total: proposal.diff.total,
+            structural: proposal.diff.structural,
+            truncated: proposal.diff.truncated,
+            docxChanges: proposal.diff.changes,
+            docxComments: proposal.diff.comments,
+          });
+        } else if (proposal.kind === 'pptx') {
+          this.options.postMessage({
+            type: 'aiChat.officeProposal',
+            requestId,
+            proposalId: proposal.id,
+            fileName: proposal.fileName,
+            kind: 'pptx',
+            changes: proposal.diff.changes.map((change) => ({
+              sheet: `slide ${change.slideIndex}`,
+              ref: `#${change.shapeId} ${change.shapeName}`,
+              before: change.before,
+              after: change.after,
+            })),
+            total: proposal.diff.total,
+            structural: proposal.diff.structural,
+            truncated: proposal.diff.truncated,
+          });
+        } else {
+          this.options.postMessage({
+            type: 'aiChat.officeProposal',
+            requestId,
+            proposalId: proposal.id,
+            fileName: proposal.fileName,
+            kind: 'xlsx',
+            changes: proposal.diff.changes,
+            total: proposal.diff.total,
+            structural: proposal.diff.structural,
+            truncated: proposal.diff.truncated,
+          });
+        }
       }
       catch (error) { finish({ accepted: false, reason: toErrorMessage(error) }); }
     });
@@ -347,10 +414,10 @@ export class AiChatHost {
           filePath,
           backups: this.officeBackups ??= new OfficeBackupStore(office.backupDirectory ?? path.join(path.dirname(this.options.settingsFilePath), 'ai-backups')),
           confirmEdit: (proposal) => this.confirmOfficeEdit(requestId, proposal, controller.signal),
-          onCommitted: (record, proposal) => {
-            this.officeCommits.set(proposal.id, record);
-            this.options.postMessage({ type: 'aiChat.officeCommitted', requestId, commitId: proposal.id, filePath: record.filePath, backup: describeOfficeBackup(record.backup) });
-            office.onCommitted?.(requestId, { id: proposal.id, filePath: record.filePath, backup: record.backup });
+          onCommitted: (record, proposalId) => {
+            this.officeCommits.set(proposalId, record);
+            this.options.postMessage({ type: 'aiChat.officeCommitted', requestId, commitId: proposalId, filePath: record.filePath, backup: describeOfficeBackup(record.backup) });
+            office.onCommitted?.(requestId, { id: proposalId, filePath: record.filePath, backup: record.backup });
           },
         }));
       }

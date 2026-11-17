@@ -25,14 +25,32 @@ function run(cmd, args, opts = {}) {
   execFileSync(cmd, args, { stdio: 'inherit', cwd: workspaceRoot, ...opts });
 }
 
-// Soft-quit so ditto can replace the bundle.
-spawnSync('osascript', ['-e', 'quit app "EasyView_Md"'], { stdio: 'ignore' });
-spawnSync('pkill', ['-f', '/Applications/EasyView_Md.app'], { stdio: 'ignore' });
+const installedExecutable = `${installApp}/Contents/MacOS/EasyView_Md`;
+
+function isInstalledAppRunning() {
+  return spawnSync('pgrep', ['-f', installedExecutable], { stdio: 'ignore' }).status === 0;
+}
+
+/** A running app keeps reading the old app.asar by its cached offsets, so it must be gone before the bundle is replaced. */
+function quitInstalledApp() {
+  spawnSync('osascript', ['-e', 'quit app "EasyView_Md"'], { stdio: 'ignore' });
+  spawnSync('pkill', ['-f', installedExecutable], { stdio: 'ignore' });
+  const deadline = Date.now() + 15_000;
+  while (isInstalledAppRunning() && Date.now() < deadline) {
+    spawnSync('sleep', ['0.5']);
+  }
+  return !isInstalledAppRunning();
+}
 
 run('npm', ['run', 'package:desktop']);
 
 if (!fs.existsSync(packagedApp)) {
   console.error(`[easyview-desktop] Packaged app missing: ${packagedApp}`);
+  process.exit(1);
+}
+
+if (!quitInstalledApp()) {
+  console.error('[easyview-desktop] EasyView_Md is still running (unsaved files may be blocking quit). Save or close them, quit the app, then rerun this command.');
   process.exit(1);
 }
 

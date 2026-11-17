@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import ExcelJS from 'exceljs';
 import { launchPreviewWorkspace } from './support/previewWorkspace';
 
 const SPREADSHEET = '#file-preview-root .x-spreadsheet';
@@ -21,7 +22,11 @@ test('re-clicking an open preview keeps its rendering; external edits reload it'
     expect(await marked(page)).toBe(true);
 
     const xlsx = path.join(ws.workspace, 'sample.xlsx');
-    await writeFile(xlsx, await readFile(xlsx));
+    // Change bytes (not just mtime) so Windows fs.watch + stale size/mtime checks both fire.
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(xlsx);
+    book.worksheets[0].getCell('Z99').value = `external-${Date.now()}`;
+    await book.xlsx.writeFile(xlsx);
     await expect.poll(() => marked(page), { timeout: 15_000 }).toBe(false);
     await expect(page.locator(SPREADSHEET).first()).toBeVisible({ timeout: 30_000 });
 

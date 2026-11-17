@@ -46,6 +46,7 @@ import { SlashMenuExtension } from './extensions/behavior/slash-menu/SlashMenuEx
 import { FindReplaceExtension } from './extensions/behavior/find-replace/FindReplaceExtension';
 import { BlockEdgeCursorExtension } from './extensions/behavior/block-edge-cursor/BlockEdgeCursorExtension';
 import { InlineCursorExtension } from './extensions/behavior/inline-cursor/InlineCursorExtension';
+import { EditorCaretExtension } from './extensions/behavior/editor-caret/EditorCaretExtension';
 import { MarkBoundaryExtension } from './extensions/behavior/mark-boundary/MarkBoundaryExtension';
 import { TrailingNodeExtension } from './extensions/behavior/trailing-node/TrailingNodeExtension';
 import { PlaceholderExtension } from './extensions/behavior/placeholder/PlaceholderExtension';
@@ -56,6 +57,7 @@ import {
   refreshAiChangeMarkers,
 } from './extensions/integrations/ai-changes/AiChangesExtension';
 import { initContextMenu } from './ui/ContextMenu';
+import { tContextMenu } from './ui/contextMenu.i18n';
 import { createPasteParser, extractTextblockLineMap, extractBlockLineMap } from './editor/lib/MarkdownParser';
 import { stripSettingsComment } from '@easyview/markdown-core/editor-settings';
 import { LazyExportController } from './controllers/lazyExportController';
@@ -91,6 +93,7 @@ import type { EditorHostTransport, EditorSourceDocumentRequest, GitRefreshStatus
 import { EditorSyncAdapter } from './sync/editorSyncAdapter';
 import type { EasyViewEditorHostActions } from './hosts/host-actions';
 export type { EasyViewEditorHostActions } from './hosts/host-actions';
+export { browserLinkFromEvent } from './ui/browserLinkTarget';
 import { handleHostMessageSideEffect } from './hostMessageRouter';
 import { tEditorCore } from './editorCore.i18n';
 import { createEditorDomContext, type EasyViewEditorRoot } from './runtime/editorDomContext';
@@ -647,6 +650,114 @@ function ensureTableWidthStyles(): void {
 
     /* The normal table grip starts hidden until table focus. The sticky copy
        is an always-visible vertical-scroll anchor and remains interactive. */
+    .ProseMirror th.easyview-table-header-filterable {
+      position: relative;
+      padding-right: 22px;
+    }
+
+    .easyview-table-filter-btn {
+      position: absolute;
+      right: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border: none;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #999);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 6;
+      pointer-events: auto;
+      opacity: 0.75;
+    }
+
+    .easyview-table-filter-btn:hover,
+    .easyview-table-filter-btn.is-active {
+      opacity: 1;
+      color: var(--vscode-focusBorder, #007fd4);
+      background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 16%, transparent);
+    }
+
+    .easyview-table-row-filtered-out {
+      display: none !important;
+    }
+
+    .easyview-table-filter-popup {
+      position: fixed;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: min(360px, 70vh);
+      padding: 10px;
+      box-sizing: border-box;
+      border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+      border-radius: 6px;
+      background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #1e1e1e));
+      color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground, #ccc));
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    .easyview-table-filter-search {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px 8px;
+      border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.4));
+      border-radius: 4px;
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #ccc);
+    }
+
+    .easyview-table-filter-actions,
+    .easyview-table-filter-footer {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .easyview-table-filter-actions button,
+    .easyview-table-filter-footer button {
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 4px;
+      padding: 3px 8px;
+      background: var(--vscode-button-secondaryBackground, #3a3d41);
+      color: var(--vscode-button-secondaryForeground, #ccc);
+      cursor: pointer;
+    }
+
+    .easyview-table-filter-footer button.primary {
+      background: var(--vscode-button-background, #0e639c);
+      color: var(--vscode-button-foreground, #fff);
+    }
+
+    .easyview-table-filter-list {
+      overflow: auto;
+      flex: 1 1 auto;
+      min-height: 80px;
+      max-height: 220px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .easyview-table-filter-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .easyview-table-filter-option span {
+      overflow-wrap: anywhere;
+    }
+
     .easyview-sticky-table-grip {
       position: absolute;
       z-index: 8;
@@ -1413,6 +1524,7 @@ function initEditor() {
     new FindReplaceExtension(),
     new BlockEdgeCursorExtension(),
     new InlineCursorExtension(),
+    new EditorCaretExtension(),
     new MarkBoundaryExtension(),
     new TrailingNodeExtension(),
     new PlaceholderExtension(),
@@ -2065,6 +2177,9 @@ function initEditor() {
     () => contextPasteParser,
     dom.root,
     error => showToast(error instanceof Error ? error.message : String(error)),
+    hostActions.openInBuiltinBrowser
+      ? { label: tContextMenu('openInBrowser'), open: hostActions.openInBuiltinBrowser }
+      : undefined,
   );
 
   // Create Find & Replace panel

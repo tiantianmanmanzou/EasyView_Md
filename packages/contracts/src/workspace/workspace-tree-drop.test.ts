@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  collectWorkspaceExternalDropSources,
   filePathToWorkspaceDropUri,
   isExternalWorkspaceFileDrag,
   parseWorkspaceDropPlainPath,
   parseWorkspaceDropUriList,
   resolveWorkspaceTreeDropMode,
+  resolveWorkspaceTreeDragSources,
   resolveWorkspaceTreeDropTarget,
   resolveWorkspaceTreeGapPlacement,
   resolveWorkspaceTreeRowDropZone,
@@ -64,8 +66,15 @@ describe('workspace tree level-aware drop slots', () => {
       kind: 'gap', placement: { depth: 0, parentRelativePath: '', beforeName: 'notes.md' }, lineRowIndex: 2, lineEdge: 'top',
     });
     expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0 })).toEqual({ kind: 'into', relativePath: 'docs' });
-    expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0, draggedRelativePath: 'docs' })).toBeNull();
-    expect(resolveWorkspaceTreeDropTarget({ rows, index: 1, zone: 'below', pointerDepth: 3, draggedRelativePath: 'docs' })).toBeNull();
+    expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0, draggedRelativePaths: ['docs'] })).toBeNull();
+    expect(resolveWorkspaceTreeDropTarget({ rows, index: 1, zone: 'below', pointerDepth: 3, draggedRelativePaths: ['docs'] })).toBeNull();
+    expect(resolveWorkspaceTreeDropTarget({ rows, index: 0, zone: 'into', pointerDepth: 0, draggedRelativePaths: ['notes.md', 'docs'] })).toBeNull();
+  });
+
+  it('drags the whole selection when the grabbed row is selected, folding items inside selected folders', () => {
+    const selection = ['docs', 'docs/a.md', 'notes.md', 'z/b.md'];
+    expect(resolveWorkspaceTreeDragSources(selection, 'notes.md')).toEqual(['docs', 'notes.md', 'z/b.md']);
+    expect(resolveWorkspaceTreeDragSources(selection, 'other.md')).toEqual(['other.md']);
   });
 
   it('turns an "after" slot into the reorder beforeName', () => {
@@ -120,5 +129,21 @@ describe('workspace tree external drop helpers', () => {
       uri: filePathToWorkspaceDropUri('C:\\docs\\a.md'),
     });
     expect(parseWorkspaceDropPlainPath('docs/notes.md')).toEqual({});
+  });
+
+  it('imports every dropped file, though the drag data turns unreadable once the drop handler yields', async () => {
+    let readable = true;
+    const file = (name: string) => ({ name, arrayBuffer: async () => new TextEncoder().encode(name).buffer as ArrayBuffer });
+    const entry = (name: string) => ({ isFile: true, isDirectory: false, name, file: (done: (value: ReturnType<typeof file>) => void) => done(file(name)) });
+    const names = ['a.md', 'b.md', 'c.md'];
+    const pending = collectWorkspaceExternalDropSources({
+      types: ['Files'],
+      getData: () => '',
+      files: names.map(file),
+      items: names.map((name) => ({ webkitGetAsEntry: () => (readable ? entry(name) : null) })),
+    });
+    readable = false;
+    const sources = await pending;
+    expect(sources.items.map((item) => item.relativePath)).toEqual(names);
   });
 });

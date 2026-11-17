@@ -26,6 +26,7 @@ export type WorkspaceExplorerRequest =
   | { type: 'open'; relativePath: string }
   | { type: 'openExternal'; relativePath: string }
   | { type: 'convertToMarkdown'; relativePath: string }
+  | { type: 'extractArchive'; requestId: string; relativePath: string }
   | { type: 'revealInOS'; relativePath: string }
   | { type: 'create'; requestId: string; parentRelativePath: string; name: string; kind: 'file' | 'directory' }
   | { type: 'rename'; requestId: string; relativePath: string; newName: string }

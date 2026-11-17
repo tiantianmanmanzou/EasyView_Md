@@ -296,7 +296,7 @@ export function desktopWindowTitle(active: DesktopTab | null, rootPath: string |
   const folderName = rootPath ? rootPath.split(/[\\/]/).filter(Boolean).at(-1) ?? rootPath : null;
   const suffix = folderName ?? 'EasyView_Md';
   if (!active) return tRuntime('window.welcomeTitle', { suffix });
-  const dirtyMarker = active.kind === 'editor' && active.dirty ? ' •' : '';
+  const dirtyMarker = (active.kind === 'editor' || active.kind === 'preview') && active.dirty ? ' •' : '';
   return `${active.fileName}${dirtyMarker} — ${suffix}`;
 }
 

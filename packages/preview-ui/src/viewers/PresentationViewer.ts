@@ -8,6 +8,7 @@ import {
   useDocumentRouteTheme,
   useToolbarPinned,
 } from './DocumentRouteChrome';
+import { DocumentStatusBar, useDocumentPages } from './DocumentStatusBar';
 
 export function PresentationViewer({ descriptor }: ViewerProps): React.ReactElement {
   // Binary .ppt keeps its own canvas renderer but shares DocumentChrome with pptx.
@@ -22,6 +23,11 @@ function BinaryPptViewer({ descriptor }: ViewerProps): React.ReactElement {
   const [ready, setReady] = React.useState(false);
   const { themeMode, cycleTheme, viewerVars } = useDocumentRouteTheme(descriptor.relativePath);
   const { pinnedOpen, togglePinned } = useToolbarPinned();
+  const [zoomPercent, setZoomPercent] = React.useState(100);
+  const pages = useDocumentPages(root, ready ? '.flyfish-ppt-viewer > section' : null);
+  const applyZoom = (percent: number): void => {
+    setZoomPercent(Math.min(400, Math.max(10, Math.round(percent))));
+  };
 
   React.useEffect(() => {
     let closed = false;
@@ -78,7 +84,20 @@ function BinaryPptViewer({ descriptor }: ViewerProps): React.ReactElement {
     onTogglePinned: togglePinned,
   },
     h('p', { className: 'preview-notice' }, tPreview('presentation.watermarkNotice')),
-    h('div', { className: 'preview-ppt-canvas-root', ref: root }),
+    h('div', {
+      className: 'preview-ppt-canvas-root',
+      ref: root,
+      'data-zoomed': zoomPercent === 100 ? undefined : '',
+      style: { zoom: zoomPercent / 100 },
+    }),
+    h(DocumentStatusBar, {
+      pages,
+      percent: zoomPercent,
+      onPercent: applyZoom,
+      onStep: (direction) => { applyZoom(zoomPercent + direction * 10); },
+      onReset: () => { applyZoom(100); },
+      onFit: () => { applyZoom(100); },
+    }),
     !ready ? h(Loading, {}) : null,
   );
 }

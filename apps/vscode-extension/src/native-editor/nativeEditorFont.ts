@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { isMarkdownFilePath } from '@easyview/contracts';
+import { EASYVIEW_MONOSPACE_FONT_FAMILY, isMarkdownFilePath } from '@easyview/contracts';
 
-export const NATIVE_MARKDOWN_MONOSPACE_FONT_FAMILY = '"Sarasa Mono SC", "Sarasa Fixed SC", "SF Mono", Menlo, Monaco, "Courier New", monospace';
+export const NATIVE_MARKDOWN_MONOSPACE_FONT_FAMILY = EASYVIEW_MONOSPACE_FONT_FAMILY;
 
 export function isMarkdownDocument(document: vscode.TextDocument): boolean {
   return ['markdown', 'mdx'].includes(document.languageId)

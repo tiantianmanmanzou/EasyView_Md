@@ -4,6 +4,7 @@ export * from './ai/agent-tools';
 export * from './ai/openai-chat-client';
 export * from './ai/office-tools';
 export * from './ai/xlsx-edit';
+export * from './ai/docx-edit';
 export * from './conversion/document-conversion';
 export * from './export/docx-export';
 export * from './export/html-export';
@@ -27,6 +28,7 @@ export * from './timeline/task-queue';
 export * from './timeline/read-history-text';
 export * from './timeline/migrate-history';
 export * from './git/version-guard';
+export * from './archive/extract-archive';
 export * from './git/flush-editor';
 
 export { workspaceEntrySize } from './workspace/workspace-entry-size';

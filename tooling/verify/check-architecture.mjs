@@ -12,7 +12,7 @@ async function sourceFiles(directory) {
     for (const entry of await readdir(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) await walk(fullPath);
-      else if (/\.(?:ts|js)$/.test(entry.name) && !/\.(?:test|spec)\.(?:ts|js)$/.test(entry.name)) files.push(fullPath);
+      else if (/\.(?:tsx?|jsx?)$/.test(entry.name) && !/\.(?:test|spec)\.(?:tsx?|jsx?)$/.test(entry.name)) files.push(fullPath);
     }
   }
   await walk(path.join(root, directory));
@@ -84,6 +84,21 @@ await forbidImports('packages/node-runtime/src', (specifier) =>
   || specifier.startsWith('@easyview/editor-core')
   || specifier.startsWith('apps/'),
 'node-runtime must not depend on UI products');
+
+const docxPackages = ['docx-core', 'docx-react', 'docx-i18n', 'docx-agents'];
+for (const name of docxPackages) {
+  await forbidImports(`packages/${name}/src`, (specifier) =>
+    specifier === 'vscode' || specifier === 'electron' || specifier.startsWith('apps/')
+    || (specifier.startsWith('@easyview/') && !docxPackages.some((pkg) => specifier === `@easyview/${pkg}` || specifier.startsWith(`@easyview/${pkg}/`))),
+  'the Word engine must not depend on product or host modules');
+}
+for (const directory of ['apps/desktop/src', 'apps/vscode-extension/src', 'packages/preview-ui/src', 'packages/editor-core/src', 'packages/node-runtime/src', 'packages/contracts/src', 'packages/markdown-core/src', 'packages/editor-sync/src']) {
+  await forbidImports(directory, (specifier) =>
+    /@easyview\/docx-(?:core|i18n)(?:\/|$)/.test(specifier)
+    || /@easyview\/docx-(?:react|agents)\/src(?:\/|$)/.test(specifier)
+    || /(?:^|\/)docx-(?:core|react|i18n|agents)\/src(?:\/|$)/.test(specifier),
+  'product code must use the public Word adapter or agent entry points');
+}
 
 const rootPackage = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 for (const key of ['main', 'publisher', 'engines', 'activationEvents', 'contributes', 'dependencies']) {

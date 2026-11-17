@@ -1,11 +1,13 @@
-import { copyFilesToSystemClipboard, migrateRenamedHistory } from '@easyview/node-runtime';
+import { copyFilesToSystemClipboard, extractArchive, migrateRenamedHistory } from '@easyview/node-runtime';
 import { DESKTOP_TAB_CLOSE_SHORTCUT } from '../../../contracts';
 import { captureDesktopHistoryPath, desktopHistory } from '../document/desktopHistory';
-import { isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type WorkspaceCreatableFileTypeId } from '@easyview/contracts';
+import { extractableArchiveSuffix, isMarkdownFilePath, WORKSPACE_CREATABLE_FILE_TYPES, type WorkspaceCreatableFileTypeId } from '@easyview/contracts';
 import { Menu, clipboard, dialog, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isLocalHtmlPath } from '../browser/browserPolicy';
+import { openBrowserTab, retargetBrowserFile } from '../browser/browserWorkflow';
 import { normalizeWorkspaceRelativePath } from '@easyview/node-runtime';
 import type { OperationResult } from '@easyview/contracts';
 import type {
@@ -147,11 +149,23 @@ export function workspaceEntryAbsolutePath(relativePath: string): string {
   return workspaceCore.resolveAbsolutePath(relativePath);
 }
 
+/** Extracts into a sibling folder and refreshes the explorer when it lands in the workspace; resolves to that folder's path. */
+export async function extractArchiveFile(archivePath: string): Promise<string> {
+  const target = await extractArchive(archivePath);
+  const rootPath = workspaceRoot();
+  const relative = rootPath ? path.relative(rootPath, target) : '';
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    sendToWindow('workspace.changed', workspaceCore.invalidateFromWatcher([relative.split(path.sep).join('/')]));
+  }
+  return target;
+}
+
 export async function openWorkspacePreview(relativePath: string): Promise<OperationResult<DesktopTabSnapshot>> {
   try {
     const filePath = await resolveWorkspaceFilePath(relativePath);
     const stat = await fs.lstat(filePath);
     if (!stat.isFile() && !stat.isSymbolicLink()) return failure('INVALID_ARGUMENT', tWorkspace('preview.filesOnly'));
+    if (isLocalHtmlPath(filePath)) return openBrowserTab({ url: pathToFileURL(filePath).href, relativePath });
     const snapshot = await registerPreviewTab(relativePath);
     return success(snapshot);
   } catch (error) {
@@ -164,6 +178,15 @@ export function tabResourcePaths(tab: DesktopTab): { absolutePath: string; relat
     const rootPath = workspaceRoot();
     const relativePath = rootPath ? path.relative(rootPath, tab.filePath).split(path.sep).join('/') : tab.fileName;
     return { absolutePath: tab.filePath, relativePath };
+  }
+  if (tab.kind === 'browser') {
+    if (tab.relativePath && workspaceRoot()) {
+      try {
+        const paths = workspaceCore.resourcePaths(tab.relativePath);
+        return { absolutePath: paths.absolutePath, relativePath: paths.relativePath };
+      } catch { /* fall through to the address */ }
+    }
+    return { absolutePath: tab.url, relativePath: tab.relativePath ?? tab.url };
   }
   if (!workspaceRoot()) return null;
   const paths = workspaceCore.resourcePaths(tab.relativePath);
@@ -230,6 +253,7 @@ export async function renameWorkspaceEntry(request: WorkspaceRenameRequest): Pro
       void watchDocumentSession(session);
     }
     tabRegistry.renamePreview(request.relativePath, entry.relativePath, entry.name);
+    retargetBrowserFile(request.relativePath, entry.relativePath, entry.name, nextPaths.absolutePath);
     syncTabState();
     if (tabRegistry.active()?.kind === 'editor') notifyActiveDocument('reload');
     sendToWindow('workspace.changed', [workspaceCore.parentRelativePath(request.relativePath), workspaceCore.parentRelativePath(entry.relativePath)]);
@@ -262,7 +286,9 @@ export async function deleteWorkspaceEntry(request: WorkspaceDeleteRequest, owne
         const targetKey = filePathKey(paths.absolutePath);
         return key === targetKey || (stat.isDirectory() && key.startsWith(`${targetKey}${path.sep}`));
       }
-      const normalized = tab.relativePath.replace(/\\/g, '/');
+      const relative = tab.kind === 'browser' ? tab.relativePath : tab.relativePath;
+      if (!relative) return false;
+      const normalized = relative.replace(/\\/g, '/');
       return normalized === request.relativePath || (stat.isDirectory() && normalized.startsWith(`${request.relativePath}/`));
     });
     if (!(await closeTabIds([...new Set(affectedTabs.map((tab) => tab.id))]))) return failure('CANCELLED', tWorkspace('delete.cancelled'));
@@ -511,6 +537,13 @@ export function showWorkspaceContextMenu(
     if (command === 'openPreview') { void openWorkspacePreview(relativePath); return; }
     if (command === 'openWith') { showOpenWithPicker(relativePath, owner); return; }
     if (command === 'openDefault') { void shell.openPath(workspaceEntryAbsolutePath(relativePath)); return; }
+    if (command === 'extractArchive') {
+      void extractArchiveFile(workspaceEntryAbsolutePath(relativePath)).then(
+        (target) => sender.send('workspace.contextCommand', 'extractArchive', path.posix.join(workspaceCore.parentRelativePath(relativePath), path.basename(target))),
+        (error: unknown) => { void showMessageBoxFor(owner, { type: 'error', message: error instanceof Error ? error.message : String(error) }); },
+      );
+      return;
+    }
     if (command === 'reveal') { shell.showItemInFolder(workspaceEntryAbsolutePath(relativePath)); return; }
     if (command === 'copy') {
       const result = copyWorkspaceEntryToClipboard(targets);
@@ -554,6 +587,7 @@ export function showWorkspaceContextMenu(
     { label: tWorkspace('menu.openPreview'), enabled: isFile, click: () => run('openPreview') },
     { label: tWorkspace('menu.openWith'), enabled: isFile, click: () => run('openWith') },
     { label: tWorkspace('menu.openDefault'), enabled: isFile, click: () => run('openDefault') },
+    ...(isFile && extractableArchiveSuffix(relativePath) ? [{ label: tWorkspace('menu.extractArchive'), click: () => run('extractArchive') }] : []),
     { label: tWorkspace(process.platform === 'darwin' ? 'menu.revealInFinder' : 'menu.revealInFileExplorer'), click: () => run('reveal') },
     { type: 'separator' },
     ...customizeIconItems,

@@ -7,9 +7,10 @@ import type { TimelineUiState } from '@easyview/contracts';
 import type { HostToEditorMessage, EditorToHostMessage } from '@easyview/contracts';
 import { isMarkdownFilePath, readLocalProductTheme } from '@easyview/contracts';
 import { applyDesktopProductAppearance } from './productThemeControl';
+import { applyDocumentFont, readDocumentFont, saveDocumentFont } from './documentFont';
 import { AI_CHAT_ICON_HTML, createEasyViewEditor, createLazyAiChatPanel, EditorAppearanceStore, type AiChatPanel, type EasyViewEditorInstance } from '@easyview/editor-core';
 import { defaultDesktopPanelLayout, isDesktopAppearanceCommand, normalizeDesktopPanelLayout } from '../contracts';
-import type { DesktopAppearanceMode, DesktopEditorTab, DesktopPanelLayout, DesktopTab, DesktopTabSnapshot, DesktopThemeMode } from '../contracts';
+import type { DesktopAppearanceMode, DesktopDocumentFont, DesktopEditorTab, DesktopPanelLayout, DesktopTab, DesktopTabSnapshot, DesktopThemeMode } from '../contracts';
 import { applyTitleBarToggles, applyWorkbenchPanelLayout, installPanelDock, type PanelDockElements, type TitleBarToggleElements } from './panelDock';
 import type { EasyViewDesktopApi } from '../preload/desktopApi';
 import type { EasyViewAccentTheme } from '@easyview/editor-core';
@@ -27,6 +28,10 @@ import { installAppMenuButton } from './appMenuButton';
 import { installTitleBarDoubleClick } from './titleBarDoubleClick';
 import { installTitleBarOverlaySync } from './titleBarOverlaySync';
 import { installToolbarWheelScroll } from './toolbarWheelScroll';
+import { bindBrowserChrome, browserChromeLabels } from './browser/browserChrome';
+import { installBrowserBounds } from './browser/browserBounds';
+import { installBrowserLinkMenu } from './browser/browserLinkMenu';
+import { installCommandPalette, type PaletteCommand } from './browser/commandPalette';
 import '@easyview/preview-ui/toolbar-styles';
 
 interface WindowWithDesktopApi extends Window {
@@ -43,7 +48,7 @@ interface WindowWithDesktopApi extends Window {
 declare const window: WindowWithDesktopApi;
 
 const api = window.easyViewDesktop;
-if (!api?.editor || !api.app || !api.document) {
+if (!api?.editor || !api.app || !api.document || !api.browser) {
   document.body.innerHTML = '<main style="padding:24px;font-family:system-ui">EasyView_Md 宿主接口加载失败。Failed to load the EasyView_Md host API.</main>'; // i18n-ignore
   throw new Error('EasyView_Md preload API is unavailable');
 }
@@ -60,6 +65,8 @@ const productAppearance = new EditorAppearanceStore(
   window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
 );
 applyDesktopProductAppearance(productAppearance.state, document);
+let documentFont = readDocumentFont(window.localStorage);
+applyDocumentFont(document.body, documentFont);
 
 function applyOsTheme(theme: DesktopThemeMode): void {
   productAppearance.setMode(readLocalProductTheme(window.localStorage, theme === 'dark' ? 'dark' : 'light'), false);
@@ -88,7 +95,7 @@ function localizeShell(): void {
 }
 localizeShell();
 
-// Keep native window controls and the tab strip aligned when the document UI is zoomed.
+// Native window controls do not zoom; the title row reserves their space in screen pixels.
 const syncTitleBarZoom = (): void => {
   document.documentElement.style.setProperty('--desktop-page-zoom', String(api.app.getZoomFactor()));
 };
@@ -123,6 +130,9 @@ const editors = new DesktopEditorInstanceRegistry({
     outlinePosition: panelLayout.outline,
     aiChatContainer: panelDockElements.panels.aiChat,
     root,
+    hostActions: {
+      openInBuiltinBrowser: (url) => { void api.browser.open(url); },
+    },
   }),
 });
 
@@ -184,7 +194,7 @@ function getStandaloneAiChat(): AiChatPanel {
   return panel;
 }
 
-/** The focused preview tab when Agent mode can edit it (Phase 1: .xlsx only). */
+/** The focused preview tab when Agent mode can edit it (.xlsx / .docx / .pptx). */
 function activeOfficePreview(): { relativePath: string; fileName: string } | null {
   const view = activeView.getState();
   if (view.kind !== 'preview' || !isAgentEditablePreview(view.relativePath)) return null;
@@ -403,6 +413,17 @@ const activeView = new ActiveViewController({
 api.preview.onFileChanged((relativePaths) => {
   for (const relativePath of relativePaths) void activeView.reloadPreviewMatching(relativePath);
 });
+api.preview.onSaveRequest(({ requestId, relativePath }) => {
+  void import('./preview/previewUnsavedRegistry').then(async ({ savePreviewByPath }) => {
+    const ok = await savePreviewByPath(relativePath);
+    await api.preview.reportSaveResult(requestId, ok);
+  });
+});
+api.preview.onClearDirty((relativePath) => {
+  void import('./preview/previewUnsavedRegistry').then(({ clearPreviewDirtyByPath }) => {
+    clearPreviewDirtyByPath(relativePath);
+  });
+});
 
 function visibleEditorTabs(snapshot: { groups: Array<{ tabs: DesktopTab[]; activeTabId: string | null }> }): DesktopEditorTab[] {
   const visible: DesktopEditorTab[] = [];
@@ -443,6 +464,7 @@ tabController = new TabController({
     bindVisibleEditors(snapshot, tab);
     if (!tab) workspaceExplorer.setActiveRelativePath(null);
     else if (tab.kind === 'editor') workspaceExplorer.setActiveDocument(tab.filePath);
+    else if (tab.kind === 'browser') workspaceExplorer.setActiveRelativePath(tab.relativePath ?? null);
     else if (tab.kind !== 'history') workspaceExplorer.setActiveRelativePath(tab.relativePath);
     publishMenuState();
   },
@@ -464,6 +486,7 @@ function publishMenuState(): void {
     themeMode: appearance.mode,
     themeDepth: Math.round(appearance.depth * 100),
     accent: appearance.accent,
+    documentFont,
   });
 }
 
@@ -494,7 +517,7 @@ const disposeTitleBarDoubleClick = document.body.classList.contains('desktop-pla
   ? () => undefined
   : installTitleBarDoubleClick({
     root: document.getElementById('desktop-root')!,
-    chromeHeight: () => 32 / (Number(document.documentElement.style.getPropertyValue('--desktop-page-zoom')) || 1),
+    chromeHeight: () => 32,
     onDoubleClick: () => { void api.window.titleBarDoubleClick(); },
   });
 const disposeToolbarWheelScroll = installToolbarWheelScroll(document);
@@ -523,7 +546,43 @@ api.menu.onRevealInIndexArea((relativePath) => {
   void workspaceExplorer.revealRelativePath(relativePath);
 });
 
+const browserShortcut = navigator.platform.toLowerCase().includes('mac') ? '⇧⌘B' : 'Ctrl+Shift+B';
+const browserButton = document.getElementById('browser-toggle');
+if (browserButton) {
+  const browserLabel = `${tDesktop('shell.openBrowser')} (${browserShortcut})`;
+  browserButton.title = browserLabel;
+  browserButton.setAttribute('aria-label', browserLabel);
+  browserButton.addEventListener('click', () => { void api.browser.open(); });
+}
+const commandPalette = installCommandPalette({
+  placeholder: tDesktop('commandPalette.placeholder'),
+  emptyLabel: tDesktop('commandPalette.empty'),
+  commands: (): PaletteCommand[] => [
+    { id: 'openBrowser', title: tDesktop('shell.openBrowser'), shortcut: browserShortcut, keywords: 'browser url html', run: () => { void api.browser.open(); } },
+    { id: 'openTerminal', title: tDesktop('palette.terminal'), keywords: 'terminal', run: () => { activeEditor()?.executeCommand('openTerminal'); } },
+    { id: 'toggleAiChat', title: tDesktop('palette.aiChat'), shortcut: 'Alt+I', keywords: 'ai chat', run: () => { toggleAiChat(); } },
+    { id: 'toggleExplorer', title: tDesktop('palette.explorer'), keywords: 'index explorer', run: () => { workspaceExplorer.toggle(); } },
+  ],
+});
+const disposeBrowserChrome = bindBrowserChrome(api.browser, browserChromeLabels());
+const disposeBrowserBounds = installBrowserBounds({
+  browser: api.browser,
+  onZoomChanged: (listener) => api.app.onZoomChanged(() => listener()),
+});
+const disposeBrowserLinkMenu = installBrowserLinkMenu({
+  label: tDesktop('browser.openInBrowser'),
+  open: (url) => { void api.browser.open(url); },
+});
+
 api.menu.onCommand((command) => {
+  if (command === 'openBrowser') {
+    void api.browser.open();
+    return;
+  }
+  if (command === 'openCommandPalette') {
+    commandPalette.open();
+    return;
+  }
   if (command === 'toggleTheme') {
     productAppearance.cycleMode();
     return;
@@ -532,7 +591,13 @@ api.menu.onCommand((command) => {
     const [kind, value] = command.split(':');
     if (kind === 'setThemeMode') productAppearance.setMode(value as DesktopAppearanceMode);
     else if (kind === 'setThemeDepth') productAppearance.setDepth(Number(value) / 100);
-    else productAppearance.setAccent(value as EasyViewAccentTheme);
+    else if (kind === 'setAccent') productAppearance.setAccent(value as EasyViewAccentTheme);
+    else {
+      documentFont = value as DesktopDocumentFont;
+      saveDocumentFont(window.localStorage, documentFont);
+      applyDocumentFont(document.body, documentFont);
+      publishMenuState();
+    }
     return;
   }
   if (command === 'toggleExplorer') {
@@ -602,6 +667,10 @@ window.addEventListener('unload', () => {
   disposeTitleBarDoubleClick();
   disposeToolbarWheelScroll();
   unsubscribeToolbarVisibility();
+  disposeBrowserChrome();
+  disposeBrowserBounds();
+  disposeBrowserLinkMenu();
+  commandPalette.dispose();
   guardPanel.dispose();
   tabController.dispose();
   workspaceExplorer.dispose();

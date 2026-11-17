@@ -23,9 +23,8 @@ export function installWindowChrome({ workbench, leading, trailing }: WindowChro
       const atTop = rect.height > 0 && Math.abs(rect.top - top) < 2;
       const start = atTop ? Math.max(0, left.right - rect.left) : 0;
       const end = atTop ? Math.max(0, rect.right - right.left) : 0;
-      const scale = Number(document.documentElement.style.getPropertyValue('--desktop-page-zoom')) || 1;
-      tabs.style.setProperty('--chrome-leading-space', `${start * scale}px`);
-      tabs.style.setProperty('--chrome-trailing-space', `${end * scale}px`);
+      tabs.style.setProperty('--chrome-leading-space', `${start}px`);
+      tabs.style.setProperty('--chrome-trailing-space', `${end}px`);
     }
   };
   const schedule = (): void => { if (!frame) frame = requestAnimationFrame(layout); };

@@ -39,9 +39,35 @@ export class TableExtension extends Extension {
         group: 'block',
         isolating: true,
         tableRole: 'table',
-        parseDOM: [{ tag: 'table' }],
-        toDOM() {
-          return ['div', { class: 'table-wrapper' }, ['table', ['tbody', 0]]];
+        attrs: {
+          filters: { default: null },
+        },
+        parseDOM: [
+          {
+            tag: 'table',
+            getAttrs(dom: HTMLElement) {
+              const raw = dom.getAttribute('data-easyview-filters');
+              if (!raw) return { filters: null };
+              try {
+                const parsed = JSON.parse(raw);
+                return { filters: Array.isArray(parsed) ? parsed : null };
+              } catch {
+                return { filters: null };
+              }
+            },
+          },
+        ],
+        toDOM(node) {
+          const filters = node.attrs.filters;
+          return [
+            'div',
+            { class: 'table-wrapper' },
+            [
+              'table',
+              filters ? { 'data-easyview-filters': JSON.stringify(filters) } : {},
+              ['tbody', 0],
+            ],
+          ];
         },
       },
       table_row: {

@@ -4,6 +4,7 @@ import type { EditorView } from 'prosemirror-view';
 import type { MarkdownParser } from 'prosemirror-markdown';
 
 import { initContextMenu } from './ContextMenu';
+import { tContextMenu } from './contextMenu.i18n';
 
 function createEditorElement(): HTMLElement {
   const editorElement = document.createElement('div');
@@ -76,5 +77,27 @@ describe('ContextMenu lifecycle', () => {
     document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
 
     expect(document.querySelector('.context-menu')).toBeNull();
+  });
+
+  it('adds Open in Built-in Browser only for an http link', () => {
+    const editorElement = createEditorElement();
+    const link = document.createElement('a');
+    link.setAttribute('href', 'https://example.com/guide');
+    link.textContent = 'guide';
+    editorElement.append(link);
+    const open = vi.fn();
+    initContextMenu(editorElement, () => createView(), () => createPasteParser(), document, console.error, {
+      label: tContextMenu('openInBrowser'),
+      open,
+    });
+
+    editorElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 8, clientY: 8 }));
+    expect(document.querySelector('[data-action="open-in-browser"]')).toBeNull();
+
+    link.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 8, clientY: 8 }));
+    const item = document.querySelector<HTMLElement>('[data-action="open-in-browser"]');
+    expect(item).not.toBeNull();
+    item!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(open).toHaveBeenCalledWith('https://example.com/guide');
   });
 });
